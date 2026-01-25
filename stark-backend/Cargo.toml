@@ -45,6 +45,9 @@ url = "2"
 # Cron scheduling
 cron = "0.12"
 
+# Lazy static for global state
+lazy_static = "1.4"
+
 # Tools system
 which = "5"
 

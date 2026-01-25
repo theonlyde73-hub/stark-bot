@@ -8,6 +8,7 @@ import ApiKeys from '@/pages/ApiKeys';
 import Channels from '@/pages/Channels';
 import Tools from '@/pages/Tools';
 import Skills from '@/pages/Skills';
+import Scheduling from '@/pages/Scheduling';
 import Sessions from '@/pages/Sessions';
 import Memories from '@/pages/Memories';
 import Identities from '@/pages/Identities';
@@ -26,6 +27,7 @@ function App() {
         <Route path="/channels" element={<Channels />} />
         <Route path="/tools" element={<Tools />} />
         <Route path="/skills" element={<Skills />} />
+        <Route path="/scheduling" element={<Scheduling />} />
         <Route path="/sessions" element={<Sessions />} />
         <Route path="/memories" element={<Memories />} />
         <Route path="/identities" element={<Identities />} />

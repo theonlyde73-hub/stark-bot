@@ -136,3 +136,56 @@ export interface SlashCommand {
   description: string;
   handler: () => void | Promise<void>;
 }
+
+// Cron Job types
+export interface CronJob {
+  id: number;
+  job_id: string;
+  name: string;
+  description?: string;
+  schedule_type: 'at' | 'every' | 'cron';
+  schedule_value: string;
+  timezone?: string;
+  session_mode: 'main' | 'isolated';
+  message?: string;
+  system_event?: string;
+  channel_id?: number;
+  deliver_to?: string;
+  deliver: boolean;
+  model_override?: string;
+  thinking_level?: string;
+  timeout_seconds?: number;
+  delete_after_run: boolean;
+  status: 'active' | 'paused' | 'completed' | 'failed';
+  last_run_at?: string;
+  next_run_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CronJobRun {
+  id: number;
+  cron_job_id: number;
+  started_at: string;
+  completed_at?: string;
+  success: boolean;
+  response?: string;
+  error?: string;
+  duration_ms?: number;
+}
+
+// Heartbeat Config types
+export interface HeartbeatConfig {
+  id: number;
+  channel_id?: number;
+  interval_minutes: number;
+  target?: string;
+  active_hours_start?: string;
+  active_hours_end?: string;
+  active_days?: string;
+  enabled: boolean;
+  last_beat_at?: string;
+  next_beat_at?: string;
+  created_at: string;
+  updated_at: string;
+}

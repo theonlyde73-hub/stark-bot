@@ -26,6 +26,13 @@ pub fn create_default_registry() -> ToolRegistry {
     // Register exec tool
     registry.register(Arc::new(builtin::ExecTool::new()));
 
+    // Register messaging tools
+    registry.register(Arc::new(builtin::AgentSendTool::new()));
+
+    // Register system tools (subagents)
+    registry.register(Arc::new(builtin::SubagentTool::new()));
+    registry.register(Arc::new(builtin::SubagentStatusTool::new()));
+
     registry
 }
 
@@ -44,6 +51,13 @@ pub fn create_registry_with_config(config: ToolConfig) -> ToolRegistry {
 
     // Register exec tool
     registry.register(Arc::new(builtin::ExecTool::new()));
+
+    // Register messaging tools
+    registry.register(Arc::new(builtin::AgentSendTool::new()));
+
+    // Register system tools (subagents)
+    registry.register(Arc::new(builtin::SubagentTool::new()));
+    registry.register(Arc::new(builtin::SubagentStatusTool::new()));
 
     registry
 }

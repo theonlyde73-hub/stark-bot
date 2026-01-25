@@ -6,6 +6,7 @@ import {
   Key,
   Wrench,
   Zap,
+  Clock,
   Calendar,
   FileText,
   Users,
@@ -37,6 +38,7 @@ export default function Sidebar() {
           <NavItem to="/api-keys" icon={Key} label="API Keys" />
           <NavItem to="/tools" icon={Wrench} label="Tools" />
           <NavItem to="/skills" icon={Zap} label="Skills" />
+          <NavItem to="/scheduling" icon={Clock} label="Scheduling" />
         </div>
 
         {/* Data Section */}

@@ -1,12 +1,54 @@
-use actix_web::{web, HttpResponse};
+use actix_web::{web, HttpRequest, HttpResponse};
 use std::sync::Arc;
 
-use crate::db::Database;
 use crate::models::{
     CreateCronJobRequest, CronJobResponse, HeartbeatConfigResponse,
     UpdateCronJobRequest, UpdateHeartbeatConfigRequest,
 };
 use crate::scheduler::Scheduler;
+use crate::AppState;
+
+fn validate_session_from_request(
+    state: &web::Data<AppState>,
+    req: &HttpRequest,
+) -> Result<(), HttpResponse> {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.trim_start_matches("Bearer ").to_string());
+
+    let token = match token {
+        Some(t) => t,
+        None => {
+            return Err(HttpResponse::Unauthorized().json(CronJobResponse {
+                success: false,
+                job: None,
+                jobs: None,
+                error: Some("No authorization token provided".to_string()),
+            }));
+        }
+    };
+
+    match state.db.validate_session(&token) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(HttpResponse::Unauthorized().json(CronJobResponse {
+            success: false,
+            job: None,
+            jobs: None,
+            error: Some("Invalid or expired session".to_string()),
+        })),
+        Err(e) => {
+            log::error!("Failed to validate session: {}", e);
+            Err(HttpResponse::InternalServerError().json(CronJobResponse {
+                success: false,
+                job: None,
+                jobs: None,
+                error: Some("Internal server error".to_string()),
+            }))
+        }
+    }
+}
 
 /// Configure cron routes
 pub fn config(cfg: &mut web::ServiceConfig) {
@@ -33,8 +75,12 @@ pub fn config(cfg: &mut web::ServiceConfig) {
 }
 
 /// List all cron jobs
-async fn list_jobs(db: web::Data<Arc<Database>>) -> HttpResponse {
-    match db.list_cron_jobs() {
+async fn list_jobs(state: web::Data<AppState>, req: HttpRequest) -> HttpResponse {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
+    match state.db.list_cron_jobs() {
         Ok(jobs) => HttpResponse::Ok().json(CronJobResponse {
             success: true,
             job: None,
@@ -52,9 +98,14 @@ async fn list_jobs(db: web::Data<Arc<Database>>) -> HttpResponse {
 
 /// Create a new cron job
 async fn create_job(
-    db: web::Data<Arc<Database>>,
+    state: web::Data<AppState>,
+    req: HttpRequest,
     body: web::Json<CreateCronJobRequest>,
 ) -> HttpResponse {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
     // Validate schedule type
     let valid_types = ["at", "every", "cron"];
     if !valid_types.contains(&body.schedule_type.to_lowercase().as_str()) {
@@ -92,7 +143,7 @@ async fn create_job(
         });
     }
 
-    match db.create_cron_job(
+    match state.db.create_cron_job(
         &body.name,
         body.description.as_deref(),
         &body.schedule_type,
@@ -125,10 +176,14 @@ async fn create_job(
 }
 
 /// Get a cron job by ID
-async fn get_job(db: web::Data<Arc<Database>>, path: web::Path<i64>) -> HttpResponse {
+async fn get_job(state: web::Data<AppState>, req: HttpRequest, path: web::Path<i64>) -> HttpResponse {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
     let id = path.into_inner();
 
-    match db.get_cron_job(id) {
+    match state.db.get_cron_job(id) {
         Ok(Some(job)) => HttpResponse::Ok().json(CronJobResponse {
             success: true,
             job: Some(job),
@@ -152,10 +207,15 @@ async fn get_job(db: web::Data<Arc<Database>>, path: web::Path<i64>) -> HttpResp
 
 /// Update a cron job
 async fn update_job(
-    db: web::Data<Arc<Database>>,
+    state: web::Data<AppState>,
+    req: HttpRequest,
     path: web::Path<i64>,
     body: web::Json<UpdateCronJobRequest>,
 ) -> HttpResponse {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
     let id = path.into_inner();
 
     // Validate cron expression if updating schedule
@@ -177,7 +237,7 @@ async fn update_job(
         }
     }
 
-    match db.update_cron_job(
+    match state.db.update_cron_job(
         id,
         body.name.as_deref(),
         body.description.as_deref(),
@@ -212,10 +272,14 @@ async fn update_job(
 }
 
 /// Delete a cron job
-async fn delete_job(db: web::Data<Arc<Database>>, path: web::Path<i64>) -> HttpResponse {
+async fn delete_job(state: web::Data<AppState>, req: HttpRequest, path: web::Path<i64>) -> HttpResponse {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
     let id = path.into_inner();
 
-    match db.delete_cron_job(id) {
+    match state.db.delete_cron_job(id) {
         Ok(true) => HttpResponse::Ok().json(CronJobResponse {
             success: true,
             job: None,
@@ -239,14 +303,19 @@ async fn delete_job(db: web::Data<Arc<Database>>, path: web::Path<i64>) -> HttpR
 
 /// Manually run a cron job
 async fn run_job(
-    db: web::Data<Arc<Database>>,
+    state: web::Data<AppState>,
+    req: HttpRequest,
     scheduler: web::Data<Arc<Scheduler>>,
     path: web::Path<i64>,
 ) -> HttpResponse {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
     let id = path.into_inner();
 
     // Get the job first
-    let job = match db.get_cron_job(id) {
+    let job = match state.db.get_cron_job(id) {
         Ok(Some(job)) => job,
         Ok(None) => {
             return HttpResponse::NotFound().json(CronJobResponse {
@@ -284,14 +353,19 @@ async fn run_job(
 
 /// Get runs for a cron job
 async fn get_job_runs(
-    db: web::Data<Arc<Database>>,
+    state: web::Data<AppState>,
+    req: HttpRequest,
     path: web::Path<i64>,
     query: web::Query<LimitQuery>,
 ) -> HttpResponse {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
     let id = path.into_inner();
     let limit = query.limit.unwrap_or(20);
 
-    match db.get_cron_job_runs(id, limit) {
+    match state.db.get_cron_job_runs(id, limit) {
         Ok(runs) => HttpResponse::Ok().json(serde_json::json!({
             "success": true,
             "runs": runs
@@ -309,10 +383,14 @@ struct LimitQuery {
 }
 
 /// Pause a cron job
-async fn pause_job(db: web::Data<Arc<Database>>, path: web::Path<i64>) -> HttpResponse {
+async fn pause_job(state: web::Data<AppState>, req: HttpRequest, path: web::Path<i64>) -> HttpResponse {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
     let id = path.into_inner();
 
-    match db.update_cron_job(
+    match state.db.update_cron_job(
         id,
         None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         Some("paused"),
@@ -333,10 +411,14 @@ async fn pause_job(db: web::Data<Arc<Database>>, path: web::Path<i64>) -> HttpRe
 }
 
 /// Resume a paused cron job
-async fn resume_job(db: web::Data<Arc<Database>>, path: web::Path<i64>) -> HttpResponse {
+async fn resume_job(state: web::Data<AppState>, req: HttpRequest, path: web::Path<i64>) -> HttpResponse {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
     let id = path.into_inner();
 
-    match db.update_cron_job(
+    match state.db.update_cron_job(
         id,
         None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         Some("active"),
@@ -356,9 +438,52 @@ async fn resume_job(db: web::Data<Arc<Database>>, path: web::Path<i64>) -> HttpR
     }
 }
 
+fn validate_session_for_heartbeat(
+    state: &web::Data<AppState>,
+    req: &HttpRequest,
+) -> Result<(), HttpResponse> {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.trim_start_matches("Bearer ").to_string());
+
+    let token = match token {
+        Some(t) => t,
+        None => {
+            return Err(HttpResponse::Unauthorized().json(HeartbeatConfigResponse {
+                success: false,
+                config: None,
+                error: Some("No authorization token provided".to_string()),
+            }));
+        }
+    };
+
+    match state.db.validate_session(&token) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(HttpResponse::Unauthorized().json(HeartbeatConfigResponse {
+            success: false,
+            config: None,
+            error: Some("Invalid or expired session".to_string()),
+        })),
+        Err(e) => {
+            log::error!("Failed to validate session: {}", e);
+            Err(HttpResponse::InternalServerError().json(HeartbeatConfigResponse {
+                success: false,
+                config: None,
+                error: Some("Internal server error".to_string()),
+            }))
+        }
+    }
+}
+
 /// Get global heartbeat config
-async fn get_heartbeat_config(db: web::Data<Arc<Database>>) -> HttpResponse {
-    match db.get_or_create_heartbeat_config(None) {
+async fn get_heartbeat_config(state: web::Data<AppState>, req: HttpRequest) -> HttpResponse {
+    if let Err(resp) = validate_session_for_heartbeat(&state, &req) {
+        return resp;
+    }
+
+    match state.db.get_or_create_heartbeat_config(None) {
         Ok(config) => HttpResponse::Ok().json(HeartbeatConfigResponse {
             success: true,
             config: Some(config),
@@ -374,11 +499,16 @@ async fn get_heartbeat_config(db: web::Data<Arc<Database>>) -> HttpResponse {
 
 /// Update global heartbeat config
 async fn update_heartbeat_config(
-    db: web::Data<Arc<Database>>,
+    state: web::Data<AppState>,
+    req: HttpRequest,
     body: web::Json<UpdateHeartbeatConfigRequest>,
 ) -> HttpResponse {
+    if let Err(resp) = validate_session_for_heartbeat(&state, &req) {
+        return resp;
+    }
+
     // Get or create first
-    let config = match db.get_or_create_heartbeat_config(None) {
+    let config = match state.db.get_or_create_heartbeat_config(None) {
         Ok(c) => c,
         Err(e) => {
             return HttpResponse::InternalServerError().json(HeartbeatConfigResponse {
@@ -389,7 +519,7 @@ async fn update_heartbeat_config(
         }
     };
 
-    match db.update_heartbeat_config(
+    match state.db.update_heartbeat_config(
         config.id,
         body.interval_minutes,
         body.target.as_deref(),
@@ -413,12 +543,17 @@ async fn update_heartbeat_config(
 
 /// Get heartbeat config for a specific channel
 async fn get_channel_heartbeat_config(
-    db: web::Data<Arc<Database>>,
+    state: web::Data<AppState>,
+    req: HttpRequest,
     path: web::Path<i64>,
 ) -> HttpResponse {
+    if let Err(resp) = validate_session_for_heartbeat(&state, &req) {
+        return resp;
+    }
+
     let channel_id = path.into_inner();
 
-    match db.get_or_create_heartbeat_config(Some(channel_id)) {
+    match state.db.get_or_create_heartbeat_config(Some(channel_id)) {
         Ok(config) => HttpResponse::Ok().json(HeartbeatConfigResponse {
             success: true,
             config: Some(config),
@@ -434,14 +569,19 @@ async fn get_channel_heartbeat_config(
 
 /// Update heartbeat config for a specific channel
 async fn update_channel_heartbeat_config(
-    db: web::Data<Arc<Database>>,
+    state: web::Data<AppState>,
+    req: HttpRequest,
     path: web::Path<i64>,
     body: web::Json<UpdateHeartbeatConfigRequest>,
 ) -> HttpResponse {
+    if let Err(resp) = validate_session_for_heartbeat(&state, &req) {
+        return resp;
+    }
+
     let channel_id = path.into_inner();
 
     // Get or create first
-    let config = match db.get_or_create_heartbeat_config(Some(channel_id)) {
+    let config = match state.db.get_or_create_heartbeat_config(Some(channel_id)) {
         Ok(c) => c,
         Err(e) => {
             return HttpResponse::InternalServerError().json(HeartbeatConfigResponse {
@@ -452,7 +592,7 @@ async fn update_channel_heartbeat_config(
         }
     };
 
-    match db.update_heartbeat_config(
+    match state.db.update_heartbeat_config(
         config.id,
         body.interval_minutes,
         body.target.as_deref(),

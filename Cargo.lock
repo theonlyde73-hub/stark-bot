@@ -3019,6 +3019,7 @@ dependencies = [
  "dotenv",
  "env_logger",
  "futures-util",
+ "lazy_static",
  "log",
  "regex",
  "reqwest",
