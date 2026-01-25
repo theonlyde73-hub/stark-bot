@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Starfish Bot - Login</title>
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="login-card">
+            <h1>Starfish Bot</h1>
+            <p class="subtitle">Enter your secret key to continue</p>
+
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="secret-key">Secret Key</label>
+                    <input
+                        type="password"
+                        id="secret-key"
+                        name="secret_key"
+                        placeholder="Enter your secret key"
+                        required
+                        autocomplete="current-password"
+                    >
+                </div>
+
+                <div id="error-message" class="error-message" style="display: none;"></div>
+
+                <button type="submit" id="login-btn">
+                    <span class="btn-text">Login</span>
+                    <span class="btn-loading" style="display: none;">Logging in...</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script src="/js/auth.js"></script>
+</body>
+</html>
