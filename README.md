@@ -72,8 +72,7 @@ docker run -p 8080:8080 -e SECRET_KEY="$SECRET_KEY" starkbot
 # Or run in detached mode
 docker run -d -p 8080:8080 -e SECRET_KEY="$SECRET_KEY" --name starkbot starkbot
 
-
-docker run -d -p 8080:8080 -e SECRET_KEY="EGSK9kSZt9dCI8gobxt2" --name starkbot starkbot
+ 
 
 ```
 
