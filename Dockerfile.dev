@@ -10,8 +10,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && cargo install cargo-watch
 
-# Expose port
+# Expose ports (HTTP + Gateway WebSocket)
 EXPOSE 8080
+EXPOSE 8081
 
 # Run with cargo-watch for hot reloading
 # -w watches specified directories for changes

@@ -4,7 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile.dev
     ports:
-      - "8080:8080"
+      - "8080:8080"   # HTTP API + Frontend
+      - "8081:8081"   # Gateway WebSocket
     volumes:
       # Mount source code for hot reloading
       - ./stark-backend:/app/stark-backend

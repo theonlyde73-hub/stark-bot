@@ -26,8 +26,9 @@ COPY --from=builder /app/target/release/stark-backend /app/
 # Copy the frontend
 COPY --from=builder /app/stark-frontend /app/stark-frontend
 
-# Expose port
+# Expose ports (HTTP + Gateway WebSocket)
 EXPOSE 8080
+EXPOSE 8081
 
 # Run the application
 CMD ["/app/stark-backend"]

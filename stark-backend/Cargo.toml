@@ -18,3 +18,16 @@ log = "0.4"
 dotenv = "0.15"
 reqwest = { version = "0.11", features = ["json"] }
 async-trait = "0.1"
+
+# Gateway WebSocket server
+tokio-tungstenite = "0.21"
+futures-util = "0.3"
+
+# Telegram integration
+teloxide = { version = "0.12", features = ["macros"] }
+
+# Slack integration
+slack-morphism = { version = "2", features = ["hyper"] }
+
+# Concurrent state management
+dashmap = "5"

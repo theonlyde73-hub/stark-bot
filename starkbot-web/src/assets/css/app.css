@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-slate-950 text-white antialiased;
+}
+
+.gradient-text {
+  @apply bg-gradient-to-r from-stark-400 via-stark-500 to-stark-300 bg-clip-text text-transparent;
+}
+
+.glow {
+  box-shadow: 0 0 60px rgba(14, 165, 233, 0.3);
+}
+
+.card-glow:hover {
+  box-shadow: 0 0 40px rgba(14, 165, 233, 0.2);
+}
+
+/* Star styles */
+.star {
+  @apply absolute rounded-full bg-white;
+  animation: twinkle 3s ease-in-out infinite;
+}
+
+@keyframes twinkle {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
