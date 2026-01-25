@@ -5,6 +5,7 @@ use crate::gateway::protocol::GatewayEvent;
 use crate::models::Channel;
 use std::sync::Arc;
 use teloxide::prelude::*;
+use teloxide::requests::Requester;
 use tokio::sync::oneshot;
 
 /// Start a Telegram bot listener
@@ -19,9 +20,27 @@ pub async fn start_telegram_listener(
     let bot_token = channel.bot_token.clone();
 
     log::info!("Starting Telegram listener for channel: {}", channel_name);
+    log::info!("Telegram: Token length = {}", bot_token.len());
 
     // Create the bot
     let bot = Bot::new(&bot_token);
+
+    // Validate token by calling getMe
+    log::info!("Telegram: Validating bot token...");
+    match bot.get_me().await {
+        Ok(me) => {
+            log::info!(
+                "Telegram: Bot validated - username: @{}, id: {}",
+                me.username(),
+                me.id
+            );
+        }
+        Err(e) => {
+            let error = format!("Invalid Telegram bot token: {}", e);
+            log::error!("Telegram: {}", error);
+            return Err(error);
+        }
+    }
 
     // Emit started event
     broadcaster.broadcast(GatewayEvent::channel_started(
@@ -35,6 +54,8 @@ pub async fn start_telegram_listener(
         move |bot: Bot, msg: teloxide::types::Message, dispatcher: Arc<MessageDispatcher>| {
             let channel_id = channel_id;
             async move {
+                log::info!("Telegram: Received update from chat {}", msg.chat.id);
+
                 // Only handle text messages
                 if let Some(text) = msg.text() {
                     let user = msg.from();
@@ -47,18 +68,27 @@ pub async fn start_telegram_listener(
                         })
                         .unwrap_or_else(|| "Unknown".to_string());
 
+                    log::info!(
+                        "Telegram: Message from {} ({}): {}",
+                        user_name,
+                        user_id,
+                        if text.len() > 50 { &text[..50] } else { text }
+                    );
+
                     let normalized = NormalizedMessage {
                         channel_id,
                         channel_type: "telegram".to_string(),
                         chat_id: msg.chat.id.to_string(),
                         user_id,
-                        user_name,
+                        user_name: user_name.clone(),
                         text: text.to_string(),
                         message_id: Some(msg.id.to_string()),
                     };
 
                     // Dispatch to AI
+                    log::info!("Telegram: Dispatching message to AI for user {}", user_name);
                     let result = dispatcher.dispatch(normalized).await;
+                    log::info!("Telegram: Dispatch complete, error={:?}", result.error);
 
                     // Send response
                     if result.error.is_none() && !result.response.is_empty() {

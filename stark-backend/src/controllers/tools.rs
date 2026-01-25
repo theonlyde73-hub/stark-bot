@@ -193,8 +193,8 @@ async fn list_profiles(_state: web::Data<AppState>, _req: HttpRequest) -> impl R
         },
         ProfileInfo {
             name: "standard".to_string(),
-            description: "Web and filesystem tools".to_string(),
-            allowed_groups: vec!["web".to_string(), "filesystem".to_string()],
+            description: "Web, filesystem, and exec tools".to_string(),
+            allowed_groups: vec!["web".to_string(), "filesystem".to_string(), "exec".to_string()],
         },
         ProfileInfo {
             name: "messaging".to_string(),
@@ -202,6 +202,7 @@ async fn list_profiles(_state: web::Data<AppState>, _req: HttpRequest) -> impl R
             allowed_groups: vec![
                 "web".to_string(),
                 "filesystem".to_string(),
+                "exec".to_string(),
                 "messaging".to_string(),
             ],
         },

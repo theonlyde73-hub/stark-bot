@@ -5,9 +5,9 @@ import Button from '@/components/ui/Button';
 import { getSessions, deleteSession } from '@/lib/api';
 
 interface Session {
-  id: string;
+  id: number;
   channel_type: string;
-  channel_id: string;
+  channel_id: number;
   created_at: string;
   updated_at: string;
   message_count?: number;
@@ -33,11 +33,11 @@ export default function Sessions() {
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (id: number) => {
     if (!confirm('Are you sure you want to delete this session?')) return;
 
     try {
-      await deleteSession(id);
+      await deleteSession(String(id));
       setSessions((prev) => prev.filter((s) => s.id !== id));
     } catch (err) {
       setError('Failed to delete session');

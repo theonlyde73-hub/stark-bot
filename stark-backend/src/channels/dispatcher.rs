@@ -166,8 +166,12 @@ impl MessageDispatcher {
         // Add thinking event before AI generation
         self.execution_tracker.add_thinking(message.channel_id, "Processing request...");
 
-        // Build context from memories and session history
-        let system_prompt = self.build_system_prompt(&message, &identity.identity_id);
+        // Get tool configuration for this channel (needed for system prompt)
+        let tool_config = self.db.get_effective_tool_config(Some(message.channel_id))
+            .unwrap_or_default();
+
+        // Build context from memories, tools, skills, and session history
+        let system_prompt = self.build_system_prompt(&message, &identity.identity_id, &tool_config);
 
         // Get recent session messages for conversation context
         let history = self.db.get_recent_session_messages(session.id, 20).unwrap_or_default();
@@ -196,10 +200,6 @@ impl MessageDispatcher {
             role: MessageRole::User,
             content: message.text.clone(),
         });
-
-        // Get tool configuration for this channel
-        let tool_config = self.db.get_effective_tool_config(Some(message.channel_id))
-            .unwrap_or_default();
 
         // Check if the client supports tools and tools are configured
         let use_tools = client.supports_tools() && !self.tool_registry.is_empty();
@@ -454,12 +454,62 @@ impl MessageDispatcher {
         responses
     }
 
-    /// Build the system prompt with context from memories
-    fn build_system_prompt(&self, message: &NormalizedMessage, identity_id: &str) -> String {
+    /// Build the system prompt with context from memories, tools, and skills
+    fn build_system_prompt(
+        &self,
+        message: &NormalizedMessage,
+        identity_id: &str,
+        tool_config: &ToolConfig,
+    ) -> String {
         let mut prompt = format!(
-            "You are StarkBot, a helpful AI assistant. You are responding to a message from {} on {}.\n\n",
+            "You are StarkBot, a capable AI assistant with access to tools and skills. \
+            You are responding to a message from {} on {}.\n\n",
             message.user_name, message.channel_type
         );
+
+        // Add available tools section
+        let tools = self.tool_registry.get_tool_definitions(tool_config);
+        if !tools.is_empty() {
+            prompt.push_str("## Available Tools\n");
+            prompt.push_str("You have access to the following tools. Use them proactively when they would help answer the user's question:\n\n");
+            for tool in &tools {
+                prompt.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
+            }
+            prompt.push_str("\nWhen a user asks for real-time information (weather, news, search results, etc.), USE YOUR TOOLS. Do not say you cannot access real-time data - you CAN via your tools.\n\n");
+        }
+
+        // Add enabled skills section
+        if let Ok(skills) = self.db.list_enabled_skills() {
+            if !skills.is_empty() {
+                prompt.push_str("## Enabled Skills\n");
+                prompt.push_str("You have specialized knowledge from the following skills. Reference them when relevant:\n\n");
+                for skill in &skills {
+                    prompt.push_str(&format!("### {} (v{})\n", skill.name, skill.version));
+                    prompt.push_str(&format!("{}\n", skill.description));
+                    if !skill.requires_binaries.is_empty() {
+                        prompt.push_str(&format!("Requires: {}\n", skill.requires_binaries.join(", ")));
+                    }
+                    // Include the skill's prompt template (instructions)
+                    if !skill.body.is_empty() {
+                        prompt.push_str("\n**Instructions:**\n");
+                        prompt.push_str(&skill.body);
+                        prompt.push_str("\n\n");
+                    }
+                }
+            }
+        }
+
+        // Add tool usage guidance
+        if !tools.is_empty() {
+            prompt.push_str("## Tool Usage Guidelines\n");
+            prompt.push_str(
+                "- **Be proactive**: If the user's question would benefit from a tool, use it immediately\n\
+                - **Weather queries**: Use the `exec` tool with curl commands as described in the weather skill\n\
+                - **Web searches**: Use `web_search` for current events, news, or information lookup\n\
+                - **File operations**: Use `read_file`, `write_file`, `list_files` for workspace tasks\n\
+                - **Commands**: Use `exec` to run shell commands when needed\n\n"
+            );
+        }
 
         // Add daily logs context
         if let Ok(daily_logs) = self.db.get_todays_daily_logs(Some(identity_id)) {

@@ -6,7 +6,8 @@ import { getIdentities } from '@/lib/api';
 interface Identity {
   id: string;
   name: string;
-  description?: string;
+  channel_type: string;
+  platform_user_id: string;
   created_at: string;
 }
 
@@ -71,11 +72,12 @@ export default function Identities() {
                     <h3 className="font-semibold text-white truncate">
                       {identity.name}
                     </h3>
-                    {identity.description && (
-                      <p className="text-sm text-slate-400 mt-1 line-clamp-2">
-                        {identity.description}
-                      </p>
-                    )}
+                    <p className="text-sm text-slate-400 mt-1">
+                      <span className="px-2 py-0.5 bg-slate-700 rounded text-xs mr-2">
+                        {identity.channel_type}
+                      </span>
+                      {identity.platform_user_id}
+                    </p>
                     <p className="text-xs text-slate-500 mt-2">
                       {formatDate(identity.created_at)}
                     </p>

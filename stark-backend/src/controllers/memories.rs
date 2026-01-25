@@ -39,6 +39,29 @@ fn validate_session_from_request(
     }
 }
 
+/// List all memories
+async fn list_memories(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    match data.db.list_memories() {
+        Ok(memories) => {
+            let responses: Vec<MemoryResponse> = memories.into_iter().map(|m| m.into()).collect();
+            HttpResponse::Ok().json(responses)
+        }
+        Err(e) => {
+            log::error!("Failed to list memories: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Database error: {}", e)
+            }))
+        }
+    }
+}
+
 /// Create a new memory
 async fn create_memory(
     data: web::Data<AppState>,
@@ -225,6 +248,7 @@ async fn cleanup_expired(data: web::Data<AppState>, req: HttpRequest) -> impl Re
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api/memories")
+            .route("", web::get().to(list_memories))
             .route("", web::post().to(create_memory))
             .route("/search", web::post().to(search_memories))
             .route("/daily", web::get().to(get_daily_logs))

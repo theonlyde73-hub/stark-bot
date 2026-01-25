@@ -5,7 +5,7 @@ import Button from '@/components/ui/Button';
 import { getMemories, deleteMemory } from '@/lib/api';
 
 interface Memory {
-  id: string;
+  id: number;
   content: string;
   importance?: number;
   created_at: string;
@@ -31,11 +31,11 @@ export default function Memories() {
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (id: number) => {
     if (!confirm('Are you sure you want to delete this memory?')) return;
 
     try {
-      await deleteMemory(id);
+      await deleteMemory(String(id));
       setMemories((prev) => prev.filter((m) => m.id !== id));
     } catch (err) {
       setError('Failed to delete memory');

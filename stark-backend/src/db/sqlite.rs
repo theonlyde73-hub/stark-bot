@@ -226,7 +226,7 @@ impl Database {
                 profile TEXT NOT NULL DEFAULT 'standard',
                 allow_list TEXT NOT NULL DEFAULT '[]',
                 deny_list TEXT NOT NULL DEFAULT '[]',
-                allowed_groups TEXT NOT NULL DEFAULT '[\"web\", \"filesystem\"]',
+                allowed_groups TEXT NOT NULL DEFAULT '[\"web\", \"filesystem\", \"exec\"]',
                 denied_groups TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -965,6 +965,25 @@ impl Database {
         Ok(session)
     }
 
+    /// List all chat sessions
+    pub fn list_chat_sessions(&self) -> SqliteResult<Vec<ChatSession>> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn.prepare(
+            "SELECT id, session_key, agent_id, scope, channel_type, channel_id, platform_chat_id,
+             is_active, reset_policy, idle_timeout_minutes, daily_reset_hour,
+             created_at, updated_at, last_activity_at, expires_at
+             FROM chat_sessions ORDER BY last_activity_at DESC LIMIT 100",
+        )?;
+
+        let sessions = stmt
+            .query_map([], |row| Self::row_to_chat_session(row))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(sessions)
+    }
+
     /// Get a chat session by session key
     pub fn get_chat_session_by_key(&self, session_key: &str) -> SqliteResult<Option<ChatSession>> {
         let conn = self.conn.lock().unwrap();
@@ -1322,6 +1341,23 @@ impl Database {
         Ok(links)
     }
 
+    /// List all identity links (unique identities)
+    pub fn list_identities(&self) -> SqliteResult<Vec<IdentityLink>> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn.prepare(
+            "SELECT id, identity_id, channel_type, platform_user_id, platform_user_name, is_verified, verified_at, created_at, updated_at
+             FROM identity_links ORDER BY updated_at DESC LIMIT 100",
+        )?;
+
+        let links = stmt
+            .query_map([], |row| Self::row_to_identity_link(row))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(links)
+    }
+
     fn row_to_identity_link(row: &rusqlite::Row) -> rusqlite::Result<IdentityLink> {
         let created_at_str: String = row.get(7)?;
         let updated_at_str: String = row.get(8)?;
@@ -1554,6 +1590,24 @@ impl Database {
                 .filter_map(|r| r.ok())
                 .collect()
         };
+
+        Ok(memories)
+    }
+
+    /// List all memories
+    pub fn list_memories(&self) -> SqliteResult<Vec<Memory>> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn.prepare(
+            "SELECT id, memory_type, content, category, tags, importance, identity_id, session_id,
+             source_channel_type, source_message_id, log_date, created_at, updated_at, expires_at
+             FROM memories ORDER BY created_at DESC LIMIT 100",
+        )?;
+
+        let memories = stmt
+            .query_map([], |row| Self::row_to_memory(row))?
+            .filter_map(|r| r.ok())
+            .collect();
 
         Ok(memories)
     }

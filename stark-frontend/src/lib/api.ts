@@ -164,11 +164,12 @@ export async function deleteSkill(id: string): Promise<void> {
 
 // Sessions API
 export async function getSessions(): Promise<Array<{
-  id: string;
+  id: number;
   channel_type: string;
-  channel_id: string;
+  channel_id: number;
   created_at: string;
   updated_at: string;
+  message_count?: number;
 }>> {
   return apiFetch('/sessions');
 }
@@ -179,7 +180,7 @@ export async function deleteSession(id: string): Promise<void> {
 
 // Memories API
 export async function getMemories(): Promise<Array<{
-  id: string;
+  id: number;
   content: string;
   importance?: number;
   created_at: string;
@@ -195,27 +196,107 @@ export async function deleteMemory(id: string): Promise<void> {
 export async function getIdentities(): Promise<Array<{
   id: string;
   name: string;
-  description?: string;
+  channel_type: string;
+  platform_user_id: string;
   created_at: string;
 }>> {
   return apiFetch('/identities');
 }
 
 // Channels API
-export async function getChannels(): Promise<Array<{
-  id: string;
-  type: string;
+export interface ChannelInfo {
+  id: number;
+  channel_type: string;
   name: string;
   enabled: boolean;
-}>> {
-  return apiFetch('/channels');
+  bot_token: string;
+  app_token?: string;
+  created_at: string;
+  updated_at: string;
+  running?: boolean;
 }
 
-export async function updateChannel(id: string, config: Record<string, unknown>): Promise<void> {
-  await apiFetch(`/channels/${id}`, {
+interface ChannelsListResponse {
+  success: boolean;
+  channels?: ChannelInfo[];
+  error?: string;
+}
+
+interface ChannelOperationResponse {
+  success: boolean;
+  channel?: ChannelInfo;
+  error?: string;
+}
+
+export async function getChannels(): Promise<ChannelInfo[]> {
+  const response = await apiFetch<ChannelsListResponse>('/channels');
+  return response.channels || [];
+}
+
+export async function getChannel(id: number): Promise<ChannelInfo | null> {
+  const response = await apiFetch<ChannelOperationResponse>(`/channels/${id}`);
+  return response.channel || null;
+}
+
+export async function createChannel(data: {
+  channel_type: string;
+  name: string;
+  bot_token: string;
+  app_token?: string;
+}): Promise<ChannelInfo> {
+  const response = await apiFetch<ChannelOperationResponse>('/channels', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+  if (!response.success || !response.channel) {
+    throw new Error(response.error || 'Failed to create channel');
+  }
+  return response.channel;
+}
+
+export async function updateChannel(id: number, config: {
+  name?: string;
+  enabled?: boolean;
+  bot_token?: string;
+  app_token?: string;
+}): Promise<ChannelInfo> {
+  const response = await apiFetch<ChannelOperationResponse>(`/channels/${id}`, {
     method: 'PUT',
     body: JSON.stringify(config),
   });
+  if (!response.success || !response.channel) {
+    throw new Error(response.error || 'Failed to update channel');
+  }
+  return response.channel;
+}
+
+export async function deleteChannel(id: number): Promise<void> {
+  const response = await apiFetch<ChannelOperationResponse>(`/channels/${id}`, {
+    method: 'DELETE',
+  });
+  if (!response.success) {
+    throw new Error(response.error || 'Failed to delete channel');
+  }
+}
+
+export async function startChannel(id: number): Promise<ChannelInfo> {
+  const response = await apiFetch<ChannelOperationResponse>(`/channels/${id}/start`, {
+    method: 'POST',
+  });
+  if (!response.success || !response.channel) {
+    throw new Error(response.error || 'Failed to start channel');
+  }
+  return response.channel;
+}
+
+export async function stopChannel(id: number): Promise<ChannelInfo> {
+  const response = await apiFetch<ChannelOperationResponse>(`/channels/${id}/stop`, {
+    method: 'POST',
+  });
+  if (!response.success || !response.channel) {
+    throw new Error(response.error || 'Failed to stop channel');
+  }
+  return response.channel;
 }
 
 // Logs API

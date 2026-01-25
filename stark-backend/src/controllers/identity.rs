@@ -40,6 +40,43 @@ fn validate_session_from_request(
     }
 }
 
+/// List all identities
+async fn list_identities(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    match data.db.list_identities() {
+        Ok(links) => {
+            // Group by identity_id and return unique identities
+            let mut seen = std::collections::HashSet::new();
+            let responses: Vec<serde_json::Value> = links
+                .into_iter()
+                .filter(|link| seen.insert(link.identity_id.clone()))
+                .map(|link| {
+                    serde_json::json!({
+                        "id": link.identity_id,
+                        "name": link.platform_user_name.unwrap_or_else(|| link.platform_user_id.clone()),
+                        "channel_type": link.channel_type,
+                        "platform_user_id": link.platform_user_id,
+                        "created_at": link.created_at.to_rfc3339()
+                    })
+                })
+                .collect();
+            HttpResponse::Ok().json(responses)
+        }
+        Err(e) => {
+            log::error!("Failed to list identities: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Database error: {}", e)
+            }))
+        }
+    }
+}
+
 /// Get or create an identity for a platform user
 async fn get_or_create_identity(
     data: web::Data<AppState>,
@@ -204,9 +241,10 @@ async fn get_linked_identities(
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
-        web::scope("/api/identity")
+        web::scope("/api/identities")
+            .route("", web::get().to(list_identities))
             .route("", web::post().to(get_or_create_identity))
-            .route("", web::get().to(get_identity))
+            .route("/lookup", web::get().to(get_identity))
             .route("/link", web::post().to(link_identity))
             .route("/{identity_id}", web::get().to(get_linked_identities)),
     );

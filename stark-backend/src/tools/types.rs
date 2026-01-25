@@ -76,9 +76,11 @@ impl ToolProfile {
         match self {
             ToolProfile::None => vec![],
             ToolProfile::Minimal => vec![ToolGroup::Web],
-            ToolProfile::Standard => vec![ToolGroup::Web, ToolGroup::Filesystem],
+            // Standard includes Exec because the exec tool has its own security restrictions
+            // (deny list for dangerous commands, no shell metacharacters allowed)
+            ToolProfile::Standard => vec![ToolGroup::Web, ToolGroup::Filesystem, ToolGroup::Exec],
             ToolProfile::Messaging => {
-                vec![ToolGroup::Web, ToolGroup::Filesystem, ToolGroup::Messaging]
+                vec![ToolGroup::Web, ToolGroup::Filesystem, ToolGroup::Exec, ToolGroup::Messaging]
             }
             ToolProfile::Full => ToolGroup::all(),
             ToolProfile::Custom => vec![], // Custom profile uses explicit allow/deny lists
@@ -272,7 +274,7 @@ impl Default for ToolConfig {
             profile: ToolProfile::Standard,
             allow_list: vec![],
             deny_list: vec![],
-            allowed_groups: vec!["web".to_string(), "filesystem".to_string()],
+            allowed_groups: vec!["web".to_string(), "filesystem".to_string(), "exec".to_string()],
             denied_groups: vec![],
         }
     }

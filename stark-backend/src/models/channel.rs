@@ -51,15 +51,16 @@ impl Channel {
     }
 }
 
-/// Response type for channel API endpoints (hides sensitive tokens)
+/// Response type for channel API endpoints
 #[derive(Debug, Clone, Serialize)]
 pub struct ChannelResponse {
     pub id: i64,
     pub channel_type: String,
     pub name: String,
     pub enabled: bool,
-    pub has_bot_token: bool,
-    pub has_app_token: bool,
+    pub bot_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_token: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -73,8 +74,8 @@ impl From<Channel> for ChannelResponse {
             channel_type: channel.channel_type,
             name: channel.name,
             enabled: channel.enabled,
-            has_bot_token: !channel.bot_token.is_empty(),
-            has_app_token: channel.app_token.is_some(),
+            bot_token: channel.bot_token,
+            app_token: channel.app_token,
             created_at: channel.created_at,
             updated_at: channel.updated_at,
             running: None,

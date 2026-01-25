@@ -41,6 +41,38 @@ fn validate_session_from_request(
     }
 }
 
+/// List all chat sessions
+async fn list_sessions(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    match data.db.list_chat_sessions() {
+        Ok(sessions) => {
+            let responses: Vec<ChatSessionResponse> = sessions
+                .into_iter()
+                .map(|s| {
+                    let mut response: ChatSessionResponse = s.into();
+                    if let Ok(count) = data.db.count_session_messages(response.id) {
+                        response.message_count = Some(count);
+                    }
+                    response
+                })
+                .collect();
+            HttpResponse::Ok().json(responses)
+        }
+        Err(e) => {
+            log::error!("Failed to list sessions: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Database error: {}", e)
+            }))
+        }
+    }
+}
+
 /// Get or create a chat session
 async fn get_or_create_session(
     data: web::Data<AppState>,
@@ -210,6 +242,7 @@ async fn get_transcript(
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api/sessions")
+            .route("", web::get().to(list_sessions))
             .route("", web::post().to(get_or_create_session))
             .route("/{id}", web::get().to(get_session))
             .route("/{id}/reset", web::post().to(reset_session))
