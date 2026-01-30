@@ -50,6 +50,7 @@ base64 = "0.22"
 
 # URL parsing
 url = "2"
+urlencoding = "2"
 
 # Cron scheduling
 cron = "0.12"

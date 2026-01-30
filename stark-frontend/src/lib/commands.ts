@@ -136,4 +136,4 @@ export const CATEGORY_LABELS: Record<CommandDefinition['category'], string> = {
 };
 
 // Order of categories for display
-export const CATEGORY_ORDER: CommandDefinition['category'][] = ['general', 'session', 'info', 'transaction'];
+export const CATEGORY_ORDER: CommandDefinition['category'][] = ['general', 'session', 'info'];

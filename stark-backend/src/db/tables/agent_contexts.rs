@@ -57,6 +57,7 @@ impl Database {
                 active_skill,
                 actual_tool_calls: 0,      // Reset on load
                 no_tool_warnings: 0,       // Reset on load
+                waiting_for_user_context: None, // Reset on load
             })
         });
 

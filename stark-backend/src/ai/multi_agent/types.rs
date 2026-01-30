@@ -206,6 +206,12 @@ pub struct AgentContext {
     /// Number of times the agent tried to respond without calling tools
     #[serde(default)]
     pub no_tool_warnings: u32,
+
+    /// Context saved when waiting for user response (e.g., from ask_user tool).
+    /// Contains a summary of what tool calls were made before asking the user,
+    /// so the AI can continue where it left off when the user responds.
+    #[serde(default)]
+    pub waiting_for_user_context: Option<String>,
 }
 
 /// Active skill context that persists across turns
@@ -220,6 +226,10 @@ pub struct ActiveSkill {
     /// Number of actual tool calls made since this skill was activated
     #[serde(default)]
     pub tool_calls_made: u32,
+    /// Tools required by this skill - these are force-included in the toolset
+    /// regardless of tool profile/config restrictions
+    #[serde(default)]
+    pub requires_tools: Vec<String>,
 }
 
 /// Mode transition (kept for API compatibility)

@@ -262,7 +262,7 @@ impl ExecTool {
 
         // Add API keys from context
         for key_id in ApiKeyId::all() {
-            if let Some(value) = context.get_api_key(key_id.as_str()) {
+            if let Some(value) = context.get_api_key_by_id(*key_id) {
                 if let Some(key_env_vars) = key_id.env_vars() {
                     for env_var in key_env_vars {
                         env_vars.insert(env_var.to_string(), value.clone());
@@ -421,7 +421,7 @@ impl Tool for ExecTool {
 
         // Set environment variables from context (API keys)
         for key_id in ApiKeyId::all() {
-            if let Some(value) = context.get_api_key(key_id.as_str()) {
+            if let Some(value) = context.get_api_key_by_id(*key_id) {
                 // Set all configured env vars for this key
                 if let Some(env_vars) = key_id.env_vars() {
                     for env_var in env_vars {

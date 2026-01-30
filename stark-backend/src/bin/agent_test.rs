@@ -296,6 +296,76 @@ fn get_code_engineer_tools() -> Vec<ToolSpec> {
                 }),
             },
         },
+        // discord_lookup
+        ToolSpec {
+            tool_type: "function".to_string(),
+            function: ToolFunction {
+                name: "discord_lookup".to_string(),
+                description: "Look up Discord servers (guilds) and channels. Use this to find server IDs by name, list channels in a server, or search for specific channels.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["list_servers", "search_servers", "list_channels", "search_channels"],
+                            "description": "The action to perform"
+                        },
+                        "server_id": {
+                            "type": "string",
+                            "description": "Discord server (guild) ID. Required for list_channels and search_channels."
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "Search query for filtering by name. Required for search_servers and search_channels."
+                        }
+                    },
+                    "required": ["action"]
+                }),
+            },
+        },
+        // discord
+        ToolSpec {
+            tool_type: "function".to_string(),
+            function: ToolFunction {
+                name: "discord".to_string(),
+                description: "Perform Discord actions like sending messages, reacting, managing threads. Use 'sendMessage' action with 'to' in format 'channel:<id>' to send messages.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["sendMessage", "react", "readMessages", "editMessage", "deleteMessage"],
+                            "description": "The Discord action to perform"
+                        },
+                        "to": {
+                            "type": "string",
+                            "description": "Target for sendMessage: 'channel:<id>' or 'user:<id>'"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Message content to send"
+                        },
+                        "channelId": {
+                            "type": "string",
+                            "description": "Channel ID for readMessages, react, editMessage, deleteMessage"
+                        },
+                        "messageId": {
+                            "type": "string",
+                            "description": "Message ID for react, editMessage, deleteMessage"
+                        },
+                        "emoji": {
+                            "type": "string",
+                            "description": "Emoji for react action"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Number of messages to read (default: 20)"
+                        }
+                    },
+                    "required": ["action"]
+                }),
+            },
+        },
     ]
 }
 
@@ -303,7 +373,7 @@ fn get_code_engineer_tools() -> Vec<ToolSpec> {
 // Tool Execution - REAL implementations
 // ============================================================================
 
-fn execute_tool(name: &str, args: &Value, workspace: &Path) -> String {
+async fn execute_tool(name: &str, args: &Value, workspace: &Path) -> String {
     println!("\n   🔧 Executing: {}", name);
     println!("   📥 Args: {}", serde_json::to_string(args).unwrap_or_default());
 
@@ -316,6 +386,8 @@ fn execute_tool(name: &str, args: &Value, workspace: &Path) -> String {
         "git" => execute_git(args, workspace),
         "glob" => execute_glob(args, workspace),
         "grep" => execute_grep(args, workspace),
+        "discord_lookup" => execute_discord_lookup(args).await,
+        "discord" => execute_discord(args).await,
         _ => format!("Unknown tool: {}", name),
     };
 
@@ -734,43 +806,299 @@ fn execute_grep(args: &Value, workspace: &Path) -> String {
     }
 }
 
+async fn execute_discord_lookup(args: &Value) -> String {
+    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let server_id = args.get("server_id").and_then(|v| v.as_str());
+    let query = args.get("query").and_then(|v| v.as_str());
+
+    let bot_token = match std::env::var("DISCORD_BOT_TOKEN") {
+        Ok(t) => t,
+        Err(_) => return "Error: DISCORD_BOT_TOKEN not set".to_string(),
+    };
+
+    let client = reqwest::Client::new();
+
+    match action {
+        "list_servers" | "search_servers" => {
+            let url = "https://discord.com/api/v10/users/@me/guilds?limit=200";
+            let response = client
+                .get(url)
+                .header("Authorization", format!("Bot {}", bot_token))
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        return format!("Discord API error: {}", resp.status());
+                    }
+                    let body = resp.text().await.unwrap_or_default();
+                    let guilds: Vec<Value> = serde_json::from_str(&body).unwrap_or_default();
+
+                    let filtered: Vec<&Value> = if action == "search_servers" {
+                        let q = query.unwrap_or("").to_lowercase();
+                        guilds.iter().filter(|g| {
+                            g.get("name")
+                                .and_then(|n| n.as_str())
+                                .map(|n| n.to_lowercase().contains(&q))
+                                .unwrap_or(false)
+                        }).collect()
+                    } else {
+                        guilds.iter().collect()
+                    };
+
+                    let result: Vec<Value> = filtered.iter().map(|g| {
+                        json!({
+                            "id": g.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                            "name": g.get("name").and_then(|v| v.as_str()).unwrap_or("")
+                        })
+                    }).collect();
+
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| "[]".to_string())
+                }
+                Err(e) => format!("Request failed: {}", e),
+            }
+        }
+        "list_channels" | "search_channels" => {
+            let sid = match server_id {
+                Some(id) => id,
+                None => return "Error: server_id is required".to_string(),
+            };
+
+            let url = format!("https://discord.com/api/v10/guilds/{}/channels", sid);
+            let response = client
+                .get(&url)
+                .header("Authorization", format!("Bot {}", bot_token))
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        return format!("Discord API error: {}", resp.status());
+                    }
+                    let body = resp.text().await.unwrap_or_default();
+                    let channels: Vec<Value> = serde_json::from_str(&body).unwrap_or_default();
+
+                    let filtered: Vec<&Value> = if action == "search_channels" {
+                        let q = query.unwrap_or("").to_lowercase();
+                        channels.iter().filter(|c| {
+                            c.get("name")
+                                .and_then(|n| n.as_str())
+                                .map(|n| n.to_lowercase().contains(&q))
+                                .unwrap_or(false)
+                        }).collect()
+                    } else {
+                        channels.iter().collect()
+                    };
+
+                    let result: Vec<Value> = filtered.iter().map(|c| {
+                        let channel_type = c.get("type").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let type_name = match channel_type {
+                            0 => "text",
+                            2 => "voice",
+                            4 => "category",
+                            5 => "announcement",
+                            _ => "other",
+                        };
+                        json!({
+                            "id": c.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                            "name": c.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+                            "type": type_name
+                        })
+                    }).collect();
+
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| "[]".to_string())
+                }
+                Err(e) => format!("Request failed: {}", e),
+            }
+        }
+        _ => format!("Unknown action: {}", action),
+    }
+}
+
+async fn execute_discord(args: &Value) -> String {
+    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+
+    let bot_token = match std::env::var("DISCORD_BOT_TOKEN") {
+        Ok(t) => t,
+        Err(_) => return "Error: DISCORD_BOT_TOKEN not set".to_string(),
+    };
+
+    let client = reqwest::Client::new();
+
+    match action {
+        "sendMessage" => {
+            let to = args.get("to").and_then(|v| v.as_str()).unwrap_or("");
+            let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+
+            // Parse "channel:<id>" format
+            let channel_id = if to.starts_with("channel:") {
+                to.trim_start_matches("channel:")
+            } else {
+                to
+            };
+
+            if channel_id.is_empty() {
+                return "Error: 'to' parameter is required (format: 'channel:<id>')".to_string();
+            }
+            if content.is_empty() {
+                return "Error: 'content' parameter is required".to_string();
+            }
+
+            let url = format!("https://discord.com/api/v10/channels/{}/messages", channel_id);
+            let body = json!({ "content": content });
+
+            let response = client
+                .post(&url)
+                .header("Authorization", format!("Bot {}", bot_token))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body_text = resp.text().await.unwrap_or_default();
+                    if status.is_success() {
+                        format!("Message sent successfully to channel {}", channel_id)
+                    } else {
+                        format!("Discord API error ({}): {}", status, body_text)
+                    }
+                }
+                Err(e) => format!("Request failed: {}", e),
+            }
+        }
+        "readMessages" => {
+            let channel_id = args.get("channelId").and_then(|v| v.as_str()).unwrap_or("");
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20);
+
+            if channel_id.is_empty() {
+                return "Error: 'channelId' parameter is required".to_string();
+            }
+
+            let url = format!(
+                "https://discord.com/api/v10/channels/{}/messages?limit={}",
+                channel_id, limit
+            );
+
+            let response = client
+                .get(&url)
+                .header("Authorization", format!("Bot {}", bot_token))
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        return format!("Discord API error: {}", resp.status());
+                    }
+                    let body = resp.text().await.unwrap_or_default();
+                    let messages: Vec<Value> = serde_json::from_str(&body).unwrap_or_default();
+
+                    let result: Vec<Value> = messages.iter().map(|m| {
+                        json!({
+                            "id": m.get("id"),
+                            "content": m.get("content"),
+                            "author": m.get("author").and_then(|a| a.get("username"))
+                        })
+                    }).collect();
+
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| "[]".to_string())
+                }
+                Err(e) => format!("Request failed: {}", e),
+            }
+        }
+        "react" => {
+            let channel_id = args.get("channelId").and_then(|v| v.as_str()).unwrap_or("");
+            let message_id = args.get("messageId").and_then(|v| v.as_str()).unwrap_or("");
+            let emoji = args.get("emoji").and_then(|v| v.as_str()).unwrap_or("");
+
+            if channel_id.is_empty() || message_id.is_empty() || emoji.is_empty() {
+                return "Error: channelId, messageId, and emoji are all required".to_string();
+            }
+
+            // URL-encode the emoji
+            let encoded_emoji = urlencoding::encode(emoji);
+            let url = format!(
+                "https://discord.com/api/v10/channels/{}/messages/{}/reactions/{}/@me",
+                channel_id, message_id, encoded_emoji
+            );
+
+            let response = client
+                .put(&url)
+                .header("Authorization", format!("Bot {}", bot_token))
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        format!("Reacted with {} to message {}", emoji, message_id)
+                    } else {
+                        format!("Discord API error: {}", resp.status())
+                    }
+                }
+                Err(e) => format!("Request failed: {}", e),
+            }
+        }
+        _ => format!("Unknown or unsupported action: {}", action),
+    }
+}
+
 // ============================================================================
 // System Prompt
 // ============================================================================
 
 fn get_system_prompt(workspace: &Path, skills: &[String]) -> String {
-    format!(r#"You are a CodeEngineer agent that builds software. Your workspace is: {}
+    format!(r#"You are an AI agent that can perform various tasks. Your workspace is: {}
 
 ## Available Tools
 
+### File Operations
 - `write_file` - Create or overwrite files (path, content)
 - `read_file` - Read file contents (path)
 - `list_files` - List directory contents (path)
-- `exec` - Run shell commands (command) - use for npm, cargo, pip, etc.
-- `git` - Git operations (operation: status/diff/log/add/commit/init, files, message, branch)
 - `glob` - Find files by pattern
 - `grep` - Search in files
 
-## How to Build Software
+### System
+- `exec` - Run shell commands (command) - use for npm, cargo, pip, etc.
+- `git` - Git operations (operation: status/diff/log/add/commit/init, files, message, branch)
 
-1. Create project structure with `write_file` or `exec` (npx create-*, cargo new, etc.)
-2. Write source files with `write_file`
-3. Install dependencies with `exec` (npm install, pip install, etc.)
-4. Test with `exec` (npm test, cargo test, etc.)
-5. Initialize git with `git` operation: "init"
-6. Stage and commit with `git` operations: "add" then "commit"
+### Discord Integration
+- `discord_lookup` - Look up Discord servers and channels
+  - action: "list_servers" | "search_servers" | "list_channels" | "search_channels"
+  - server_id: required for channel operations
+  - query: search term for search operations
+
+- `discord` - Perform Discord actions
+  - action: "sendMessage" - Send a message
+    - to: "channel:<channel_id>" - Target channel
+    - content: Message text
+  - action: "readMessages" - Read messages from a channel
+    - channelId: Channel ID
+    - limit: Number of messages (default: 20)
+  - action: "react" - React to a message
+    - channelId, messageId, emoji
+
+## How to Send a Discord Message
+
+1. First use `discord_lookup` with action: "search_servers" to find the server by name
+2. Use `discord_lookup` with action: "search_channels" and the server_id to find the channel
+3. Use `discord` with action: "sendMessage", to: "channel:<id>", and your content
 
 ## Important
 
 - All file paths are relative to the workspace
+- For Discord operations, always look up IDs first using discord_lookup
 - Use `exec` for running any shell command
-- Create parent directories automatically when writing files
-- Write complete, working code
 
 ## Skills Available
 {}
 
-Build what the user asks for. Use the tools to create real files and run real commands."#,
+Accomplish what the user asks for. Use the available tools."#,
         workspace.display(),
         if skills.is_empty() { "None".to_string() } else { skills.join(", ") }
     )
@@ -900,7 +1228,7 @@ async fn run_agent_loop(
                     println!("\n   📍 Tool: {} (id: {})", tc.function.name, tc.id);
 
                     let args: Value = serde_json::from_str(&tc.function.arguments).unwrap_or(json!({}));
-                    let result = execute_tool(&tc.function.name, &args, workspace);
+                    let result = execute_tool(&tc.function.name, &args, workspace).await;
 
                     messages.push(Message {
                         role: "tool".to_string(),

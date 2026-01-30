@@ -231,11 +231,26 @@ impl Tool for SubagentTool {
 
         // Check if we have access to the SubAgentManager via the context
         if let Some(manager) = &context.subagent_manager {
-            // Real execution via SubAgentManager
+            // Real execution via SubAgentManager - this will actually spawn an AI agent
+            log::info!("[SUBAGENT] ✓ Using SubAgentManager for real AI execution");
 
-            // Build SubAgentContext
-                let session_id = context.session_id.unwrap_or(0);
-                let channel_id = context.channel_id.unwrap_or(0);
+            // Build SubAgentContext - require valid session_id and channel_id
+            let session_id = match context.session_id {
+                Some(id) if id > 0 => id,
+                _ => {
+                    return ToolResult::error(
+                        "Cannot spawn subagent: no valid session context available. This tool requires a valid session."
+                    );
+                }
+            };
+            let channel_id = match context.channel_id {
+                Some(id) if id > 0 => id,
+                _ => {
+                    return ToolResult::error(
+                        "Cannot spawn subagent: no valid channel context available. This tool requires a valid channel."
+                    );
+                }
+            };
 
                 let subagent_context = SubAgentContext::new(
                     subagent_id.clone(),
@@ -356,8 +371,10 @@ impl Tool for SubagentTool {
 
         // Fallback: Legacy in-memory approach when no manager is available
         // This provides basic functionality without full AI execution
-        log::warn!(
-            "[SUBAGENT] No SubAgentManager available, using legacy in-memory approach"
+        // WARNING: This path does NOT actually execute AI or make API calls!
+        log::error!(
+            "[SUBAGENT] ⚠️ SubAgentManager NOT available! Using legacy placeholder (NO REAL EXECUTION). \
+             Ensure dispatcher is configured with SubAgentManager for real subagent support."
         );
 
         // Build the full task prompt

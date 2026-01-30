@@ -1,11 +1,12 @@
 use crate::ai::{
-    multi_agent::{types::AgentSubtype, Orchestrator, ProcessResult as OrchestratorResult},
+    multi_agent::{types::AgentSubtype, Orchestrator, ProcessResult as OrchestratorResult, SubAgentManager},
     AiClient, ArchetypeId, ArchetypeRegistry, AiResponse, Message, MessageRole, ModelArchetype,
     ThinkingLevel, ToolCall, ToolHistoryEntry, ToolResponse,
 };
 use crate::channels::types::{DispatchResult, NormalizedMessage};
 use crate::config::MemoryConfig;
 use crate::context::{self, estimate_tokens, ContextManager};
+use crate::controllers::api_keys::ApiKeyId;
 use crate::db::Database;
 use crate::execution::ExecutionTracker;
 use crate::gateway::events::EventBroadcaster;
@@ -118,6 +119,8 @@ pub struct MessageDispatcher {
     thinking_directive_pattern: Regex,
     /// Memory configuration for cross-session and other features
     memory_config: MemoryConfig,
+    /// SubAgent manager for spawning background AI agents
+    subagent_manager: Option<Arc<SubAgentManager>>,
 }
 
 impl MessageDispatcher {
@@ -140,6 +143,17 @@ impl MessageDispatcher {
         let memory_config = MemoryConfig::from_env();
         let context_manager = ContextManager::new(db.clone())
             .with_memory_config(memory_config.clone());
+
+        // Create SubAgentManager for spawning background AI agents
+        let subagent_manager = Arc::new(SubAgentManager::new_with_config(
+            db.clone(),
+            broadcaster.clone(),
+            tool_registry.clone(),
+            Default::default(),
+            burner_wallet_private_key.clone(),
+        ));
+        log::info!("[DISPATCHER] SubAgentManager initialized");
+
         Self {
             db,
             broadcaster,
@@ -151,6 +165,7 @@ impl MessageDispatcher {
             memory_markers: create_memory_markers(),
             thinking_directive_pattern: Regex::new(r"(?i)^/(?:t|think|thinking)(?::(\w+))?$").unwrap(),
             memory_config,
+            subagent_manager: Some(subagent_manager),
         }
     }
 
@@ -172,6 +187,7 @@ impl MessageDispatcher {
             memory_markers: create_memory_markers(),
             thinking_directive_pattern: Regex::new(r"(?i)^/(?:t|think|thinking)(?::(\w+))?$").unwrap(),
             memory_config,
+            subagent_manager: None, // No tools = no subagent support
         }
     }
 
@@ -388,18 +404,38 @@ impl MessageDispatcher {
         let mut tool_context = ToolContext::new()
             .with_channel(message.channel_id, message.channel_type.clone())
             .with_user(message.user_id.clone())
+            .with_session(session.id)
             .with_workspace(workspace_dir.clone())
             .with_broadcaster(self.broadcaster.clone())
             .with_database(self.db.clone());
+
+        // Add SubAgentManager for spawning background AI agents
+        if let Some(ref manager) = self.subagent_manager {
+            tool_context = tool_context.with_subagent_manager(manager.clone());
+            log::debug!("[DISPATCH] SubAgentManager attached to tool context");
+        }
 
         // Ensure workspace directory exists
         let _ = std::fs::create_dir_all(&workspace_dir);
 
         // Load API keys from database for tools that need them
-        // Each key is stored individually (e.g., "GITHUB_TOKEN", "TWITTER_CLIENT_ID")
+        // Each key is stored individually (e.g., "GITHUB_TOKEN", "DISCORD_BOT_TOKEN")
+        // Keys are added to both ToolContext AND environment variables for maximum compatibility
         if let Ok(keys) = self.db.list_api_keys() {
             for key in keys {
+                // Add to tool context (for tools that use context.get_api_key)
                 tool_context = tool_context.with_api_key(&key.service_name, key.api_key.clone());
+
+                // Also set as environment variables (for tools that use std::env)
+                // Use the ApiKeyId to get all env var names for this key
+                // SAFETY: We're setting env vars at startup before spawning threads that read them
+                if let Some(key_id) = ApiKeyId::from_str(&key.service_name) {
+                    if let Some(env_vars) = key_id.env_vars() {
+                        for env_var in env_vars {
+                            unsafe { std::env::set_var(env_var, &key.api_key); }
+                        }
+                    }
+                }
             }
         }
 
@@ -603,9 +639,26 @@ impl MessageDispatcher {
         ));
 
         // Get regular tools from registry, filtered by subtype
-        let mut tools = self
-            .tool_registry
-            .get_tool_definitions_for_subtype(tool_config, subtype);
+        // If there's an active skill with requires_tools, force-include those tools
+        let mut tools = if let Some(ref active_skill) = orchestrator.context().active_skill {
+            if !active_skill.requires_tools.is_empty() {
+                log::info!(
+                    "[TOOL_LOOP] Active skill '{}' requires tools: {:?}",
+                    active_skill.name,
+                    active_skill.requires_tools
+                );
+                self.tool_registry
+                    .get_tool_definitions_for_subtype_with_required(
+                        tool_config,
+                        subtype,
+                        &active_skill.requires_tools,
+                    )
+            } else {
+                self.tool_registry.get_tool_definitions_for_subtype(tool_config, subtype)
+            }
+        } else {
+            self.tool_registry.get_tool_definitions_for_subtype(tool_config, subtype)
+        };
 
         // Add skills as a "use_skill" pseudo-tool if any are enabled
         // Skills are also filtered by subtype tags
@@ -830,11 +883,16 @@ impl MessageDispatcher {
             }
         }
 
+        // Clear waiting_for_user_context now that it's been consumed into the prompt
+        orchestrator.clear_waiting_for_user_context();
+
         let mut tool_history: Vec<ToolHistoryEntry> = Vec::new();
         let mut iterations = 0;
         let mut tool_call_log: Vec<String> = Vec::new();
         let mut orchestrator_complete = false;
         let mut final_summary = String::new();
+        let mut waiting_for_user_response = false;
+        let mut user_question_content = String::new();
 
         loop {
             iterations += 1;
@@ -1050,13 +1108,40 @@ impl MessageDispatcher {
                                         let skill_base_dir = format!("{}/{}", skills_dir, skill.name);
                                         let instructions = skill.body.replace("{baseDir}", &skill_base_dir);
 
+                                        let requires_tools = skill.requires_tools.clone();
+                                        log::info!(
+                                            "[SKILL] Activating skill '{}' with requires_tools: {:?}",
+                                            skill.name,
+                                            requires_tools
+                                        );
+
                                         orchestrator.context_mut().active_skill = Some(crate::ai::multi_agent::types::ActiveSkill {
                                             name: skill.name,
                                             instructions,
                                             activated_at: chrono::Utc::now().to_rfc3339(),
                                             tool_calls_made: 0,
+                                            requires_tools: requires_tools.clone(),
                                         });
-                                        log::info!("[SKILL] Set active skill on orchestrator (tool_calls_made=0)");
+
+                                        // Force-include required tools in the toolset
+                                        if !requires_tools.is_empty() {
+                                            let subtype = orchestrator.current_subtype();
+                                            tools = self.tool_registry
+                                                .get_tool_definitions_for_subtype_with_required(
+                                                    tool_config,
+                                                    subtype,
+                                                    &requires_tools,
+                                                );
+                                            if let Some(skill_tool) = self.create_skill_tool_definition_for_subtype(subtype) {
+                                                tools.push(skill_tool);
+                                            }
+                                            tools.extend(orchestrator.get_mode_tools());
+                                            log::info!(
+                                                "[SKILL] Refreshed toolset with {} tools (including {} required by skill)",
+                                                tools.len(),
+                                                requires_tools.len()
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -1124,6 +1209,16 @@ impl MessageDispatcher {
                             result
                         };
 
+                        // Check if this tool requires user response (e.g., ask_user)
+                        // If so, we should break the loop after processing to wait for user input
+                        if let Some(metadata) = &result.metadata {
+                            if metadata.get("requires_user_response").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                waiting_for_user_response = true;
+                                user_question_content = result.content.clone();
+                                log::info!("[ORCHESTRATED_LOOP] Tool requires user response, will break after processing");
+                            }
+                        }
+
                         self.broadcaster.broadcast(GatewayEvent::tool_result(
                             original_message.channel_id,
                             &call.name,
@@ -1159,6 +1254,13 @@ impl MessageDispatcher {
             if orchestrator_complete {
                 break;
             }
+
+            // If a tool requires user response (e.g., ask_user), break the loop
+            // and return the question content. Context is preserved for when user responds.
+            if waiting_for_user_response {
+                log::info!("[ORCHESTRATED_LOOP] Breaking loop to wait for user response");
+                break;
+            }
         }
 
         // Save orchestrator context for next turn
@@ -1167,7 +1269,23 @@ impl MessageDispatcher {
         }
 
         // Return final response
-        if orchestrator_complete {
+        if waiting_for_user_response {
+            // Save the tool call log to the orchestrator context so the AI knows what it already did
+            // This will be included in the system prompt on the next turn
+            if !tool_call_log.is_empty() {
+                let context_summary = format!(
+                    "Before asking the user, I already completed these actions:\n{}",
+                    tool_call_log.join("\n")
+                );
+                orchestrator.context_mut().waiting_for_user_context = Some(context_summary);
+                // Re-save context with the waiting_for_user_context
+                if let Err(e) = self.db.save_agent_context(session_id, orchestrator.context()) {
+                    log::warn!("[MULTI_AGENT] Failed to save context with user_context: {}", e);
+                }
+            }
+            // Return the question content - context is saved, will continue when user responds
+            Ok(user_question_content)
+        } else if orchestrator_complete {
             Ok(final_summary)
         } else if tool_call_log.is_empty() {
             Err(format!(
@@ -1210,10 +1328,15 @@ impl MessageDispatcher {
             }
         }
 
+        // Clear waiting_for_user_context now that it's been consumed into the prompt
+        orchestrator.clear_waiting_for_user_context();
+
         let mut final_response = String::new();
         let mut iterations = 0;
         let mut tool_call_log: Vec<String> = Vec::new();
         let mut orchestrator_complete = false;
+        let mut waiting_for_user_response = false;
+        let mut user_question_content = String::new();
 
         loop {
             iterations += 1;
@@ -1342,13 +1465,40 @@ impl MessageDispatcher {
                                                 let skill_base_dir = format!("{}/{}", skills_dir, skill.name);
                                                 let instructions = skill.body.replace("{baseDir}", &skill_base_dir);
 
+                                                let requires_tools = skill.requires_tools.clone();
+                                                log::info!(
+                                                    "[SKILL] Activating skill '{}' with requires_tools: {:?}",
+                                                    skill.name,
+                                                    requires_tools
+                                                );
+
                                                 orchestrator.context_mut().active_skill = Some(crate::ai::multi_agent::types::ActiveSkill {
                                                     name: skill.name,
                                                     instructions,
                                                     activated_at: chrono::Utc::now().to_rfc3339(),
                                                     tool_calls_made: 0,
+                                                    requires_tools: requires_tools.clone(),
                                                 });
-                                                log::info!("[SKILL] Set active skill on orchestrator (tool_calls_made=0)");
+
+                                                // Force-include required tools in the toolset
+                                                if !requires_tools.is_empty() {
+                                                    let subtype = orchestrator.current_subtype();
+                                                    tools = self.tool_registry
+                                                        .get_tool_definitions_for_subtype_with_required(
+                                                            tool_config,
+                                                            subtype,
+                                                            &requires_tools,
+                                                        );
+                                                    if let Some(skill_tool) = self.create_skill_tool_definition_for_subtype(subtype) {
+                                                        tools.push(skill_tool);
+                                                    }
+                                                    tools.extend(orchestrator.get_mode_tools());
+                                                    log::info!(
+                                                        "[SKILL] Refreshed toolset with {} tools (including {} required by skill)",
+                                                        tools.len(),
+                                                        requires_tools.len()
+                                                    );
+                                                }
                                             }
                                         }
                                     }
@@ -1402,6 +1552,15 @@ impl MessageDispatcher {
                                     }
                                 }
 
+                                // Check if this tool requires user response (e.g., ask_user)
+                                if let Some(metadata) = &result.metadata {
+                                    if metadata.get("requires_user_response").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                        waiting_for_user_response = true;
+                                        user_question_content = result.content.clone();
+                                        log::info!("[TEXT_ORCHESTRATED] Tool requires user response, will break after processing");
+                                    }
+                                }
+
                                 self.broadcaster.broadcast(GatewayEvent::tool_result(
                                     original_message.channel_id,
                                     &tool_call.tool_name,
@@ -1443,6 +1602,11 @@ impl MessageDispatcher {
                         }
 
                         if orchestrator_complete {
+                            break;
+                        }
+                        // If a tool requires user response (e.g., ask_user), break the loop
+                        if waiting_for_user_response {
+                            log::info!("[TEXT_ORCHESTRATED] Breaking loop to wait for user response");
                             break;
                         }
                         continue;
@@ -1508,6 +1672,23 @@ impl MessageDispatcher {
             log::warn!("[MULTI_AGENT] Failed to save context for session {}: {}", session_id, e);
         }
 
+        // If waiting for user response, save context and return the question content
+        if waiting_for_user_response {
+            // Save the tool call log to the orchestrator context so the AI knows what it already did
+            if !tool_call_log.is_empty() {
+                let context_summary = format!(
+                    "Before asking the user, I already completed these actions:\n{}",
+                    tool_call_log.join("\n")
+                );
+                orchestrator.context_mut().waiting_for_user_context = Some(context_summary);
+                // Re-save context with the waiting_for_user_context
+                if let Err(e) = self.db.save_agent_context(session_id, orchestrator.context()) {
+                    log::warn!("[MULTI_AGENT] Failed to save context with user_context: {}", e);
+                }
+            }
+            return Ok(user_question_content);
+        }
+
         if final_response.is_empty() {
             return Err("AI returned empty response".to_string());
         }
@@ -1558,11 +1739,15 @@ impl MessageDispatcher {
                             instructions: instructions.clone(),
                             activated_at: chrono::Utc::now().to_rfc3339(),
                             tool_calls_made: 0, // Reset counter - agent must call actual tools
+                            requires_tools: skill.requires_tools.clone(),
                         });
                         if let Err(e) = self.db.save_agent_context(sid, &context) {
                             log::warn!("[SKILL] Failed to save active skill to context: {}", e);
                         } else {
-                            log::info!("[SKILL] Saved active skill '{}' to session {} (tool_calls_made=0)", skill.name, sid);
+                            log::info!(
+                                "[SKILL] Saved active skill '{}' to session {} (tool_calls_made=0, requires_tools={:?})",
+                                skill.name, sid, skill.requires_tools
+                            );
                         }
                     }
                 }

@@ -12,6 +12,7 @@ import Scheduling from '@/pages/Scheduling';
 import Sessions from '@/pages/Sessions';
 import MemoryBrowser from '@/pages/MemoryBrowser';
 import Identities from '@/pages/Identities';
+import FileBrowser from '@/pages/FileBrowser';
 import Logs from '@/pages/Logs';
 import Debug from '@/pages/Debug';
 import ApiKeys from '@/pages/ApiKeys';
@@ -35,6 +36,7 @@ function App() {
         <Route path="/sessions" element={<Sessions />} />
         <Route path="/memories" element={<MemoryBrowser />} />
         <Route path="/identities" element={<Identities />} />
+        <Route path="/files" element={<FileBrowser />} />
         <Route path="/logs" element={<Logs />} />
         <Route path="/debug" element={<Debug />} />
         <Route path="/payments" element={<Payments />} />

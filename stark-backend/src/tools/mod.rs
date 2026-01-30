@@ -60,6 +60,7 @@ fn register_all_tools(registry: &mut ToolRegistry) {
 
     // Messaging tools
     registry.register(Arc::new(builtin::AgentSendTool::new()));
+    registry.register(Arc::new(builtin::DiscordLookupTool::new()));
 }
 
 /// Create a new ToolRegistry with all built-in tools registered

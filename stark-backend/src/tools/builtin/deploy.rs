@@ -1,3 +1,4 @@
+use crate::controllers::api_keys::ApiKeyId;
 use crate::tools::registry::Tool;
 use crate::tools::types::{
     PropertySchema, ToolContext, ToolDefinition, ToolGroup, ToolInputSchema, ToolResult,
@@ -247,7 +248,7 @@ impl DeployTool {
             .stderr(Stdio::piped());
 
         // Set GitHub token if available
-        if let Some(token) = context.get_api_key("GITHUB_TOKEN") {
+        if let Some(token) = context.get_api_key_by_id(ApiKeyId::GithubToken) {
             cmd.env("GH_TOKEN", token);
         }
 

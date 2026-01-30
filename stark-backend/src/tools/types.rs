@@ -1,4 +1,5 @@
 use crate::ai::multi_agent::SubAgentManager;
+use crate::controllers::api_keys::ApiKeyId;
 use crate::db::Database;
 use crate::execution::ProcessManager;
 use crate::gateway::events::EventBroadcaster;
@@ -397,7 +398,7 @@ impl ToolContext {
         self
     }
 
-    /// Add an API key to the context
+    /// Add an API key to the context by string name (for backwards compatibility)
     /// Keys are stored by their exact name (e.g., "GITHUB_TOKEN", "TWITTER_CLIENT_ID")
     pub fn with_api_key(mut self, key_name: &str, key_value: String) -> Self {
         self.extra.insert(
@@ -407,12 +408,23 @@ impl ToolContext {
         self
     }
 
-    /// Get an API key from the context by its exact name
+    /// Add an API key to the context using the type-safe ApiKeyId enum
+    pub fn with_api_key_id(self, key_id: ApiKeyId, key_value: String) -> Self {
+        self.with_api_key(key_id.as_str(), key_value)
+    }
+
+    /// Get an API key from the context by its exact string name
     /// Example: get_api_key("GITHUB_TOKEN")
     pub fn get_api_key(&self, key_name: &str) -> Option<String> {
         self.extra.get(&format!("api_key_{}", key_name))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
+    }
+
+    /// Get an API key from the context using the type-safe ApiKeyId enum
+    /// This is the preferred method as it prevents typos in key names
+    pub fn get_api_key_by_id(&self, key_id: ApiKeyId) -> Option<String> {
+        self.get_api_key(key_id.as_str())
     }
 
     /// Add bot config to the context (for use by tools like exec for git commits)

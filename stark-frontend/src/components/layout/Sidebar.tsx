@@ -11,6 +11,7 @@ import {
   Calendar,
   Brain,
   Users,
+  FolderOpen,
   ScrollText,
   Bug,
   LogOut,
@@ -73,6 +74,7 @@ export default function Sidebar() {
           <NavItem to="/sessions" icon={Calendar} label="Sessions" />
           <NavItem to="/memories" icon={Brain} label="Memory Browser" />
           <NavItem to="/identities" icon={Users} label="Identities" />
+          <NavItem to="/files" icon={FolderOpen} label="Files" />
         </div>
 
         {/* Developer Section */}

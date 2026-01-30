@@ -821,3 +821,47 @@ export async function cancelTransaction(channelId: number): Promise<Confirmation
     body: JSON.stringify({ channel_id: channelId }),
   });
 }
+
+// Files API
+export interface FileEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  modified?: string;
+}
+
+export interface ListFilesResponse {
+  success: boolean;
+  path: string;
+  entries: FileEntry[];
+  error?: string;
+}
+
+export interface ReadFileResponse {
+  success: boolean;
+  path: string;
+  content?: string;
+  size?: number;
+  is_binary?: boolean;
+  error?: string;
+}
+
+export interface WorkspaceInfoResponse {
+  success: boolean;
+  workspace_path: string;
+  exists: boolean;
+}
+
+export async function listFiles(path?: string): Promise<ListFilesResponse> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : '';
+  return apiFetch(`/files${query}`);
+}
+
+export async function readFile(path: string): Promise<ReadFileResponse> {
+  return apiFetch(`/files/read?path=${encodeURIComponent(path)}`);
+}
+
+export async function getWorkspaceInfo(): Promise<WorkspaceInfoResponse> {
+  return apiFetch('/files/workspace');
+}

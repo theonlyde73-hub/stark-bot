@@ -2,6 +2,7 @@
 name: discord
 description: Use when you need to control Discord from Clawdbot via the discord tool: send messages, react, post or upload stickers, upload emojis, run polls, manage threads/pins/search, fetch permissions or member/role/channel info, or handle moderation actions in Discord DMs or channels.
 tags: [discord, social, messaging, communication, social-media]
+requires_tools: [discord, discord_lookup, agent_send]
 ---
 
 # Discord Actions
@@ -111,6 +112,48 @@ channelId: "123"
 - Upload new emojis/stickers for release moments.
 - Run weekly "priority check" polls in team channels.
 - DM stickers as acknowledgements when a user's request is completed.
+
+## Finding Servers and Channels by Name
+
+Use `discord_lookup` to find server/channel IDs when you only know the name:
+
+### List all servers the bot is in
+
+```tool:discord_lookup
+action: list_servers
+```
+
+### Search for a server by name
+
+```tool:discord_lookup
+action: search_servers
+query: "starkbot"
+```
+
+### List channels in a server
+
+```tool:discord_lookup
+action: list_channels
+server_id: "123456789"
+```
+
+### Search for a channel by name
+
+```tool:discord_lookup
+action: search_channels
+server_id: "123456789"
+query: "general"
+```
+
+### Quick send with agent_send
+
+For simple messages without the full discord tool:
+
+```tool:agent_send
+channel: "123456789012345678"
+message: "Hello!"
+platform: discord
+```
 
 ## Action gating
 

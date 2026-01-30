@@ -6,6 +6,7 @@ pub mod chat;
 pub mod cron;
 pub mod dashboard;
 pub mod eip8004;
+pub mod files;
 pub mod gmail;
 pub mod health;
 pub mod identity;

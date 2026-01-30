@@ -105,6 +105,42 @@ impl ToolRegistry {
             .collect()
     }
 
+    /// Get tool definitions for a specific agent subtype, with additional required tools
+    /// that are force-included regardless of config/profile restrictions.
+    /// Used when a skill is activated that requires specific tools.
+    pub fn get_tool_definitions_for_subtype_with_required(
+        &self,
+        config: &ToolConfig,
+        subtype: AgentSubtype,
+        required_tools: &[String],
+    ) -> Vec<ToolDefinition> {
+        // Start with the normal subtype-allowed tools
+        let mut tools = self.get_allowed_tools_for_subtype(config, subtype);
+        let mut tool_names: std::collections::HashSet<String> =
+            tools.iter().map(|t| t.definition().name.clone()).collect();
+
+        // Force-include required tools even if they're not normally allowed
+        for tool_name in required_tools {
+            if !tool_names.contains(tool_name) {
+                if let Some(tool) = self.get(tool_name) {
+                    log::info!(
+                        "[REGISTRY] Force-including required tool '{}' for active skill",
+                        tool_name
+                    );
+                    tools.push(tool);
+                    tool_names.insert(tool_name.clone());
+                } else {
+                    log::warn!(
+                        "[REGISTRY] Required tool '{}' not found in registry",
+                        tool_name
+                    );
+                }
+            }
+        }
+
+        tools.iter().map(|tool| tool.definition()).collect()
+    }
+
     /// Get tool definitions for allowed tools (for sending to AI)
     pub fn get_tool_definitions(&self, config: &ToolConfig) -> Vec<ToolDefinition> {
         self.get_allowed_tools(config)

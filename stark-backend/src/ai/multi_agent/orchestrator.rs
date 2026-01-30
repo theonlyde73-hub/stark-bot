@@ -193,7 +193,20 @@ impl Orchestrator {
             }
         }
 
+        // Add waiting for user context (if any) - this shows what tools were called before asking user
+        if let Some(ref waiting_context) = self.context.waiting_for_user_context {
+            summary.push_str("### Actions Completed Before User Question\n\n");
+            summary.push_str("**IMPORTANT**: The following actions were ALREADY completed in a previous turn. Do NOT repeat them.\n\n");
+            summary.push_str(waiting_context);
+            summary.push_str("\n\n");
+        }
+
         summary
+    }
+
+    /// Clear the waiting_for_user_context after it's been consumed
+    pub fn clear_waiting_for_user_context(&mut self) {
+        self.context.waiting_for_user_context = None;
     }
 
     /// Get the tools available

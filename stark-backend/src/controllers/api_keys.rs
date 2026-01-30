@@ -11,6 +11,8 @@ pub enum ApiKeyId {
     BankrApiKey,
     TwitterToken,
     DiscordBotToken,
+    TelegramBotToken,
+    SlackBotToken,
 }
 
 impl ApiKeyId {
@@ -21,6 +23,8 @@ impl ApiKeyId {
             Self::BankrApiKey => "BANKR_API_KEY",
             Self::TwitterToken => "TWITTER_TOKEN",
             Self::DiscordBotToken => "DISCORD_BOT_TOKEN",
+            Self::TelegramBotToken => "TELEGRAM_BOT_TOKEN",
+            Self::SlackBotToken => "SLACK_BOT_TOKEN",
         }
     }
 
@@ -32,6 +36,8 @@ impl ApiKeyId {
             Self::BankrApiKey => Some(&["BANKR_API_KEY"]),
             Self::TwitterToken => Some(&["TWITTER_TOKEN"]),
             Self::DiscordBotToken => Some(&["DISCORD_BOT_TOKEN", "DISCORD_TOKEN"]),
+            Self::TelegramBotToken => Some(&["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN"]),
+            Self::SlackBotToken => Some(&["SLACK_BOT_TOKEN", "SLACK_TOKEN"]),
         }
     }
 
@@ -47,6 +53,8 @@ impl ApiKeyId {
             Self::BankrApiKey,
             Self::TwitterToken,
             Self::DiscordBotToken,
+            Self::TelegramBotToken,
+            Self::SlackBotToken,
         ]
     }
 
@@ -57,6 +65,8 @@ impl ApiKeyId {
             "BANKR_API_KEY" => Some(Self::BankrApiKey),
             "TWITTER_TOKEN" => Some(Self::TwitterToken),
             "DISCORD_BOT_TOKEN" => Some(Self::DiscordBotToken),
+            "TELEGRAM_BOT_TOKEN" => Some(Self::TelegramBotToken),
+            "SLACK_BOT_TOKEN" => Some(Self::SlackBotToken),
             _ => None,
         }
     }
@@ -126,6 +136,28 @@ pub fn get_service_configs() -> Vec<ServiceConfig> {
             keys: vec![KeyConfig {
                 name: "DISCORD_BOT_TOKEN",
                 label: "Bot Token",
+                secret: true,
+            }],
+        },
+        ServiceConfig {
+            group: "telegram",
+            label: "Telegram",
+            description: "Create a bot via @BotFather and copy the token",
+            url: "https://t.me/BotFather",
+            keys: vec![KeyConfig {
+                name: "TELEGRAM_BOT_TOKEN",
+                label: "Bot Token",
+                secret: true,
+            }],
+        },
+        ServiceConfig {
+            group: "slack",
+            label: "Slack",
+            description: "Create a Slack App and copy the Bot User OAuth Token",
+            url: "https://api.slack.com/apps",
+            keys: vec![KeyConfig {
+                name: "SLACK_BOT_TOKEN",
+                label: "Bot User OAuth Token",
                 secret: true,
             }],
         },
