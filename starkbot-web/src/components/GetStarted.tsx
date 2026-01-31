@@ -96,7 +96,7 @@ export function GetStarted() {
             </ol>
 
             <a
-              href="https://cloud.digitalocean.com/apps/new?repo=https://github.com/ethereumdegen/stark-bot/tree/main"
+              href="https://cloud.digitalocean.com/apps/new?repo=https://github.com/ethereumdegen/stark-bot/tree/master"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-6 py-3 bg-[#0080FF] hover:bg-[#0069d9] text-white font-semibold rounded-lg transition-all duration-300"

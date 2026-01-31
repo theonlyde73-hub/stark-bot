@@ -8,6 +8,7 @@ import { Footer } from '../components/Footer'
 import { GridBackground } from '../components/GridBackground'
 import { FloatingNav } from '../components/FloatingNav'
 import { Stars } from '../components/Stars'
+import { Token } from '../components/Token'
 
 export default function Home() {
   useEffect(() => {
@@ -35,6 +36,7 @@ export default function Home() {
       <div className="relative z-10">
         <Navbar />
         <Hero />
+        <Token />
         <Features />
         <GetStarted />
         <CTA />
