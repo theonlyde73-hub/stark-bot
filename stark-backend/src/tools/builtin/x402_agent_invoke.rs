@@ -124,6 +124,18 @@ fn default_x402_version() -> u8 {
     1
 }
 
+/// Extra token metadata from 402 response
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentPaymentExtra {
+    token: Option<String>,
+    address: Option<String>,
+    decimals: Option<u8>,
+    name: Option<String>,
+    version: Option<String>,
+    facilitator_signer: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentPaymentOption {
@@ -138,6 +150,8 @@ struct AgentPaymentOption {
     max_timeout_seconds: Option<u64>,
     resource: Option<String>,
     description: Option<String>,
+    #[serde(default)]
+    extra: Option<AgentPaymentExtra>,
 }
 
 /// Payment payload for X-PAYMENT header (matches x402 spec)
@@ -359,12 +373,22 @@ impl Tool for X402AgentInvokeTool {
     }
 }
 
-/// Sign payment using EIP-3009 TransferWithAuthorization
+/// Sign payment using EIP-2612 (permit) or EIP-3009 (exact) based on scheme
 async fn sign_agent_payment(
     signer: &X402Signer,
     option: &AgentPaymentOption,
     x402_version: u8,
 ) -> Result<PaymentPayload, String> {
+    // Convert local extra to the x402 types extra
+    let extra = option.extra.as_ref().map(|e| crate::x402::PaymentExtra {
+        token: e.token.clone(),
+        address: e.address.clone(),
+        decimals: e.decimals,
+        name: e.name.clone(),
+        version: e.version.clone(),
+        facilitator_signer: e.facilitator_signer.clone(),
+    });
+
     // Create payment requirements in the format the signer expects
     let requirements = crate::x402::PaymentRequirements {
         scheme: option.scheme.clone(),
@@ -375,7 +399,15 @@ async fn sign_agent_payment(
         max_timeout_seconds: option.max_timeout_seconds.unwrap_or(300),
         resource: option.resource.clone(),
         description: option.description.clone(),
+        extra,
     };
+
+    log::info!(
+        "[x402_agent_invoke] Signing {} payment for {} on {}",
+        option.scheme,
+        option.asset,
+        option.network
+    );
 
     // Use the existing signer to create the payment
     let signed = signer.sign_payment(&requirements).await?;

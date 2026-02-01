@@ -2,11 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
-/// USDC contract address on Base mainnet
+/// USDC contract address on Base mainnet (default fallback)
 pub const USDC_ADDRESS: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
 /// Base mainnet chain ID
 pub const BASE_CHAIN_ID: u64 = 8453;
+
+/// Base Sepolia testnet chain ID
+pub const BASE_SEPOLIA_CHAIN_ID: u64 = 84532;
 
 /// x402 protocol version
 pub const X402_VERSION: u8 = 2;
@@ -14,12 +17,41 @@ pub const X402_VERSION: u8 = 2;
 /// Network identifier for Base
 pub const NETWORK_ID: &str = "eip155:8453";
 
+/// Get chain ID from network name
+pub fn chain_id_for_network(network: &str) -> u64 {
+    match network {
+        "base" => BASE_CHAIN_ID,
+        "base-sepolia" => BASE_SEPOLIA_CHAIN_ID,
+        "ethereum" => 1,
+        "sepolia" => 11155111,
+        _ => BASE_CHAIN_ID, // default
+    }
+}
+
 /// Payment requirements returned by server in 402 response
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PaymentRequired {
     pub x402_version: u8,
     pub accepts: Vec<PaymentRequirements>,
+}
+
+/// Extra metadata about the token (provided in 402 response)
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentExtra {
+    /// Token symbol (e.g., "USDC")
+    pub token: Option<String>,
+    /// Token contract address
+    pub address: Option<String>,
+    /// Token decimals (e.g., 6 for USDC)
+    pub decimals: Option<u8>,
+    /// Token name for EIP-712 domain (e.g., "USD Coin")
+    pub name: Option<String>,
+    /// Token version for EIP-712 domain (e.g., "2")
+    pub version: Option<String>,
+    /// Facilitator signer address (spender for EIP-2612 permits)
+    pub facilitator_signer: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -36,6 +68,45 @@ pub struct PaymentRequirements {
     pub resource: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// Extra token metadata for signing
+    #[serde(default)]
+    pub extra: Option<PaymentExtra>,
+}
+
+/// Token metadata needed for EIP-712 signing
+#[derive(Debug, Clone)]
+pub struct TokenMetadata {
+    pub name: String,
+    pub version: String,
+    pub address: String,
+    pub chain_id: u64,
+    pub decimals: u8,
+}
+
+impl TokenMetadata {
+    /// Build from payment requirements, using extra field or defaults
+    pub fn from_requirements(req: &PaymentRequirements) -> Self {
+        let chain_id = chain_id_for_network(&req.network);
+
+        if let Some(extra) = &req.extra {
+            Self {
+                name: extra.name.clone().unwrap_or_else(|| "USD Coin".to_string()),
+                version: extra.version.clone().unwrap_or_else(|| "2".to_string()),
+                address: extra.address.clone().unwrap_or_else(|| req.asset.clone()),
+                chain_id,
+                decimals: extra.decimals.unwrap_or(6),
+            }
+        } else {
+            // Fallback to defaults (Base mainnet USDC)
+            Self {
+                name: "USD Coin".to_string(),
+                version: "2".to_string(),
+                address: req.asset.clone(),
+                chain_id,
+                decimals: 6,
+            }
+        }
+    }
 }
 
 /// Payment payload sent to server with X-PAYMENT header

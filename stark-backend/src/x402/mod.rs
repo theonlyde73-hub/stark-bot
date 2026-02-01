@@ -2,9 +2,14 @@
 //!
 //! This module handles the x402 payment protocol flow:
 //! 1. Make initial request
-//! 2. If 402 returned, parse payment requirements
-//! 3. Sign EIP-3009 authorization with burner wallet
+//! 2. If 402 returned, parse payment requirements (including token metadata from `extra` field)
+//! 3. Sign payment based on scheme:
+//!    - "permit" (EIP-2612): Permit signature for facilitator to transfer tokens
+//!    - "exact" (EIP-3009): TransferWithAuthorization for direct transfers
 //! 4. Retry with X-PAYMENT header
+//!
+//! The token metadata (name, version, address, chain_id) is dynamically extracted
+//! from the 402 response, allowing compatibility with any x402-enabled endpoint.
 
 mod types;
 mod client;

@@ -1,4 +1,8 @@
-//! EIP-3009 signing for x402 payments
+//! EIP-2612 and EIP-3009 signing for x402 payments
+//!
+//! Supports two payment schemes:
+//! - "permit" (EIP-2612): Permit signature allowing facilitator to transfer tokens
+//! - "exact" (EIP-3009): TransferWithAuthorization for direct transfers
 
 use ethers::core::k256::ecdsa::SigningKey;
 use ethers::signers::{LocalWallet, Signer};
@@ -23,6 +27,7 @@ impl X402Signer {
         let signing_key = SigningKey::from_bytes(key_bytes.as_slice().into())
             .map_err(|e| format!("Invalid private key: {}", e))?;
 
+        // Default chain ID, will be overridden per-signature based on network
         let wallet = LocalWallet::from(signing_key).with_chain_id(BASE_CHAIN_ID);
 
         Ok(Self { wallet })
@@ -33,17 +38,106 @@ impl X402Signer {
         format!("{:?}", self.wallet.address()).to_lowercase()
     }
 
-    /// Generate a cryptographically secure nonce
+    /// Generate a cryptographically secure nonce (for EIP-3009)
     fn generate_nonce() -> H256 {
         let mut bytes = [0u8; 32];
         getrandom::getrandom(&mut bytes).expect("Failed to generate random bytes");
         H256::from(keccak256(bytes))
     }
 
-    /// Sign an EIP-3009 TransferWithAuthorization for x402 payment
+    /// Sign a payment based on the scheme in requirements
+    /// Automatically chooses EIP-2612 (permit) or EIP-3009 (exact) based on scheme
     pub async fn sign_payment(
         &self,
         requirements: &PaymentRequirements,
+    ) -> Result<PaymentPayload, String> {
+        let token_metadata = TokenMetadata::from_requirements(requirements);
+
+        match requirements.scheme.as_str() {
+            "permit" => self.sign_permit(requirements, &token_metadata).await,
+            "exact" | "eip3009" => self.sign_transfer_with_auth(requirements, &token_metadata).await,
+            other => Err(format!("Unsupported payment scheme: {}", other)),
+        }
+    }
+
+    /// Sign an EIP-2612 Permit for x402 payment
+    /// The facilitator becomes the spender, allowing them to transfer tokens on our behalf
+    async fn sign_permit(
+        &self,
+        requirements: &PaymentRequirements,
+        token_metadata: &TokenMetadata,
+    ) -> Result<PaymentPayload, String> {
+        let from = self.address();
+        let to = requirements.pay_to_address.to_lowercase();
+        let value = requirements.max_amount_required.clone();
+
+        // Get facilitator address (spender) from extra field
+        let spender = requirements.extra.as_ref()
+            .and_then(|e| e.facilitator_signer.clone())
+            .ok_or("EIP-2612 permit requires facilitatorSigner in extra field")?;
+
+        // Deadline: valid for 1 hour
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| format!("Time error: {}", e))?;
+        let deadline = now.as_secs() + 3600;
+
+        // For EIP-2612, nonce must be fetched from the token contract
+        // But x402 protocol uses a random nonce that the facilitator tracks
+        let nonce = Self::generate_nonce();
+        let nonce_u256 = U256::from_big_endian(nonce.as_bytes());
+
+        // Build EIP-712 domain from token metadata
+        let domain = Eip712Domain::from_token_metadata(token_metadata)?;
+
+        // Build permit message
+        let message = PermitMessage {
+            owner: self.wallet.address(),
+            spender: spender.parse()
+                .map_err(|e| format!("Invalid facilitatorSigner address: {}", e))?,
+            value: U256::from_dec_str(&requirements.max_amount_required)
+                .map_err(|e| format!("Invalid amount: {}", e))?,
+            nonce: nonce_u256,
+            deadline: U256::from(deadline),
+        };
+
+        // Sign the typed data
+        let signature = self.sign_eip712(&domain, message.struct_hash()).await?;
+
+        // Build authorization in the format x402 expects
+        let authorization = Eip3009Authorization {
+            from,
+            to,
+            value,
+            valid_after: "0".to_string(),
+            valid_before: deadline.to_string(),
+            nonce: format!("{:?}", nonce),
+        };
+
+        let payload = PaymentPayload {
+            x402_version: X402_VERSION,
+            accepted: AcceptedPayment {
+                scheme: requirements.scheme.clone(),
+                network: requirements.network.clone(),
+                amount: requirements.max_amount_required.clone(),
+                pay_to: requirements.pay_to_address.clone(),
+                max_timeout_seconds: requirements.max_timeout_seconds.max(60),
+                asset: requirements.asset.clone(),
+            },
+            payload: ExactEvmPayload {
+                signature,
+                authorization,
+            },
+        };
+
+        Ok(payload)
+    }
+
+    /// Sign an EIP-3009 TransferWithAuthorization for x402 payment
+    async fn sign_transfer_with_auth(
+        &self,
+        requirements: &PaymentRequirements,
+        token_metadata: &TokenMetadata,
     ) -> Result<PaymentPayload, String> {
         let from = self.address();
         let to = requirements.pay_to_address.to_lowercase();
@@ -59,8 +153,9 @@ impl X402Signer {
         let nonce = Self::generate_nonce();
         let nonce_hex = format!("{:?}", nonce);
 
-        // Build EIP-712 typed data for USDC TransferWithAuthorization
-        let domain = eip712_domain();
+        // Build EIP-712 domain from token metadata
+        let domain = Eip712Domain::from_token_metadata(token_metadata)?;
+
         let message = TransferWithAuthorizationMessage {
             from: self.wallet.address(),
             to: requirements.pay_to_address.parse()
@@ -74,7 +169,7 @@ impl X402Signer {
         };
 
         // Sign the typed data
-        let signature = self.sign_typed_data(&domain, &message).await?;
+        let signature = self.sign_eip712(&domain, message.struct_hash()).await?;
 
         let authorization = Eip3009Authorization {
             from,
@@ -104,17 +199,14 @@ impl X402Signer {
         Ok(payload)
     }
 
-    /// Sign EIP-712 typed data
-    async fn sign_typed_data(
+    /// Sign EIP-712 typed data with a pre-computed struct hash
+    async fn sign_eip712(
         &self,
         domain: &Eip712Domain,
-        message: &TransferWithAuthorizationMessage,
+        struct_hash: H256,
     ) -> Result<String, String> {
         // Calculate domain separator
         let domain_separator = domain.separator();
-
-        // Calculate struct hash
-        let struct_hash = message.struct_hash();
 
         // Calculate final hash: keccak256("\x19\x01" ++ domainSeparator ++ structHash)
         let mut to_sign = Vec::with_capacity(66);
@@ -133,7 +225,7 @@ impl X402Signer {
     }
 }
 
-/// EIP-712 domain for USDC on Base
+/// EIP-712 domain for token signatures
 struct Eip712Domain {
     name: String,
     version: String,
@@ -141,16 +233,18 @@ struct Eip712Domain {
     verifying_contract: ethers::types::Address,
 }
 
-fn eip712_domain() -> Eip712Domain {
-    Eip712Domain {
-        name: "USD Coin".to_string(),
-        version: "2".to_string(),
-        chain_id: BASE_CHAIN_ID,
-        verifying_contract: USDC_ADDRESS.parse().expect("Invalid USDC address"),
-    }
-}
-
 impl Eip712Domain {
+    /// Create domain from token metadata (dynamic, not hardcoded)
+    fn from_token_metadata(metadata: &TokenMetadata) -> Result<Self, String> {
+        Ok(Eip712Domain {
+            name: metadata.name.clone(),
+            version: metadata.version.clone(),
+            chain_id: metadata.chain_id,
+            verifying_contract: metadata.address.parse()
+                .map_err(|e| format!("Invalid token address: {}", e))?,
+        })
+    }
+
     fn separator(&self) -> H256 {
         let type_hash = keccak256(
             b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
@@ -169,6 +263,34 @@ impl Eip712Domain {
         encoded.extend_from_slice(&ethers::abi::encode(&[
             ethers::abi::Token::Address(self.verifying_contract),
         ]));
+
+        H256::from(keccak256(&encoded))
+    }
+}
+
+/// EIP-2612 Permit message
+struct PermitMessage {
+    owner: ethers::types::Address,
+    spender: ethers::types::Address,
+    value: U256,
+    nonce: U256,
+    deadline: U256,
+}
+
+impl PermitMessage {
+    fn struct_hash(&self) -> H256 {
+        let type_hash = keccak256(
+            b"Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+        );
+
+        let encoded = ethers::abi::encode(&[
+            ethers::abi::Token::FixedBytes(type_hash.to_vec()),
+            ethers::abi::Token::Address(self.owner),
+            ethers::abi::Token::Address(self.spender),
+            ethers::abi::Token::Uint(self.value),
+            ethers::abi::Token::Uint(self.nonce),
+            ethers::abi::Token::Uint(self.deadline),
+        ]);
 
         H256::from(keccak256(&encoded))
     }
