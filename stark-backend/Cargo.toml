@@ -59,6 +59,10 @@ base64 = "0.22"
 url = "2"
 urlencoding = "2"
 
+# Twitter OAuth 1.0a
+hmac = "0.12"
+sha1 = "0.10"
+
 # Cron scheduling
 cron = "0.12"
 

@@ -24,6 +24,14 @@ pub enum ApiKeyId {
     MoltbookToken,
     #[strum(serialize = "FOURCLAW_TOKEN")]
     FourclawToken,
+    #[strum(serialize = "TWITTER_CONSUMER_KEY")]
+    TwitterConsumerKey,
+    #[strum(serialize = "TWITTER_CONSUMER_SECRET")]
+    TwitterConsumerSecret,
+    #[strum(serialize = "TWITTER_ACCESS_TOKEN")]
+    TwitterAccessToken,
+    #[strum(serialize = "TWITTER_ACCESS_TOKEN_SECRET")]
+    TwitterAccessTokenSecret,
 }
 
 impl ApiKeyId {
@@ -39,6 +47,10 @@ impl ApiKeyId {
             Self::SlackBotToken => "SLACK_BOT_TOKEN",
             Self::MoltbookToken => "MOLTBOOK_TOKEN",
             Self::FourclawToken => "FOURCLAW_TOKEN",
+            Self::TwitterConsumerKey => "TWITTER_CONSUMER_KEY",
+            Self::TwitterConsumerSecret => "TWITTER_CONSUMER_SECRET",
+            Self::TwitterAccessToken => "TWITTER_ACCESS_TOKEN",
+            Self::TwitterAccessTokenSecret => "TWITTER_ACCESS_TOKEN_SECRET",
         }
     }
 
@@ -53,6 +65,10 @@ impl ApiKeyId {
             Self::SlackBotToken => Some(&["SLACK_BOT_TOKEN", "SLACK_TOKEN"]),
             Self::MoltbookToken => Some(&["MOLTBOOK_TOKEN"]),
             Self::FourclawToken => Some(&["FOURCLAW_TOKEN"]),
+            Self::TwitterConsumerKey => Some(&["TWITTER_CONSUMER_KEY", "TWITTER_API_KEY"]),
+            Self::TwitterConsumerSecret => Some(&["TWITTER_CONSUMER_SECRET", "TWITTER_API_SECRET"]),
+            Self::TwitterAccessToken => Some(&["TWITTER_ACCESS_TOKEN"]),
+            Self::TwitterAccessTokenSecret => Some(&["TWITTER_ACCESS_TOKEN_SECRET"]),
         }
     }
 
@@ -185,6 +201,34 @@ pub fn get_service_configs() -> Vec<ServiceConfig> {
                 label: "API Token",
                 secret: true,
             }],
+        },
+        ServiceConfig {
+            group: "twitter",
+            label: "Twitter/X",
+            description: "OAuth 1.0a credentials for posting tweets. Get all 4 keys from your Twitter Developer App's 'Keys and Tokens' tab.",
+            url: "https://developer.twitter.com/en/portal/projects-and-apps",
+            keys: vec![
+                KeyConfig {
+                    name: "TWITTER_CONSUMER_KEY",
+                    label: "API Key (Consumer Key)",
+                    secret: true,
+                },
+                KeyConfig {
+                    name: "TWITTER_CONSUMER_SECRET",
+                    label: "API Secret (Consumer Secret)",
+                    secret: true,
+                },
+                KeyConfig {
+                    name: "TWITTER_ACCESS_TOKEN",
+                    label: "Access Token",
+                    secret: true,
+                },
+                KeyConfig {
+                    name: "TWITTER_ACCESS_TOKEN_SECRET",
+                    label: "Access Token Secret",
+                    secret: true,
+                },
+            ],
         },
     ]
 }
