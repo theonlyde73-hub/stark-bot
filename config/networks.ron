@@ -5,21 +5,25 @@
     "base": (
         name: "Base",
         chain_id: 8453,
-        aliases: ["base mainnet", "base chain"],
+        native_token: "ETH",
+        explorer: "https://basescan.org",
     ),
     "mainnet": (
         name: "Ethereum Mainnet",
         chain_id: 1,
-        aliases: ["ethereum", "eth mainnet", "ethereum mainnet", "eth"],
+        native_token: "ETH",
+        explorer: "https://etherscan.io",
     ),
     "sepolia": (
         name: "Sepolia Testnet",
         chain_id: 11155111,
-        aliases: ["sepolia testnet"],
+        native_token: "ETH",
+        explorer: "https://sepolia.etherscan.io",
     ),
     "base-sepolia": (
         name: "Base Sepolia",
         chain_id: 84532,
-        aliases: ["base sepolia testnet"],
+        native_token: "ETH",
+        explorer: "https://sepolia.basescan.org",
     ),
 }
