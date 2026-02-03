@@ -3,7 +3,7 @@
 //! Takes a UUID from web3_tx and broadcasts the signed transaction to the network.
 
 use crate::gateway::protocol::GatewayEvent;
-use crate::tools::builtin::web3_tx::Web3TxTool;
+use super::web3_tx::SendEthTool;
 use crate::tools::registry::Tool;
 use crate::tools::rpc_config::resolve_rpc_from_context;
 use crate::tools::types::{
@@ -30,8 +30,19 @@ impl BroadcastWeb3TxTool {
             "uuid".to_string(),
             PropertySchema {
                 schema_type: "string".to_string(),
-                description: "UUID of the queued transaction to broadcast (from web3_tx)".to_string(),
+                description: "UUID of the transaction to broadcast. If not provided, reads from uuid_register.".to_string(),
                 default: None,
+                items: None,
+                enum_values: None,
+            },
+        );
+
+        properties.insert(
+            "uuid_register".to_string(),
+            PropertySchema {
+                schema_type: "string".to_string(),
+                description: "Register name containing UUID. Defaults to 'queued_tx_uuid'. Only used if 'uuid' not provided.".to_string(),
+                default: Some(json!("queued_tx_uuid")),
                 items: None,
                 enum_values: None,
             },
@@ -40,11 +51,11 @@ impl BroadcastWeb3TxTool {
         BroadcastWeb3TxTool {
             definition: ToolDefinition {
                 name: "broadcast_web3_tx".to_string(),
-                description: "Broadcast a previously queued transaction by UUID. The transaction must have been queued using web3_tx. Returns the transaction hash and explorer URL.".to_string(),
+                description: "Broadcast a queued transaction. Reads UUID from 'uuid' param or 'uuid_register' (default: 'queued_tx_uuid'). Returns tx hash and explorer URL.".to_string(),
                 input_schema: ToolInputSchema {
                     schema_type: "object".to_string(),
                     properties,
-                    required: vec!["uuid".to_string()],
+                    required: vec![],
                 },
                 group: ToolGroup::Finance,
             },
@@ -66,7 +77,13 @@ impl Default for BroadcastWeb3TxTool {
 
 #[derive(Debug, Deserialize)]
 struct BroadcastParams {
-    uuid: String,
+    uuid: Option<String>,
+    #[serde(default = "default_uuid_register")]
+    uuid_register: String,
+}
+
+fn default_uuid_register() -> String {
+    "queued_tx_uuid".to_string()
 }
 
 #[async_trait]
@@ -83,6 +100,40 @@ impl Tool for BroadcastWeb3TxTool {
             Err(e) => return ToolResult::error(format!("Invalid parameters: {}", e)),
         };
 
+        // Resolve UUID: explicit param takes precedence over register
+        let uuid_from_param = params.uuid.is_some();
+        let uuid = match params.uuid {
+            Some(u) => u,
+            None => {
+                match context.registers.get(&params.uuid_register) {
+                    Some(val) => {
+                        match val.as_str() {
+                            Some(s) => s.to_string(),
+                            None => {
+                                return ToolResult::error(format!(
+                                    "Register '{}' does not contain a valid UUID string",
+                                    params.uuid_register
+                                ));
+                            }
+                        }
+                    }
+                    None => {
+                        return ToolResult::error(format!(
+                            "No UUID provided and register '{}' not found. Either:\n\
+                            1. Provide uuid parameter directly, OR\n\
+                            2. Call list_queued_web3_tx first to cache the UUID",
+                            params.uuid_register
+                        ));
+                    }
+                }
+            }
+        };
+
+        log::info!("[broadcast_web3_tx] Resolved UUID: {} (from {})",
+            uuid,
+            if uuid_from_param { "param" } else { &params.uuid_register }
+        );
+
         // Check rogue mode from bot settings in ToolContext
         let is_rogue_mode = context.extra
             .get("rogue_mode_enabled")
@@ -97,11 +148,11 @@ impl Tool for BroadcastWeb3TxTool {
             };
 
             // Get the transaction to show in the modal
-            let queued_tx = match tx_queue.get(&params.uuid) {
+            let queued_tx = match tx_queue.get(&uuid) {
                 Some(tx) => tx,
                 None => return ToolResult::error(format!(
                     "Transaction with UUID '{}' not found. Use list_queued_web3_tx to see available transactions.",
-                    params.uuid
+                    uuid
                 )),
             };
 
@@ -145,11 +196,11 @@ impl Tool for BroadcastWeb3TxTool {
         };
 
         // Get the queued transaction
-        let queued_tx = match tx_queue.get(&params.uuid) {
+        let queued_tx = match tx_queue.get(&uuid) {
             Some(tx) => tx,
             None => return ToolResult::error(format!(
                 "Transaction with UUID '{}' not found. Use list_queued_web3_tx to see available transactions.",
-                params.uuid
+                uuid
             )),
         };
 
@@ -159,7 +210,7 @@ impl Tool for BroadcastWeb3TxTool {
             QueuedTxStatus::Broadcasting => {
                 return ToolResult::error(format!(
                     "Transaction {} is already being broadcast. Please wait.",
-                    params.uuid
+                    uuid
                 ));
             },
             QueuedTxStatus::Broadcast | QueuedTxStatus::Confirmed => {
@@ -167,40 +218,40 @@ impl Tool for BroadcastWeb3TxTool {
                 let explorer_url = queued_tx.explorer_url.as_deref().unwrap_or("");
                 return ToolResult::error(format!(
                     "Transaction {} has already been broadcast.\n\nTx Hash: {}\nExplorer: {}",
-                    params.uuid, tx_hash, explorer_url
+                    uuid, tx_hash, explorer_url
                 ));
             },
             QueuedTxStatus::Failed => {
                 let error = queued_tx.error.as_deref().unwrap_or("Unknown error");
                 return ToolResult::error(format!(
                     "Transaction {} previously failed: {}\n\nYou may need to create a new transaction.",
-                    params.uuid, error
+                    uuid, error
                 ));
             },
             QueuedTxStatus::Expired => {
                 return ToolResult::error(format!(
                     "Transaction {} has expired. Please create a new transaction.",
-                    params.uuid
+                    uuid
                 ));
             },
         }
 
         // Mark as broadcasting
-        tx_queue.mark_broadcasting(&params.uuid);
+        tx_queue.mark_broadcasting(&uuid);
 
         // Resolve RPC configuration from context (respects custom RPC settings)
         let rpc_config = resolve_rpc_from_context(&context.extra, &queued_tx.network);
 
         log::info!(
             "[broadcast_web3_tx] Broadcasting transaction {} on {} (rpc={})",
-            params.uuid, queued_tx.network, rpc_config.url
+            uuid, queued_tx.network, rpc_config.url
         );
 
         // Initialize RPC client
         let private_key = match Self::get_private_key() {
             Ok(pk) => pk,
             Err(e) => {
-                tx_queue.mark_failed(&params.uuid, &e);
+                tx_queue.mark_failed(&uuid, &e);
                 return ToolResult::error(e);
             }
         };
@@ -213,7 +264,7 @@ impl Tool for BroadcastWeb3TxTool {
         ) {
             Ok(r) => r,
             Err(e) => {
-                tx_queue.mark_failed(&params.uuid, &e);
+                tx_queue.mark_failed(&uuid, &e);
                 return ToolResult::error(format!("Failed to initialize RPC: {}", e));
             }
         };
@@ -223,7 +274,7 @@ impl Tool for BroadcastWeb3TxTool {
             Ok(b) => b,
             Err(e) => {
                 let error = format!("Invalid signed transaction hex: {}", e);
-                tx_queue.mark_failed(&params.uuid, &error);
+                tx_queue.mark_failed(&uuid, &error);
                 return ToolResult::error(error);
             }
         };
@@ -232,7 +283,7 @@ impl Tool for BroadcastWeb3TxTool {
         let tx_hash = match rpc.send_raw_transaction(&signed_tx_bytes).await {
             Ok(h) => h,
             Err(e) => {
-                tx_queue.mark_failed(&params.uuid, &e);
+                tx_queue.mark_failed(&uuid, &e);
                 return ToolResult::error(format!("Broadcast failed: {}", e));
             }
         };
@@ -245,7 +296,7 @@ impl Tool for BroadcastWeb3TxTool {
         let explorer_url = format!("{}/{}", explorer_base, tx_hash_str);
 
         // Mark as broadcast (rogue mode - agent initiated)
-        tx_queue.mark_broadcast(&params.uuid, &tx_hash_str, &explorer_url, "rogue");
+        tx_queue.mark_broadcast(&uuid, &tx_hash_str, &explorer_url, "rogue");
 
         // Emit tx.pending event
         if let (Some(broadcaster), Some(ch_id)) = (&context.broadcaster, context.channel_id) {
@@ -271,7 +322,7 @@ impl Tool for BroadcastWeb3TxTool {
                 msg.push_str("The transaction may still confirm. Check the explorer for status.");
 
                 return ToolResult::success(msg).with_metadata(json!({
-                    "uuid": params.uuid,
+                    "uuid": uuid,
                     "tx_hash": tx_hash_str,
                     "network": queued_tx.network,
                     "explorer_url": explorer_url,
@@ -283,10 +334,10 @@ impl Tool for BroadcastWeb3TxTool {
 
         // Determine status from receipt
         let status = if receipt.status == Some(ethers::types::U64::from(1)) {
-            tx_queue.mark_confirmed(&params.uuid);
+            tx_queue.mark_confirmed(&uuid);
             "confirmed"
         } else {
-            tx_queue.mark_failed(&params.uuid, "Transaction reverted on-chain");
+            tx_queue.mark_failed(&uuid, "Transaction reverted on-chain");
             "reverted"
         };
 
@@ -310,11 +361,11 @@ impl Tool for BroadcastWeb3TxTool {
         msg.push_str(&format!("Explorer: {}\n\n", explorer_url));
 
         msg.push_str("--- Details ---\n");
-        msg.push_str(&format!("UUID: {}\n", params.uuid));
+        msg.push_str(&format!("UUID: {}\n", uuid));
         msg.push_str(&format!("Network: {}\n", queued_tx.network));
         msg.push_str(&format!("From: {}\n", queued_tx.from));
         msg.push_str(&format!("To: {}\n", queued_tx.to));
-        msg.push_str(&format!("Value: {} ({})\n", queued_tx.value, Web3TxTool::format_eth(&queued_tx.value)));
+        msg.push_str(&format!("Value: {} ({})\n", queued_tx.value, SendEthTool::format_eth(&queued_tx.value)));
 
         if let Some(block) = receipt.block_number {
             msg.push_str(&format!("Block: {}\n", block));
@@ -325,14 +376,14 @@ impl Tool for BroadcastWeb3TxTool {
         if let Some(gas_used) = receipt.gas_used {
             msg.push_str(&format!("Gas Used: {}\n", gas_used));
         }
-        msg.push_str(&format!("Max Fee: {} ({})\n", queued_tx.max_fee_per_gas, Web3TxTool::format_gwei(&queued_tx.max_fee_per_gas)));
+        msg.push_str(&format!("Max Fee: {} ({})\n", queued_tx.max_fee_per_gas, SendEthTool::format_gwei(&queued_tx.max_fee_per_gas)));
         if let Some(effective_price) = receipt.effective_gas_price {
             let price_str = effective_price.to_string();
-            msg.push_str(&format!("Effective Price: {} ({})\n", price_str, Web3TxTool::format_gwei(&price_str)));
+            msg.push_str(&format!("Effective Price: {} ({})\n", price_str, SendEthTool::format_gwei(&price_str)));
         }
 
         ToolResult::success(msg).with_metadata(json!({
-            "uuid": params.uuid,
+            "uuid": uuid,
             "tx_hash": tx_hash_str,
             "status": status,
             "network": queued_tx.network,

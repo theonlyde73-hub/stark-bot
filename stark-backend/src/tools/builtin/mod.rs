@@ -1,87 +1,46 @@
-mod agent_send;
-mod api_keys_check;
-mod apply_patch;
-mod ask_user;
-mod broadcast_web3_tx;
-mod committer;
-mod delete_file;
-mod deploy;
-mod discord_lookup;
-mod edit_file;
-mod exec;
-mod git;
-mod github_user;
-mod glob;
-mod grep;
-mod list_files;
-mod list_queued_web3_tx;
-mod manage_skills;
+//! Built-in tools for the agent
+//!
+//! Tools are organized into submodules by category:
+//! - `bash`: Shell operations and filesystem tools (grep, glob, exec, git, file ops)
+//! - `code`: Development tools (committer, deploy, pr_quality)
+//! - `core`: Essential agent tools (ask_user, subagent, task management)
+//! - `cryptocurrency`: Web3, x402, and blockchain tools
+//! - `social_media`: Platform integrations (Twitter, Discord, GitHub)
+
+// Submodules
+pub mod bash;
+pub mod code;
+pub mod core;
+pub mod cryptocurrency;
+pub mod social_media;
+
+// Individual tools (remaining uncategorized)
 mod memory_get;
 mod memory_store;
-mod modify_soul;
 mod multi_memory_search;
-pub mod network_lookup;
-mod pr_quality;
 mod process_status;
-mod read_file;
-mod register_set;
-mod rename_file;
-mod say_to_user;
-mod set_agent_subtype;
-mod subagent;
-mod task_complete;
-mod to_raw_amount;
-pub mod token_lookup;
-mod twitter_post;
 mod web_fetch;
-mod web3_function_call;
-pub mod web3_tx;
-mod write_file;
-mod x402_agent_invoke;
-mod x402_fetch;
-mod x402_post;
-mod x402_rpc;
 
-pub use agent_send::AgentSendTool;
-pub use api_keys_check::ApiKeysCheckTool;
-pub use apply_patch::ApplyPatchTool;
-pub use ask_user::AskUserTool;
-pub use broadcast_web3_tx::BroadcastWeb3TxTool;
-pub use committer::CommitterTool;
-pub use delete_file::DeleteFileTool;
-pub use deploy::DeployTool;
-pub use discord_lookup::DiscordLookupTool;
-pub use edit_file::EditFileTool;
-pub use exec::ExecTool;
-pub use git::GitTool;
-pub use github_user::GithubUserTool;
-pub use glob::GlobTool;
-pub use grep::GrepTool;
-pub use list_files::ListFilesTool;
-pub use list_queued_web3_tx::ListQueuedWeb3TxTool;
-pub use manage_skills::ManageSkillsTool;
+// Re-exports from submodules
+pub use bash::{
+    ApplyPatchTool, DeleteFileTool, EditFileTool, ExecTool, GitTool, GlobTool, GrepTool,
+    ListFilesTool, ReadFileTool, RenameFileTool, WriteFileTool,
+};
+pub use code::{CommitterTool, DeployTool, PrQualityTool};
+pub use core::{
+    AgentSendTool, ApiKeysCheckTool, AskUserTool, ManageSkillsTool, ModifySoulTool, SayToUserTool,
+    SetAgentSubtypeTool, SubagentStatusTool, SubagentTool, TaskFullyCompletedTool,
+};
+pub use cryptocurrency::{
+    load_networks, load_tokens, BroadcastWeb3TxTool, DecodeCalldataTool, ListQueuedWeb3TxTool,
+    RegisterSetTool, SendEthTool, ToRawAmountTool, TokenLookupTool, Web3FunctionCallTool,
+    X402AgentInvokeTool, X402FetchTool, X402PostTool, X402RpcTool,
+};
+pub use social_media::{DiscordLookupTool, GithubUserTool, TwitterPostTool};
+
+// Re-exports from individual tools
 pub use memory_get::MemoryGetTool;
 pub use memory_store::MemoryStoreTool;
-pub use modify_soul::ModifySoulTool;
 pub use multi_memory_search::MultiMemorySearchTool;
-pub use pr_quality::PrQualityTool;
 pub use process_status::ProcessStatusTool;
-pub use read_file::ReadFileTool;
-pub use register_set::RegisterSetTool;
-pub use rename_file::RenameFileTool;
-pub use say_to_user::SayToUserTool;
-pub use set_agent_subtype::SetAgentSubtypeTool;
-pub use subagent::{SubagentStatusTool, SubagentTool};
-pub use task_complete::TaskFullyCompletedTool;
-pub use to_raw_amount::ToRawAmountTool;
-pub use network_lookup::load_networks;
-pub use token_lookup::{load_tokens, TokenLookupTool};
-pub use twitter_post::TwitterPostTool;
 pub use web_fetch::WebFetchTool;
-pub use web3_function_call::Web3FunctionCallTool;
-pub use web3_tx::Web3TxTool;
-pub use write_file::WriteFileTool;
-pub use x402_agent_invoke::X402AgentInvokeTool;
-pub use x402_fetch::X402FetchTool;
-pub use x402_post::X402PostTool;
-pub use x402_rpc::X402RpcTool;

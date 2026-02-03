@@ -10,8 +10,8 @@
 //! These extracted terms are stored in the context bank and made available
 //! to the agent in the system context.
 
-use crate::tools::builtin::network_lookup::get_all_network_identifiers;
-use crate::tools::builtin::token_lookup::get_all_token_symbols;
+use crate::tools::builtin::cryptocurrency::network_lookup::get_all_network_identifiers;
+use crate::tools::builtin::cryptocurrency::token_lookup::get_all_token_symbols;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;

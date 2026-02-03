@@ -1,0 +1,27 @@
+//! Bash/shell and filesystem tools
+//!
+//! Tools for shell operations, file searching, and file manipulation.
+
+mod apply_patch;
+mod delete_file;
+mod edit_file;
+mod exec;
+mod git;
+mod glob;
+mod grep;
+mod list_files;
+mod read_file;
+mod rename_file;
+mod write_file;
+
+pub use apply_patch::ApplyPatchTool;
+pub use delete_file::DeleteFileTool;
+pub use edit_file::EditFileTool;
+pub use exec::ExecTool;
+pub use git::GitTool;
+pub use glob::GlobTool;
+pub use grep::GrepTool;
+pub use list_files::ListFilesTool;
+pub use read_file::ReadFileTool;
+pub use rename_file::RenameFileTool;
+pub use write_file::WriteFileTool;

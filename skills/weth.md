@@ -1,7 +1,7 @@
 ---
 name: weth
 description: "Wrap ETH to WETH or unwrap WETH to ETH on Base or Mainnet"
-version: 2.2.0
+version: 2.3.0
 author: starkbot
 metadata: {"clawdbot":{"emoji":"🔄"}}
 tags: [crypto, defi, finance, weth, wrap, unwrap, base]
@@ -93,30 +93,13 @@ The `wallet_address` register is intrinsic - no need to set it first.
 
 ## Transaction Queue Note
 
-When using `web3_function_call` with presets like `weth_deposit` or `weth_withdraw`, the transaction is executed directly (not queued).
+When using `web3_function_call` with presets like `weth_deposit` or `weth_withdraw`, transactions are QUEUED (not broadcast immediately). Use `list_queued_web3_tx` to view queued transactions and `broadcast_web3_tx` to broadcast them.
 
-If you need to review transactions before broadcast, use the register pattern with `web3_tx` instead:
-
-```tool:register_set
-key: weth_tx
-json_value:
-  to: "0x4200000000000000000000000000000000000006"
-  value: "1000000000000000"
-  data: "0xd0e30db0"
-  gas: "50000"
-```
-
-```tool:web3_tx
-from_register: weth_tx
-max_fee_per_gas: "<GAS_PRICE>"
-network: base
-```
-
-Then verify and broadcast:
+### Verify and Broadcast
 ```tool:list_queued_web3_tx
 status: pending
+limit: 1
 ```
 
 ```tool:broadcast_web3_tx
-uuid: <UUID>
 ```

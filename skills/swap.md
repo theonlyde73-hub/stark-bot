@@ -1,12 +1,12 @@
 ---
 name: swap
 description: "Swap ERC20 tokens on Base using 0x DEX aggregator via quoter.defirelay.com"
-version: 5.2.0
+version: 5.4.0
 author: starkbot
 homepage: https://0x.org
 metadata: {"requires_auth": false, "clawdbot":{"emoji":"🔄"}}
 tags: [crypto, defi, swap, dex, base, trading, 0x]
-requires_tools: [web, x, token_lookup, register_set]
+ requires_tools: [web, x, token_lookup, register_set, decode_calldata, web3_function_call, x402_fetch, x402_rpc, list_queued_web3_tx, broadcast_web3_tx]  
 ---
 
 # Token Swap Integration (0x via DeFi Relay)
@@ -123,16 +123,19 @@ network: base
 cache_as: swap_quote
 ```
 
-### 10. Get gas price
-```tool:x402_rpc
-preset: gas_price
-network: base
+### 10. Decode swap calldata
+Decode the raw calldata from the swap quote into function parameters:
+```tool:decode_calldata
+abi: 0x_settler
+calldata_register: swap_quote
+cache_as: swap
 ```
 
-### 11. Queue swap transaction
-```tool:web3_tx
-from_register: swap_quote
-max_fee_per_gas: "<GAS_PRICE>"
+This sets registers: `swap_function`, `swap_contract`, `swap_value`, `swap_param_0`, `swap_param_1`
+
+### 11. Execute swap
+```tool:web3_function_call
+preset: swap_execute
 network: base
 ```
 
@@ -145,7 +148,6 @@ limit: 1
 
 ### 13. Broadcast when ready
 ```tool:broadcast_web3_tx
-uuid: <UUID_FROM_PREVIOUS_STEP>
 ```
 
 ---
@@ -228,16 +230,19 @@ network: base
 cache_as: swap_quote
 ```
 
-### 7. Get gas price
-```tool:x402_rpc
-preset: gas_price
-network: base
+### 7. Decode swap calldata
+Decode the raw calldata from the swap quote into function parameters:
+```tool:decode_calldata
+abi: 0x_settler
+calldata_register: swap_quote
+cache_as: swap
 ```
 
-### 8. Queue swap transaction
-```tool:web3_tx
-from_register: swap_quote
-max_fee_per_gas: "<GAS_PRICE>"
+This sets registers: `swap_function`, `swap_contract`, `swap_value`, `swap_param_0`, `swap_param_1`
+
+### 8. Execute swap
+```tool:web3_function_call
+preset: swap_execute
 network: base
 ```
 
@@ -250,7 +255,6 @@ limit: 1
 
 ### 10. Broadcast when ready
 ```tool:broadcast_web3_tx
-uuid: <UUID_FROM_PREVIOUS_STEP>
 ```
 
 ---

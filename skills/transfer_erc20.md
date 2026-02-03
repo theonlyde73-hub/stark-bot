@@ -1,127 +1,38 @@
 ---
-name: transfer
-description: "Transfer (Send) ETH or ERC20 tokens on Base/Ethereum using the burner wallet"
-version: 3.3.0
+name: transfer_erc20
+description: "Transfer (Send) ERC20 tokens on Base/Ethereum using the burner wallet"
+version: 1.0.0
 author: starkbot
 homepage: https://basescan.org
-metadata: {"requires_auth": false, "clawdbot":{"emoji":"💸"}}
-tags: [crypto, transfer, send, eth, erc20, base, wallet]
-requires_tools: [web, x, register_set]
+metadata: {"requires_auth": false, "clawdbot":{"emoji":"🪙"}}
+tags: [crypto, transfer, send, erc20, tokens, base, wallet]
+requires_tools: [web, x, register_set, token_lookup, to_raw_amount]
 ---
 
-# Token Transfer/Send Skill
+# ERC20 Token Transfer/Send Skill
 
-Transfer or Send ETH or ERC20 tokens from the burner wallet to any address.
+Transfer or Send ERC20 tokens from the burner wallet to any address.
 
 > **IMPORTANT: This skill uses the REGISTER PATTERN to prevent hallucination of transaction data.**
 >
-> - Transaction params are stored in registers using `register_set`
-> - `web3_tx` reads from the register using `from_register`
-> - You NEVER pass raw tx params directly to web3_tx
+> - Use `token_lookup` to get token address and decimals
+> - Use `to_raw_amount` to convert human amounts to raw units
+> - The `transfer_amount` register is validated by `web3_function_call`
 
 ## Tools Used
 
 | Tool | Purpose |
 |------|---------|
-| `x402_rpc` | Get gas price and ETH balance (get_balance preset) |
-| `register_set` | Build transaction params in a register |
-| `web3_tx` | Execute transfer from register |
-| `web3_function_call` | Transfer ERC20 tokens and check balances |
+| `token_lookup` | Get token address and decimals |
+| `to_raw_amount` | Convert human amount to raw units safely |
+| `web3_function_call` | Execute ERC20 transfers and check balances |
+| `register_set` | Set token address for balance checks |
 
 **Note:** `wallet_address` is an intrinsic register - always available automatically.
 
 ---
 
-## How to Transfer ETH
-
-### Step 1: Get Gas Price
-
-```tool:x402_rpc
-preset: gas_price
-network: base
-```
-
-### Step 2: Build Transfer in Register
-
-Use `register_set` with `json_value` to store the tx data:
-
-```tool:register_set
-key: transfer_tx
-json_value:
-  to: "<RECIPIENT_ADDRESS>"
-  value: "<AMOUNT_IN_WEI>"
-  data: "0x"
-  gas: "21000"
-```
-
-### Step 3: Queue Transfer
-
-```tool:web3_tx
-from_register: transfer_tx
-max_fee_per_gas: "<GAS_PRICE>"
-network: base
-```
-
-### Step 4: Verify and Broadcast
-
-Verify the queued transaction:
-```tool:list_queued_web3_tx
-status: pending
-limit: 1
-```
-
-Broadcast when ready:
-```tool:broadcast_web3_tx
-uuid: <UUID_FROM_PREVIOUS_STEP>
-```
-
----
-
-## Complete Example: Send 0.01 ETH
-
-### 1. Get gas price
-
-```tool:x402_rpc
-preset: gas_price
-network: base
-```
-Response: `"0xf4240"`
-
-### 2. Build tx in register
-
-```tool:register_set
-key: transfer_tx
-json_value:
-  to: "0x1234567890abcdef1234567890abcdef12345678"
-  value: "10000000000000000"
-  data: "0x"
-  gas: "21000"
-```
-
-### 3. Queue Transfer
-
-```tool:web3_tx
-from_register: transfer_tx
-max_fee_per_gas: "0xf4240"
-network: base
-```
-
-### 4. Verify and Broadcast
-
-```tool:list_queued_web3_tx
-status: pending
-limit: 1
-```
-
-```tool:broadcast_web3_tx
-uuid: <UUID_FROM_PREVIOUS_STEP>
-```
-
----
-
-## Transfer ERC20 Tokens
-
-### Required Tool Flow
+## Required Tool Flow
 
 **ALWAYS follow this sequence for ERC20 transfers:**
 
@@ -129,7 +40,9 @@ uuid: <UUID_FROM_PREVIOUS_STEP>
 2. `to_raw_amount` → Convert human amount to raw units
 3. `web3_function_call` → Execute the transfer
 
-### Step 1: Look up the token
+---
+
+## Step 1: Look up the token
 
 ```tool:token_lookup
 symbol: "STARKBOT"
@@ -141,7 +54,9 @@ This sets registers:
 - `token_address` → contract address
 - `token_address_decimals` → decimals (e.g., 18)
 
-### Step 2: Convert amount to raw units
+---
+
+## Step 2: Convert amount to raw units
 
 ```tool:to_raw_amount
 amount: "1"
@@ -151,7 +66,9 @@ cache_as: "transfer_amount"
 This reads `token_address_decimals` automatically and sets:
 - `transfer_amount` → "1000000000000000000" (for 18 decimals)
 
-### Step 3: Execute the transfer
+---
+
+## Step 3: Execute the transfer
 
 ```tool:web3_function_call
 abi: erc20
@@ -161,7 +78,9 @@ params: ["<RECIPIENT_ADDRESS>", "<RAW_AMOUNT from step 2>"]
 network: base
 ```
 
-### Complete Example: Send 10 USDC
+---
+
+## Complete Example: Send 10 USDC
 
 ```tool:token_lookup
 symbol: "USDC"
@@ -186,18 +105,21 @@ network: base
 
 ---
 
-## Check Balances
+## Verify and Broadcast
 
-### Check ETH Balance
-
-```tool:x402_rpc
-preset: get_balance
-network: base
+After queueing, verify the transaction:
+```tool:list_queued_web3_tx
+status: pending
+limit: 1
 ```
 
-The result is hex wei - convert to ETH by dividing by 10^18.
+Broadcast when ready:
+```tool:broadcast_web3_tx
+```
 
-### Check ERC20 Token Balance
+---
+
+## Check ERC20 Token Balance
 
 First set the token address, then use the erc20_balance preset:
 
@@ -231,11 +153,8 @@ Use `token_lookup` to get addresses automatically, or use these directly:
 
 ## Amount Conversion Reference
 
-| Token | Decimals | Human Amount | Wei Value |
+| Token | Decimals | Human Amount | Raw Value |
 |-------|----------|--------------|-----------|
-| ETH | 18 | 0.01 | `10000000000000000` |
-| ETH | 18 | 0.1 | `100000000000000000` |
-| ETH | 18 | 1 | `1000000000000000000` |
 | USDC | 6 | 1 | `1000000` |
 | USDC | 6 | 10 | `10000000` |
 | USDC | 6 | 100 | `100000000` |
@@ -251,9 +170,10 @@ Use `token_lookup` to get addresses automatically, or use these directly:
 Before executing a transfer:
 
 1. **Verify recipient address** - Double-check the address is correct
-2. **Check balance** - Use `x402_rpc` (get_balance) for ETH or `web3_function_call` (erc20_balance) for tokens
-3. **Confirm amount** - Ensure decimals are correct for the token
+2. **Check balance** - Use `web3_function_call` (erc20_balance preset) for tokens
+3. **Confirm amount** - Ensure decimals are correct for the token (use `to_raw_amount`!)
 4. **Network** - Confirm you're on the right network (base vs mainnet)
+5. **ETH for gas** - You need ETH to pay for gas, even when sending ERC20s
 
 ---
 
@@ -265,14 +185,15 @@ Before executing a transfer:
 | "Transfer amount exceeds balance" | Not enough tokens | Check token balance |
 | "Gas estimation failed" | Invalid recipient or params | Verify addresses |
 | "Transaction reverted" | Contract rejection | Check amounts |
-| "Register not found" | Missing register | Use register_set first |
+| "Register not found" | Missing register | Use token_lookup/to_raw_amount first |
 
 ---
 
 ## Security Notes
 
 1. **Register pattern prevents hallucination** - tx data flows through registers
-2. **Always double-check addresses** - Transactions cannot be reversed
-3. **Start with small test amounts** - Verify the flow works first
-4. **Verify token contracts** - Use official addresses from block explorer
-5. **Gas costs** - ETH needed for gas even when sending ERC20s
+2. **to_raw_amount validates amounts** - prevents incorrect decimal conversions
+3. **Always double-check addresses** - Transactions cannot be reversed
+4. **Start with small test amounts** - Verify the flow works first
+5. **Verify token contracts** - Use official addresses from block explorer
+6. **Gas costs** - ETH needed for gas even when sending ERC20s

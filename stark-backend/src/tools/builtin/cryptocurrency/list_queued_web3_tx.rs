@@ -3,7 +3,7 @@
 //! Shows transactions that have been signed but not yet broadcast.
 
 use crate::gateway::protocol::GatewayEvent;
-use crate::tools::builtin::web3_tx::Web3TxTool;
+use super::web3_tx::SendEthTool;
 use crate::tools::registry::Tool;
 use crate::tools::types::{
     PropertySchema, ToolContext, ToolDefinition, ToolGroup, ToolInputSchema, ToolResult,
@@ -63,10 +63,21 @@ impl ListQueuedWeb3TxTool {
             },
         );
 
+        properties.insert(
+            "cache_as".to_string(),
+            PropertySchema {
+                schema_type: "string".to_string(),
+                description: "Register name to cache the first pending transaction's UUID. Defaults to 'queued_tx_uuid'. Set to empty string to disable.".to_string(),
+                default: Some(json!("queued_tx_uuid")),
+                items: None,
+                enum_values: None,
+            },
+        );
+
         ListQueuedWeb3TxTool {
             definition: ToolDefinition {
                 name: "list_queued_web3_tx".to_string(),
-                description: "List queued transactions from web3_tx. Shows transactions waiting to be broadcast. Use broadcast_web3_tx to broadcast a pending transaction by UUID.".to_string(),
+                description: "List queued transactions from web3_tx. Caches first pending UUID in '{cache_as}' register (default: 'queued_tx_uuid'). Use broadcast_web3_tx to broadcast.".to_string(),
                 input_schema: ToolInputSchema {
                     schema_type: "object".to_string(),
                     properties,
@@ -90,10 +101,16 @@ struct ListParams {
     status: Option<String>,
     #[serde(default = "default_limit")]
     limit: usize,
+    #[serde(default = "default_cache_as")]
+    cache_as: String,
 }
 
 fn default_limit() -> usize {
     10
+}
+
+fn default_cache_as() -> String {
+    "queued_tx_uuid".to_string()
 }
 
 #[async_trait]
@@ -126,11 +143,11 @@ impl Tool for ListQueuedWeb3TxTool {
                     msg.push_str(&format!("Network: {}\n", tx.network));
                     msg.push_str(&format!("From: {}\n", tx.from));
                     msg.push_str(&format!("To: {}\n", tx.to));
-                    msg.push_str(&format!("Value: {} ({})\n", tx.value, Web3TxTool::format_eth(&tx.value)));
+                    msg.push_str(&format!("Value: {} ({})\n", tx.value, SendEthTool::format_eth(&tx.value)));
                     msg.push_str(&format!("Nonce: {}\n", tx.nonce));
                     msg.push_str(&format!("Gas Limit: {}\n", tx.gas_limit));
-                    msg.push_str(&format!("Max Fee: {} ({})\n", tx.max_fee_per_gas, Web3TxTool::format_gwei(&tx.max_fee_per_gas)));
-                    msg.push_str(&format!("Priority Fee: {} ({})\n", tx.max_priority_fee_per_gas, Web3TxTool::format_gwei(&tx.max_priority_fee_per_gas)));
+                    msg.push_str(&format!("Max Fee: {} ({})\n", tx.max_fee_per_gas, SendEthTool::format_gwei(&tx.max_fee_per_gas)));
+                    msg.push_str(&format!("Priority Fee: {} ({})\n", tx.max_priority_fee_per_gas, SendEthTool::format_gwei(&tx.max_priority_fee_per_gas)));
                     msg.push_str(&format!("Created: {}\n", tx.created_at.format("%Y-%m-%d %H:%M:%S UTC")));
 
                     if let Some(ref tx_hash) = tx.tx_hash {
@@ -299,6 +316,21 @@ impl Tool for ListQueuedWeb3TxTool {
                     ));
                     log::info!("[list_queued_web3_tx] Emitted tx_queue.confirmation_required for {}", first_pending.uuid);
                 }
+            }
+        }
+
+        // Cache first pending transaction UUID in register
+        if !params.cache_as.is_empty() {
+            if let Some(first_pending) = transactions.iter()
+                .find(|t| t.status == QueuedTxStatus::Pending)
+            {
+                context.set_register(&params.cache_as, json!(&first_pending.uuid), "list_queued_web3_tx");
+                log::info!(
+                    "[list_queued_web3_tx] Cached first pending tx UUID '{}' in register '{}'",
+                    first_pending.uuid,
+                    params.cache_as
+                );
+                msg.push_str(&format!("\nUUID cached in register: '{}'\n", params.cache_as));
             }
         }
 

@@ -41,10 +41,12 @@ fn register_all_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(builtin::X402FetchTool::new()));
     registry.register(Arc::new(builtin::X402AgentInvokeTool::new()));
     registry.register(Arc::new(builtin::X402PostTool::new()));
-    registry.register(Arc::new(builtin::Web3TxTool::new()));
+    // send_eth for simple native ETH transfers (no ABI needed)
+    registry.register(Arc::new(builtin::SendEthTool::new()));
     registry.register(Arc::new(builtin::BroadcastWeb3TxTool::new()));
     registry.register(Arc::new(builtin::ListQueuedWeb3TxTool::new()));
     registry.register(Arc::new(builtin::Web3FunctionCallTool::new()));
+    registry.register(Arc::new(builtin::DecodeCalldataTool::new()));
     registry.register(Arc::new(builtin::TokenLookupTool::new()));
     registry.register(Arc::new(builtin::ToRawAmountTool::new()));
     registry.register(Arc::new(builtin::RegisterSetTool::new()));

@@ -8,7 +8,7 @@
 //!
 //! IMPORTANT: Transactions are QUEUED, not broadcast. Use broadcast_web3_tx to broadcast.
 
-use crate::tools::builtin::web3_tx::parse_u256;
+use super::web3_tx::parse_u256;
 use crate::tools::presets::{get_web3_preset, list_web3_presets};
 use crate::tools::registry::Tool;
 use crate::tools::rpc_config::{resolve_rpc_from_context, ResolvedRpcConfig};
