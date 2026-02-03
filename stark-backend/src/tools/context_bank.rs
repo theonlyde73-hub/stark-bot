@@ -5,6 +5,7 @@
 //! - Token symbols from config/tokens.ron
 //! - Network names from config/networks.ron
 //! - Numeric values (amounts, quantities, etc.)
+//! - URLs (especially GitHub URLs for repo references)
 //!
 //! These extracted terms are stored in the context bank and made available
 //! to the agent in the system context.
@@ -83,6 +84,22 @@ impl ContextBank {
         let addresses: Vec<_> = items.iter().filter(|i| i.item_type == "eth_address").collect();
         let tokens: Vec<_> = items.iter().filter(|i| i.item_type == "token_symbol").collect();
         let networks: Vec<_> = items.iter().filter(|i| i.item_type == "network").collect();
+        let urls: Vec<_> = items.iter().filter(|i| i.item_type == "url" || i.item_type == "github_url").collect();
+
+        // URLs first - they're often the primary focus of the request
+        if !urls.is_empty() {
+            let url_list: Vec<_> = urls
+                .iter()
+                .map(|u| {
+                    if let Some(ref label) = u.label {
+                        format!("{} ({})", u.value, label)
+                    } else {
+                        u.value.clone()
+                    }
+                })
+                .collect();
+            parts.push(format!("URLs: {}", url_list.join(", ")));
+        }
 
         if !addresses.is_empty() {
             let addr_list: Vec<_> = addresses.iter().map(|a| a.value.as_str()).collect();
@@ -213,6 +230,40 @@ pub fn scan_input(text: &str) -> Vec<ContextBankItem> {
         }
     }
 
+    // Scan for URLs (especially GitHub URLs)
+    // This regex matches common URL patterns, excluding trailing punctuation
+    let url_regex = Regex::new(r"https?://[^\s<>\[\]()]+[^\s<>\[\]().,;:!?]").unwrap();
+    for cap in url_regex.find_iter(text) {
+        let url = cap.as_str().to_string();
+
+        // Check if it's a GitHub URL and extract repo info
+        if url.contains("github.com") {
+            // Try to extract owner/repo from GitHub URL
+            let github_regex = Regex::new(r"github\.com/([^/\s]+)/([^/\s?#]+)").unwrap();
+            if let Some(caps) = github_regex.captures(&url) {
+                let owner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                let repo = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                items.push(ContextBankItem {
+                    value: url.clone(),
+                    item_type: "github_url".to_string(),
+                    label: Some(format!("{}/{}", owner, repo)),
+                });
+            } else {
+                items.push(ContextBankItem {
+                    value: url,
+                    item_type: "github_url".to_string(),
+                    label: None,
+                });
+            }
+        } else {
+            items.push(ContextBankItem {
+                value: url,
+                item_type: "url".to_string(),
+                label: None,
+            });
+        }
+    }
+
     // Scan for numeric values (integers, decimals, with optional commas)
     // Matches: 1, 100, 1000, 1,000, 100000, 2500000, 0.5, 1.25, etc.
     // Excludes numbers that are part of hex addresses (handled above)
@@ -286,6 +337,53 @@ mod tests {
 
         let numbers: Vec<_> = items.iter().filter(|i| i.item_type == "number").collect();
         assert!(numbers.iter().any(|n| n.value == "1000000"));
+    }
+
+    #[test]
+    fn test_scan_github_url() {
+        let text = "Check out https://github.com/ethereumdegen/stark-bot for the source";
+        let items = scan_input(text);
+
+        let urls: Vec<_> = items.iter().filter(|i| i.item_type == "github_url").collect();
+        assert_eq!(urls.len(), 1);
+        assert!(urls[0].value.contains("github.com/ethereumdegen/stark-bot"));
+        assert_eq!(urls[0].label, Some("ethereumdegen/stark-bot".to_string()));
+    }
+
+    #[test]
+    fn test_scan_user_exact_input() {
+        // Exact user input that wasn't being detected
+        let text = "the latest update commit to https://github.com/ethereumdegen/stark-bot -- does that use duality and diversity? how?";
+        let items = scan_input(text);
+
+        println!("Items found: {:?}", items);
+
+        let urls: Vec<_> = items.iter().filter(|i| i.item_type == "github_url").collect();
+        assert_eq!(urls.len(), 1, "Expected 1 GitHub URL, found: {:?}", urls);
+        assert!(urls[0].value.contains("github.com/ethereumdegen/stark-bot"));
+        assert_eq!(urls[0].label, Some("ethereumdegen/stark-bot".to_string()));
+    }
+
+    #[test]
+    fn test_scan_with_discord_prefix() {
+        // Test with Discord message prefix
+        let text = "[DISCORD MESSAGE - Use discord skill for tipping/messaging. Use discord_resolve_user to resolve @mentions to addresses.]\n\nthe latest update commit to https://github.com/ethereumdegen/stark-bot -- does that use duality and diversity? how?";
+        let items = scan_input(text);
+
+        println!("Items found with Discord prefix: {:?}", items);
+
+        let urls: Vec<_> = items.iter().filter(|i| i.item_type == "github_url").collect();
+        assert_eq!(urls.len(), 1, "Expected 1 GitHub URL, found: {:?}", urls);
+    }
+
+    #[test]
+    fn test_scan_generic_url() {
+        let text = "Visit https://example.com/page for more info";
+        let items = scan_input(text);
+
+        let urls: Vec<_> = items.iter().filter(|i| i.item_type == "url").collect();
+        assert_eq!(urls.len(), 1);
+        assert!(urls[0].value.contains("example.com"));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 ---
 name: github
 description: "Advanced GitHub operations with safe commits, PR creation, deployment, and quality checks."
-version: 1.0.0
+version: 1.2.0
 author: starkbot
 homepage: https://cli.github.com/manual/
 metadata: {"requires_auth": true, "clawdbot":{"emoji":"🐙"}}
@@ -10,6 +10,24 @@ tags: [github, git, pr, version-control, deployment, ci-cd, development]
 ---
 
 # GitHub Operations Guide
+
+## CRITICAL: External GitHub URLs vs Local Workspace
+
+**IMPORTANT DISTINCTION:**
+- The `git` tool (status, log, diff, etc.) operates on your **local workspace** only
+- For **external GitHub repos** (URLs the user provides), use `gh` CLI or `web_fetch`
+
+**When a user provides a GitHub URL** (e.g., `https://github.com/owner/repo`):
+1. **Extract the owner and repo from that URL** (check Context Bank - URLs are auto-extracted)
+2. **Use `gh` CLI commands** to inspect the external repo:
+   - `gh repo view owner/repo` - View repo info
+   - `gh api repos/owner/repo/commits` - View commits
+   - `gh pr list -R owner/repo` - View PRs
+   - `gh issue list -R owner/repo` - View issues
+3. **Or use `web_fetch`** to read the repo page directly
+4. **NEVER run `git log`** to inspect an external repo - that only shows your local workspace!
+
+**DO NOT** substitute the user's URL with your own repos or defaults.
 
 You have access to specialized tools for safe and effective GitHub operations:
 
@@ -293,35 +311,37 @@ Examples:
 
 Use the `exec` tool to manage GitHub Projects via the `gh project` CLI commands.
 
+**Important:** Replace `OWNER` with the actual owner from the GitHub URL the user provided. Check the Context Bank for extracted URLs.
+
 ### List User's Projects
 ```json
-{"tool": "exec", "command": "gh project list --owner USERNAME"}
+{"tool": "exec", "command": "gh project list --owner OWNER"}
 ```
 
 ### View Project Details
 ```json
-{"tool": "exec", "command": "gh project view PROJECT_NUMBER --owner USERNAME"}
+{"tool": "exec", "command": "gh project view PROJECT_NUMBER --owner OWNER"}
 ```
 
 ### List Project Fields (Columns/Status Options)
 Get field IDs needed for moving items between columns:
 ```json
-{"tool": "exec", "command": "gh project field-list PROJECT_NUMBER --owner USERNAME --format json"}
+{"tool": "exec", "command": "gh project field-list PROJECT_NUMBER --owner OWNER --format json"}
 ```
 
 ### List Items in Project
 ```json
-{"tool": "exec", "command": "gh project item-list PROJECT_NUMBER --owner USERNAME --format json"}
+{"tool": "exec", "command": "gh project item-list PROJECT_NUMBER --owner OWNER --format json"}
 ```
 
 ### Add Existing Issue/PR to Project
 ```json
-{"tool": "exec", "command": "gh project item-add PROJECT_NUMBER --owner USERNAME --url https://github.com/OWNER/REPO/issues/123"}
+{"tool": "exec", "command": "gh project item-add PROJECT_NUMBER --owner OWNER --url https://github.com/OWNER/REPO/issues/123"}
 ```
 
 ### Create Draft Item (Task) in Project
 ```json
-{"tool": "exec", "command": "gh project item-create PROJECT_NUMBER --owner USERNAME --title \"Task title\" --body \"Task description\""}
+{"tool": "exec", "command": "gh project item-create PROJECT_NUMBER --owner OWNER --title \"Task title\" --body \"Task description\""}
 ```
 
 ### Move Item Between Columns (Update Status)
@@ -332,25 +352,27 @@ First get field IDs with `field-list`, then:
 
 ### Example: Add Task to Kanban Board
 
-To add a task to a project like `https://github.com/users/ethereumdegen/projects/9`:
+To add a task to a project like `https://github.com/users/someuser/projects/9`:
 
-1. **Get project ID and field info:**
+1. **Extract owner from URL:** The owner is `someuser`
+
+2. **Get project ID and field info:**
 ```json
-{"tool": "exec", "command": "gh project view 9 --owner ethereumdegen --format json"}
-{"tool": "exec", "command": "gh project field-list 9 --owner ethereumdegen --format json"}
+{"tool": "exec", "command": "gh project view 9 --owner someuser --format json"}
+{"tool": "exec", "command": "gh project field-list 9 --owner someuser --format json"}
 ```
 
-2. **Create a draft item:**
+3. **Create a draft item:**
 ```json
-{"tool": "exec", "command": "gh project item-create 9 --owner ethereumdegen --title \"Implement feature X\" --body \"Description of the task\""}
+{"tool": "exec", "command": "gh project item-create 9 --owner someuser --title \"Implement feature X\" --body \"Description of the task\""}
 ```
 
-3. **Or add an existing issue:**
+4. **Or add an existing issue:**
 ```json
-{"tool": "exec", "command": "gh project item-add 9 --owner ethereumdegen --url https://github.com/ethereumdegen/repo/issues/42"}
+{"tool": "exec", "command": "gh project item-add 9 --owner someuser --url https://github.com/someuser/repo/issues/42"}
 ```
 
-**Note:** The `--owner` flag uses the username for user-owned projects or org name for organization projects.
+**Note:** The `--owner` flag uses the username for user-owned projects or org name for organization projects. Always extract the owner from the URL the user provided.
 
 ---
 

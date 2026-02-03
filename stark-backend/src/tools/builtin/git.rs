@@ -274,6 +274,34 @@ impl Tool for GitTool {
             Err(e) => return ToolResult::error(format!("Invalid parameters: {}", e)),
         };
 
+        // Check if user is asking about an EXTERNAL GitHub repo
+        // If so, redirect them to use gh CLI instead of local git commands
+        let github_urls: Vec<_> = context.context_bank.items()
+            .into_iter()
+            .filter(|item| item.item_type == "github_url")
+            .collect();
+
+        if !github_urls.is_empty() {
+            // For read-only operations (log, status, diff without files), reject and redirect
+            let is_read_only = matches!(params.operation.as_str(), "log" | "status")
+                || (params.operation == "diff" && params.files.is_none());
+
+            if is_read_only {
+                let url = &github_urls[0].value;
+                let owner_repo = github_urls[0].label.as_deref().unwrap_or("owner/repo");
+                return ToolResult::error(format!(
+                    "WRONG TOOL: You're trying to inspect an EXTERNAL GitHub repo ({}).\n\n\
+                    The `git` tool only works on your LOCAL workspace, not external repos!\n\n\
+                    For external repos, use the `exec` tool with `gh` CLI:\n\
+                    - View repo: {{\"tool\": \"exec\", \"command\": \"gh repo view {}\"}}\n\
+                    - View commits: {{\"tool\": \"exec\", \"command\": \"gh api repos/{}/commits --jq '.[].commit.message'\"}}\n\
+                    - View README: {{\"tool\": \"exec\", \"command\": \"gh api repos/{}/readme --jq .content | base64 -d\"}}\n\
+                    - Or use web_fetch on the URL directly",
+                    url, owner_repo, owner_repo, owner_repo
+                ));
+            }
+        }
+
         // Get workspace directory
         let workspace = context
             .workspace_dir
