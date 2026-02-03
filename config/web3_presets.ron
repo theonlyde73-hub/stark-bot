@@ -72,10 +72,10 @@
         abi: "0x_settler",
         contracts: {},
         contract_register: Some("swap_contract"),
-        function: "execute",
-        params_registers: ["swap_param_0", "swap_param_1"],
+        function: "exec",
+        params_registers: ["swap_param_0", "swap_param_1", "swap_param_2", "swap_param_3", "swap_param_4"],
         value_register: Some("swap_value"),
         static_params: [],
-        description: "Execute 0x swap. Use decode_calldata first to decode swap_quote into swap_contract, swap_param_0, swap_param_1, swap_value registers.",
+        description: "Execute 0x swap via AllowanceHolder.exec(). Use decode_calldata first to decode swap_quote into swap_contract, swap_param_0-4, swap_value registers.",
     ),
 }

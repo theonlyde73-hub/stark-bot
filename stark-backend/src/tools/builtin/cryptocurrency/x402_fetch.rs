@@ -272,41 +272,92 @@ impl Tool for X402FetchTool {
         let retry_key = format!("x402:{}", params.preset);
         let retry_manager = HttpRetryManager::global();
 
-        // Make the request
-        let response = match client.get_with_payment(&url).await {
-            Ok(r) => r,
-            Err(e) => {
-                let error_msg = format!("Request failed: {}", e);
-                if HttpRetryManager::is_retryable_error(&error_msg) {
-                    let delay = retry_manager.record_error(&retry_key);
-                    return ToolResult::retryable_error(error_msg, delay);
+        // Retry configuration for swap_quote preset
+        let max_retries = if params.preset == "swap_quote" { 3 } else { 1 };
+        let retry_delay_secs = 5;
+
+        let mut last_error: Option<String> = None;
+        let mut response_opt = None;
+
+        for attempt in 1..=max_retries {
+            if attempt > 1 {
+                log::info!("[x402_fetch] Retry attempt {}/{} for preset '{}' after {}s delay",
+                    attempt, max_retries, params.preset, retry_delay_secs);
+                tokio::time::sleep(tokio::time::Duration::from_secs(retry_delay_secs)).await;
+            }
+
+            match client.get_with_payment(&url).await {
+                Ok(r) => {
+                    // Check if response is successful before accepting
+                    let status = r.response.status();
+                    if status.is_success() {
+                        response_opt = Some(r);
+                        last_error = None;
+                        break;
+                    }
+
+                    // Non-success response - check if we should retry
+                    let body = r.response.text().await.unwrap_or_default();
+                    let error_msg = format!("HTTP error {}: {}", status, body);
+
+                    // For swap_quote, retry on 402/5xx/429 errors
+                    let should_retry = params.preset == "swap_quote" &&
+                        (status.as_u16() == 402 ||
+                         HttpRetryManager::is_retryable_status(status.as_u16()));
+
+                    if should_retry && attempt < max_retries {
+                        log::warn!("[x402_fetch] Retryable error on attempt {}: {}", attempt, error_msg);
+                        last_error = Some(error_msg);
+                        continue;
+                    }
+
+                    // Not retryable or last attempt - return error with appropriate type
+                    if status.as_u16() == 402 && (body.contains("Settlement") || body.contains("Facilitator")) {
+                        let delay = retry_manager.record_error(&retry_key);
+                        return ToolResult::retryable_error(
+                            format!("HTTP error {} Payment Required: {}\n\n⚠️ This is a temporary settlement/payment relay error. Retried {} times.", status, body, attempt),
+                            delay
+                        );
+                    }
+
+                    if HttpRetryManager::is_retryable_status(status.as_u16()) {
+                        let delay = retry_manager.record_error(&retry_key);
+                        return ToolResult::retryable_error(format!("HTTP error {}: {} (retried {} times)", status, body, attempt), delay);
+                    }
+
+                    return ToolResult::error(format!("HTTP error {}: {}", status, body));
                 }
-                return ToolResult::error(error_msg);
+                Err(e) => {
+                    let error_msg = format!("Request failed: {}", e);
+
+                    // For swap_quote, retry on network errors
+                    let should_retry = params.preset == "swap_quote" &&
+                        HttpRetryManager::is_retryable_error(&error_msg);
+
+                    if should_retry && attempt < max_retries {
+                        log::warn!("[x402_fetch] Retryable network error on attempt {}: {}", attempt, error_msg);
+                        last_error = Some(error_msg);
+                        continue;
+                    }
+
+                    // Not retryable or last attempt
+                    if HttpRetryManager::is_retryable_error(&error_msg) {
+                        let delay = retry_manager.record_error(&retry_key);
+                        return ToolResult::retryable_error(format!("{} (retried {} times)", error_msg, attempt), delay);
+                    }
+                    return ToolResult::error(error_msg);
+                }
+            }
+        }
+
+        // If we exhausted retries without success
+        let response = match response_opt {
+            Some(r) => r,
+            None => {
+                let error_msg = last_error.unwrap_or_else(|| "Unknown error after retries".to_string());
+                return ToolResult::error(format!("Failed after {} retries: {}", max_retries, error_msg));
             }
         };
-
-        // Check HTTP status
-        let status = response.response.status();
-        if !status.is_success() {
-            let body = response.response.text().await.unwrap_or_default();
-
-            // Add retry hint for 402 settlement errors (use exponential backoff)
-            if status.as_u16() == 402 && (body.contains("Settlement") || body.contains("Facilitator")) {
-                let delay = retry_manager.record_error(&retry_key);
-                return ToolResult::retryable_error(
-                    format!("HTTP error {} Payment Required: {}\n\n⚠️ This is a temporary settlement/payment relay error.", status, body),
-                    delay
-                );
-            }
-
-            // Check for other retryable errors
-            if HttpRetryManager::is_retryable_status(status.as_u16()) {
-                let delay = retry_manager.record_error(&retry_key);
-                return ToolResult::retryable_error(format!("HTTP error {}: {}", status, body), delay);
-            }
-
-            return ToolResult::error(format!("HTTP error {}: {}", status, body));
-        }
 
         // Success - reset backoff
         retry_manager.record_success(&retry_key);
@@ -343,11 +394,11 @@ impl Tool for X402FetchTool {
             );
         }
 
-        // Build metadata
+        // Build metadata (status is always 200 here since we only break loop on success)
         let mut metadata = json!({
             "preset": params.preset,
             "network": params.network,
-            "status": status.as_u16(),
+            "status": 200,
             "wallet": client.wallet_address(),
         });
 

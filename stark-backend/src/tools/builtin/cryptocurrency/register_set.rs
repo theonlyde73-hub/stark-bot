@@ -102,6 +102,15 @@ impl RegisterSetTool {
         ("buy_token", "Use 'token_lookup' tool with cache_as: 'buy_token'"),
         ("wallet_address", "This is an intrinsic register - automatically available from wallet config"),
         ("network", "Use 'network_name' instead - 'network' is reserved"),
+        // Swap execution registers - must be set by decode_calldata tool
+        ("swap_param_0", "Use 'decode_calldata' tool with abi: '0x_settler' and calldata_register: 'swap_quote' to set swap parameters"),
+        ("swap_param_1", "Use 'decode_calldata' tool with abi: '0x_settler' and calldata_register: 'swap_quote' to set swap parameters"),
+        ("swap_param_2", "Use 'decode_calldata' tool with abi: '0x_settler' and calldata_register: 'swap_quote' to set swap parameters"),
+        ("swap_param_3", "Use 'decode_calldata' tool with abi: '0x_settler' and calldata_register: 'swap_quote' to set swap parameters"),
+        ("swap_param_4", "Use 'decode_calldata' tool with abi: '0x_settler' and calldata_register: 'swap_quote' to set swap parameters"),
+        ("swap_value", "Use 'decode_calldata' tool with abi: '0x_settler' and calldata_register: 'swap_quote' to set swap parameters"),
+        ("swap_function", "Use 'decode_calldata' tool with abi: '0x_settler' and calldata_register: 'swap_quote' to set swap parameters"),
+        ("swap_contract", "Use 'decode_calldata' tool with abi: '0x_settler' and calldata_register: 'swap_quote' to set swap parameters"),
     ];
 
     /// Register keys that MUST contain valid Ethereum addresses (if not blocked)
@@ -286,6 +295,16 @@ mod tests {
         assert!(RegisterSetTool::check_blocked("sell_token").is_err());
         assert!(RegisterSetTool::check_blocked("buy_token").is_err());
         assert!(RegisterSetTool::check_blocked("wallet_address").is_err());
+
+        // Swap execution registers are blocked (must use decode_calldata)
+        assert!(RegisterSetTool::check_blocked("swap_param_0").is_err());
+        assert!(RegisterSetTool::check_blocked("swap_param_1").is_err());
+        assert!(RegisterSetTool::check_blocked("swap_param_2").is_err());
+        assert!(RegisterSetTool::check_blocked("swap_param_3").is_err());
+        assert!(RegisterSetTool::check_blocked("swap_param_4").is_err());
+        assert!(RegisterSetTool::check_blocked("swap_value").is_err());
+        assert!(RegisterSetTool::check_blocked("swap_function").is_err());
+        assert!(RegisterSetTool::check_blocked("swap_contract").is_err());
 
         // Other registers are allowed
         assert!(RegisterSetTool::check_blocked("sell_amount").is_ok());

@@ -1,7 +1,7 @@
 ---
 name: swap
 description: "Swap ERC20 tokens on Base using 0x DEX aggregator via quoter.defirelay.com"
-version: 5.4.0
+version: 5.7.0
 author: starkbot
 homepage: https://0x.org
 metadata: {"requires_auth": false, "clawdbot":{"emoji":"🔄"}}
@@ -123,7 +123,11 @@ network: base
 cache_as: swap_quote
 ```
 
-### 10. Decode swap calldata
+**NOTE:** The tool automatically retries up to 3 times on failure. **If the quote still fails after retries, STOP IMMEDIATELY.** Do not proceed with the swap. Inform the user: "Unable to get a swap quote for this trade. The swap cannot be completed." Common reasons include: unsupported token pair, amount too small, insufficient liquidity, or service unavailable.
+
+### 10. Decode swap calldata (REQUIRED - DO NOT SKIP!)
+**⚠️ YOU MUST RUN THIS STEP BEFORE EXECUTING THE SWAP. Do NOT pass raw calldata to web3_function_call. The preset reads from registers that this tool sets.**
+
 Decode the raw calldata from the swap quote into function parameters:
 ```tool:decode_calldata
 abi: 0x_settler
@@ -131,9 +135,10 @@ calldata_register: swap_quote
 cache_as: swap
 ```
 
-This sets registers: `swap_function`, `swap_contract`, `swap_value`, `swap_param_0`, `swap_param_1`
+This sets registers: `swap_function`, `swap_contract`, `swap_value`, `swap_param_0` through `swap_param_4`
 
 ### 11. Execute swap
+**Only call this AFTER decode_calldata has set the registers above. Do NOT pass a `params` array - the preset reads from registers.**
 ```tool:web3_function_call
 preset: swap_execute
 network: base
@@ -230,7 +235,11 @@ network: base
 cache_as: swap_quote
 ```
 
-### 7. Decode swap calldata
+**NOTE:** The tool automatically retries up to 3 times on failure. **If the quote still fails after retries, STOP IMMEDIATELY.** Do not proceed with the swap. Inform the user: "Unable to get a swap quote for this trade. The swap cannot be completed." Common reasons include: unsupported token pair, amount too small, insufficient liquidity, or service unavailable.
+
+### 7. Decode swap calldata (REQUIRED - DO NOT SKIP!)
+**⚠️ YOU MUST RUN THIS STEP BEFORE EXECUTING THE SWAP. Do NOT pass raw calldata to web3_function_call. The preset reads from registers that this tool sets.**
+
 Decode the raw calldata from the swap quote into function parameters:
 ```tool:decode_calldata
 abi: 0x_settler
@@ -238,9 +247,10 @@ calldata_register: swap_quote
 cache_as: swap
 ```
 
-This sets registers: `swap_function`, `swap_contract`, `swap_value`, `swap_param_0`, `swap_param_1`
+This sets registers: `swap_function`, `swap_contract`, `swap_value`, `swap_param_0` through `swap_param_4`
 
 ### 8. Execute swap
+**Only call this AFTER decode_calldata has set the registers above. Do NOT pass a `params` array - the preset reads from registers.**
 ```tool:web3_function_call
 preset: swap_execute
 network: base
@@ -305,6 +315,13 @@ If user says "swap ETH for X", you MUST:
 3. The spender address is always Permit2: `0x000000000022D473030F116dDEE9F6B43aC78BA3`
 4. **WETH is especially prone to zero allowance after wrapping - always check!**
 
+### ALWAYS use decode_calldata before swap_execute!
+**The `swap_execute` preset reads from registers, NOT from params you pass.**
+1. After getting the swap quote, you MUST call `decode_calldata` with `abi: 0x_settler`
+2. This sets the required registers: `swap_contract`, `swap_function`, `swap_value`, `swap_param_0` through `swap_param_4`
+3. Only THEN call `web3_function_call` with `preset: swap_execute`
+4. **Do NOT try to pass raw calldata or a `params` array to web3_function_call - it will fail!**
+
 ---
 
 ## Supported Tokens
@@ -324,4 +341,5 @@ Use the `token_lookup` tool to check if a token is supported. The tool will retu
 | Swap fails with ETH | Make sure you wrapped ETH to WETH first! |
 | **TRANSACTION REVERTED (after wrapping WETH)** | **Check allowance! Freshly wrapped WETH has zero allowance. You MUST approve Permit2 (`0x000000000022D473030F116dDEE9F6B43aC78BA3`) before swapping!** |
 | **Transaction reverted / Insufficient allowance** | **The DEX cannot spend your tokens. Check `erc20_allowance` and run `erc20_approve` for the Permit2 contract if needed.** |
-| **402 Payment Required / Settlement error** | **Wait 30 seconds and retry the same `x402_fetch` call. This is a temporary payment relay issue that usually resolves on retry. Retry up to 3 times before giving up.** |
+| **402 Payment Required / Settlement error** | **The tool automatically retries 3 times with a 5 second delay. If it still fails after retries, STOP and inform the user.** |
+| **Swap quote fails (any error)** | **The tool automatically retries 3 times. If it fails after all retries, STOP the swap workflow immediately. Tell the user: "Unable to get a swap quote for this trade. The swap cannot be completed."** |

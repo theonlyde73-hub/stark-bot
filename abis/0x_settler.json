@@ -1,6 +1,6 @@
 {
   "name": "0x Settler (AllowanceHolder)",
-  "description": "0x Protocol v4 Settler contract for executing swaps. The execute function takes pre-encoded calldata from the 0x API.",
+  "description": "0x Protocol v4 Settler contract for executing swaps. The exec/execute functions take pre-encoded calldata from the 0x API.",
   "address": {
     "base": "0x0000000000001fF3684f28c67538d4D072C22734",
     "mainnet": "0x0000000000001fF3684f28c67538d4D072C22734"
@@ -12,6 +12,19 @@
       "type": "function",
       "stateMutability": "payable",
       "inputs": [
+        {"name": "recipient", "type": "address"},
+        {"name": "data", "type": "bytes"}
+      ],
+      "outputs": []
+    },
+    {
+      "name": "exec",
+      "type": "function",
+      "stateMutability": "payable",
+      "inputs": [
+        {"name": "spender", "type": "address"},
+        {"name": "token", "type": "address"},
+        {"name": "amount", "type": "uint256"},
         {"name": "recipient", "type": "address"},
         {"name": "data", "type": "bytes"}
       ],
