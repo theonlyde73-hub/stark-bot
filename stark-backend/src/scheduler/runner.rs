@@ -344,16 +344,19 @@ impl Scheduler {
     }
 
     /// Process due heartbeats
+    /// Note: Only processes the MOST RECENT heartbeat config (highest ID) to avoid duplicates
     async fn process_heartbeats(&self) -> Result<(), String> {
         let due_configs = self
             .db
             .list_due_heartbeat_configs()
             .map_err(|e| format!("Failed to list due heartbeats: {}", e))?;
 
-        for config in due_configs {
+        // Only process the most recent heartbeat config (highest ID)
+        // This prevents duplicate heartbeats if multiple configs exist
+        if let Some(config) = due_configs.into_iter().max_by_key(|c| c.id) {
             // Check if within active hours
             if !self.is_within_active_hours(&config) {
-                continue;
+                return Ok(());
             }
 
             let scheduler = self.clone_inner();

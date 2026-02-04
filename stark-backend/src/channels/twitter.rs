@@ -11,7 +11,7 @@ use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::models::{Channel, ChannelSettingKey};
 use crate::tools::builtin::social_media::{generate_oauth_header, TwitterCredentials};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -89,9 +89,9 @@ impl TwitterConfig {
 /// Get an API key from the database with env var fallback
 fn get_api_key(db: &Database, key_id: ApiKeyId) -> Option<String> {
     // Try database first
-    if let Ok(Some(key)) = db.get_api_key(&key_id.as_str()) {
-        if !key.is_empty() {
-            return Some(key);
+    if let Ok(Some(api_key)) = db.get_api_key(key_id.as_str()) {
+        if !api_key.api_key.is_empty() {
+            return Some(api_key.api_key);
         }
     }
 
