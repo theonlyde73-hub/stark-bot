@@ -3,9 +3,16 @@ FROM node:20-slim AS frontend-builder
 
 WORKDIR /app/stark-frontend
 
+# Copy frontend package files
 COPY stark-frontend/package*.json ./
+
+# Install dependencies
 RUN npm ci
+
+# Copy frontend source
 COPY stark-frontend/ ./
+
+# Build frontend
 RUN npm run build
 
 # Backend build stage
@@ -16,9 +23,8 @@ WORKDIR /app
 # Install build dependencies
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 
-# Copy only what's needed for the build
-COPY Cargo.toml Cargo.lock ./
-COPY stark-backend ./stark-backend
+# Copy source code
+COPY . .
 
 # Build the application
 RUN cargo build --release -p stark-backend
@@ -28,28 +34,53 @@ FROM debian:bookworm-slim
 
 WORKDIR /app
 
-# Install runtime dependencies
+# Install runtime dependencies and tools for skills
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libssl3 \
     sqlite3 \
+    curl \
+    git \
+    jq \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv (fast Python package manager for skills)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
+
+# Install GitHub CLI (gh)
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the binary
 COPY --from=backend-builder /app/target/release/stark-backend /app/
 
-# Copy the built frontend
+# Copy the built frontend (dist folder)
 COPY --from=frontend-builder /app/stark-frontend/dist /app/stark-frontend/dist
 
-# Copy config, ABIs, skills, and SOUL.md
+# Copy config directory (tokens.ron, presets, networks)
 COPY config /app/config
+
+# Copy ABIs for web3 function calls
 COPY abis /app/abis
+
+# Copy the skills directory (bundled skills loaded on boot)
 COPY skills /app/skills
+
+# Copy SOUL.md (bot personality/identity - copied to soul dir on startup)
 COPY SOUL.md /app/SOUL.md
 
-# Create directories
+# Create directories for workspace, journal, and soul
 RUN mkdir -p /app/workspace /app/journal /app/soul
 
+# Expose ports (HTTP + Gateway WebSocket)
 EXPOSE 8080
+EXPOSE 8081
 
+# Run the application
 CMD ["/app/stark-backend"]

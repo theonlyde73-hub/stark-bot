@@ -15,7 +15,6 @@ stark-frontend/dist/
 .idea/
 *.swp
 *.swo
-.claude/
 
 # Environment
 .env
@@ -40,9 +39,3 @@ Thumbs.db
 !README.md
 !SOUL.md
 !skills/*.md
-
-# Workspace (old copies/duplicates)
-workspace/
-
-# Starkbot web (old)
-starkbot-web/
