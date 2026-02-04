@@ -6,6 +6,9 @@
         endpoints: {
             "base": "https://rpc.defirelay.com/rpc/light/base",
             "mainnet": "https://rpc.defirelay.com/rpc/light/mainnet",
+            "polygon": "https://rpc.defirelay.com/rpc/light/polygon",
+            "arbitrum": "https://rpc.defirelay.com/rpc/light/arbitrum",
+            "optimism": "https://rpc.defirelay.com/rpc/light/optimism",
         },
     ),
 }

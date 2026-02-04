@@ -96,4 +96,85 @@
             name: "Wrapped BTC",
         ),
     },
+    "polygon": {
+        "MATIC": (
+            address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+            decimals: 18,
+            name: "Polygon",
+        ),
+        "WMATIC": (
+            address: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+            decimals: 18,
+            name: "Wrapped Matic",
+        ),
+        "USDC": (
+            address: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
+            decimals: 6,
+            name: "USD Coin",
+        ),
+        "USDT": (
+            address: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+            decimals: 6,
+            name: "Tether USD",
+        ),
+        "WETH": (
+            address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+            decimals: 18,
+            name: "Wrapped Ether",
+        ),
+    },
+    "arbitrum": {
+        "ETH": (
+            address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+            decimals: 18,
+            name: "Ethereum",
+        ),
+        "WETH": (
+            address: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+            decimals: 18,
+            name: "Wrapped Ether",
+        ),
+        "USDC": (
+            address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+            decimals: 6,
+            name: "USD Coin",
+        ),
+        "USDT": (
+            address: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+            decimals: 6,
+            name: "Tether USD",
+        ),
+        "ARB": (
+            address: "0x912CE59144191C1204E64559FE8253a0e49E6548",
+            decimals: 18,
+            name: "Arbitrum",
+        ),
+    },
+    "optimism": {
+        "ETH": (
+            address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+            decimals: 18,
+            name: "Ethereum",
+        ),
+        "WETH": (
+            address: "0x4200000000000000000000000000000000000006",
+            decimals: 18,
+            name: "Wrapped Ether",
+        ),
+        "USDC": (
+            address: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
+            decimals: 6,
+            name: "USD Coin",
+        ),
+        "USDT": (
+            address: "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58",
+            decimals: 6,
+            name: "Tether USD",
+        ),
+        "OP": (
+            address: "0x4200000000000000000000000000000000000042",
+            decimals: 18,
+            name: "Optimism",
+        ),
+    },
 }

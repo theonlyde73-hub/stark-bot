@@ -324,6 +324,12 @@ impl Database {
             rusqlite::params![id],
         )?;
 
+        // Delete sub_agents for the session (FK constraint lacks ON DELETE CASCADE)
+        conn.execute(
+            "DELETE FROM sub_agents WHERE parent_session_id = ?1 OR session_id = ?1",
+            rusqlite::params![id],
+        )?;
+
         // Delete the session (messages are cascade deleted via FK constraint)
         let deleted = conn.execute(
             "DELETE FROM chat_sessions WHERE id = ?1",
@@ -348,6 +354,9 @@ impl Database {
 
         // Delete all agent contexts
         conn.execute("DELETE FROM agent_contexts", [])?;
+
+        // Delete all sub_agents (FK constraint lacks ON DELETE CASCADE)
+        conn.execute("DELETE FROM sub_agents", [])?;
 
         // Count sessions before deleting
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM chat_sessions", [], |row| row.get(0))?;

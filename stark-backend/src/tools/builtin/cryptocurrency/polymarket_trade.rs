@@ -131,8 +131,19 @@ impl PolymarketTradeTool {
             "limit".to_string(),
             PropertySchema {
                 schema_type: "integer".to_string(),
-                description: "Max number of results to return (default: 10, max: 50).".to_string(),
-                default: Some(json!(10)),
+                description: "Max number of results to return (default: 5, max: 5).".to_string(),
+                default: Some(json!(5)),
+                items: None,
+                enum_values: None,
+            },
+        );
+
+        properties.insert(
+            "offset".to_string(),
+            PropertySchema {
+                schema_type: "integer".to_string(),
+                description: "Number of results to skip for pagination (default: 0).".to_string(),
+                default: Some(json!(0)),
                 items: None,
                 enum_values: None,
             },
@@ -562,15 +573,16 @@ impl PolymarketTradeTool {
     /// Search markets by keyword
     async fn search_markets(&self, params: &PolymarketParams) -> ToolResult {
         let query = params.query.as_deref().unwrap_or("");
-        let limit = params.limit.unwrap_or(10).min(50);
+        let limit = params.limit.unwrap_or(5).min(5);
+        let offset = params.offset.unwrap_or(0);
         let tag = params.tag.as_deref();
 
         let http_client = reqwest::Client::new();
 
         // Build URL with query params
         let mut url = format!(
-            "https://gamma-api.polymarket.com/events?active=true&closed=false&limit={}",
-            limit
+            "https://gamma-api.polymarket.com/events?active=true&closed=false&limit={}&offset={}",
+            limit, offset
         );
 
         if !query.is_empty() {
@@ -593,8 +605,10 @@ impl PolymarketTradeTool {
                             "query": query,
                             "tag": tag,
                             "count": markets.len(),
+                            "offset": offset,
+                            "limit": limit,
                             "markets": markets,
-                            "note": "Use token_id with place_order to trade. Use get_price to check current prices."
+                            "note": "Use token_id with place_order to trade. Use offset for next page."
                         });
                         ToolResult::success(serde_json::to_string_pretty(&result).unwrap())
                     }
@@ -607,15 +621,16 @@ impl PolymarketTradeTool {
 
     /// Get trending/popular markets
     async fn trending_markets(&self, params: &PolymarketParams) -> ToolResult {
-        let limit = params.limit.unwrap_or(10).min(50);
+        let limit = params.limit.unwrap_or(5).min(5);
+        let offset = params.offset.unwrap_or(0);
         let tag = params.tag.as_deref();
 
         let http_client = reqwest::Client::new();
 
         // Get markets sorted by volume (trending)
         let mut url = format!(
-            "https://gamma-api.polymarket.com/events?active=true&closed=false&limit={}&order=volume&ascending=false",
-            limit
+            "https://gamma-api.polymarket.com/events?active=true&closed=false&limit={}&offset={}&order=volume&ascending=false",
+            limit, offset
         );
 
         if let Some(t) = tag {
@@ -633,8 +648,10 @@ impl PolymarketTradeTool {
                             "type": "trending",
                             "tag": tag,
                             "count": markets.len(),
+                            "offset": offset,
+                            "limit": limit,
                             "markets": markets,
-                            "note": "Markets sorted by trading volume. Use token_id with place_order to trade."
+                            "note": "Markets sorted by volume. Use token_id to trade. Use offset for next page."
                         });
                         ToolResult::success(serde_json::to_string_pretty(&result).unwrap())
                     }
@@ -835,6 +852,7 @@ struct PolymarketParams {
     slug: Option<String>,
     tag: Option<String>,
     limit: Option<u32>,
+    offset: Option<u32>,
     // Trading params
     token_id: Option<String>,
     side: Option<String>,
@@ -889,6 +907,151 @@ impl Clone for PolymarketTradeTool {
         Self {
             definition: self.definition.clone(),
             client_cache: Arc::new(Mutex::new(None)), // Fresh cache for clone
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test that searching for politics markets returns sensible results
+    /// This simulates a user query like "find me politics markets on polymarket"
+    #[tokio::test]
+    async fn test_search_politics_markets() {
+        let tool = PolymarketTradeTool::new();
+        let context = ToolContext::new();
+
+        // Search for politics markets using the tag filter
+        let result = tool.execute(
+            json!({
+                "action": "search_markets",
+                "tag": "politics",
+                "limit": 10
+            }),
+            &context,
+        ).await;
+
+        // Should succeed
+        assert!(result.success, "Search should succeed. Error: {:?}", result.error);
+
+        // Parse the response
+        let response: Value = serde_json::from_str(&result.content)
+            .expect("Response should be valid JSON");
+
+        // Verify response structure
+        assert_eq!(response["status"], "success", "Status should be success");
+
+        // Should have markets array
+        let markets = response["markets"].as_array()
+            .expect("Response should contain markets array");
+
+        // Should return at least some markets (polymarket always has politics markets)
+        assert!(!markets.is_empty(), "Should return at least one politics market");
+
+        // Verify each market has expected structure
+        for market in markets {
+            // Each market should have a title
+            assert!(market.get("title").is_some(), "Market should have title");
+            let title = market["title"].as_str().unwrap();
+            assert!(!title.is_empty(), "Title should not be empty");
+
+            // Should have outcomes with token_ids for trading
+            let outcomes = market.get("outcomes")
+                .and_then(|o| o.as_array());
+            assert!(outcomes.is_some(), "Market should have outcomes: {:?}", market);
+
+            if let Some(outcomes) = outcomes {
+                for outcome in outcomes {
+                    // Each outcome should have question with tradeable outcomes
+                    if let Some(outcome_arr) = outcome.get("outcomes").and_then(|o| o.as_array()) {
+                        for tradeable in outcome_arr {
+                            // Should have name and token_id for trading
+                            assert!(tradeable.get("name").is_some(), "Outcome should have name");
+                            assert!(tradeable.get("token_id").is_some(), "Outcome should have token_id for trading");
+
+                            // Token ID should be non-empty for active markets
+                            let token_id = tradeable["token_id"].as_str().unwrap_or("");
+                            // Some outcomes may have empty token_ids if not tradeable
+                        }
+                    }
+                }
+            }
+        }
+
+        println!("Found {} politics markets", markets.len());
+        println!("First market: {}", markets[0]["title"]);
+    }
+
+    /// Test searching with a query string (like "find me politics markets")
+    #[tokio::test]
+    async fn test_search_markets_with_query() {
+        let tool = PolymarketTradeTool::new();
+        let context = ToolContext::new();
+
+        // Search using a query string similar to "find me politics markets"
+        let result = tool.execute(
+            json!({
+                "action": "search_markets",
+                "query": "politics",
+                "limit": 5
+            }),
+            &context,
+        ).await;
+
+        assert!(result.success, "Search with query should succeed. Error: {:?}", result.error);
+
+        let response: Value = serde_json::from_str(&result.content)
+            .expect("Response should be valid JSON");
+
+        assert_eq!(response["status"], "success");
+        assert_eq!(response["query"], "politics", "Query should be echoed back");
+
+        let markets = response["markets"].as_array()
+            .expect("Should have markets array");
+
+        // Politics is a major category, should have results
+        println!("Query 'politics' returned {} markets", markets.len());
+
+        // Print market titles for manual verification
+        for market in markets.iter().take(3) {
+            println!("  - {}", market["title"].as_str().unwrap_or("N/A"));
+        }
+    }
+
+    /// Test trending politics markets
+    #[tokio::test]
+    async fn test_trending_politics_markets() {
+        let tool = PolymarketTradeTool::new();
+        let context = ToolContext::new();
+
+        let result = tool.execute(
+            json!({
+                "action": "trending_markets",
+                "tag": "politics",
+                "limit": 5
+            }),
+            &context,
+        ).await;
+
+        assert!(result.success, "Trending markets should succeed. Error: {:?}", result.error);
+
+        let response: Value = serde_json::from_str(&result.content)
+            .expect("Response should be valid JSON");
+
+        assert_eq!(response["status"], "success");
+        assert_eq!(response["type"], "trending");
+
+        let markets = response["markets"].as_array()
+            .expect("Should have markets array");
+
+        // Trending markets should be sorted by volume
+        println!("Found {} trending politics markets", markets.len());
+
+        // Verify markets have volume info (used for sorting)
+        for market in markets {
+            let volume = market.get("volume");
+            assert!(volume.is_some(), "Trending market should have volume");
         }
     }
 }

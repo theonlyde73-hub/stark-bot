@@ -32,10 +32,10 @@ pub use core::{
     SetAgentSubtypeTool, SubagentStatusTool, SubagentTool, TaskFullyCompletedTool,
 };
 pub use cryptocurrency::{
-    load_networks, load_tokens, BroadcastWeb3TxTool, DecodeCalldataTool, DexScreenerTool,
-    ListQueuedWeb3TxTool, PolymarketTradeTool, RegisterSetTool, SendEthTool, ToRawAmountTool,
-    TokenLookupTool, Web3FunctionCallTool, X402AgentInvokeTool, X402FetchTool, X402PostTool,
-    X402RpcTool,
+    load_networks, load_tokens, BridgeUsdcTool, BroadcastWeb3TxTool, DecodeCalldataTool,
+    DexScreenerTool, ListQueuedWeb3TxTool, PolymarketTradeTool, RegisterSetTool, SendEthTool,
+    ToRawAmountTool, TokenLookupTool, Web3FunctionCallTool, X402AgentInvokeTool, X402FetchTool,
+    X402PostTool, X402RpcTool,
 };
 pub use social_media::{DiscordLookupTool, GithubUserTool, TwitterPostTool};
 

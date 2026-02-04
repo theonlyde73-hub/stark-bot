@@ -3,6 +3,7 @@
 //! Tools for interacting with blockchain networks, EVM transactions,
 //! token operations, x402 payment protocol, and prediction markets.
 
+mod bridge_usdc;
 mod broadcast_web3_tx;
 mod decode_calldata;
 mod dexscreener;
@@ -19,6 +20,7 @@ mod x402_fetch;
 mod x402_post;
 mod x402_rpc;
 
+pub use bridge_usdc::BridgeUsdcTool;
 pub use broadcast_web3_tx::BroadcastWeb3TxTool;
 pub use decode_calldata::DecodeCalldataTool;
 pub use dexscreener::DexScreenerTool;

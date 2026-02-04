@@ -94,6 +94,16 @@ Use `use_skill` to load detailed instructions for specific tasks. Skills provide
 
 When a skill is active, follow its instructions and call the actual tools it specifies.
 
+### Explaining Capabilities
+
+**When a user asks "what can you do with X?" or "how does X work?":**
+
+1. **Check for a skill first** - Call `manage_skills(action="list")` to see available skills
+2. **Load the relevant skill** - If one exists, call `use_skill(skill_name="X")` to get detailed instructions
+3. **Explain from the skill** - Skills contain comprehensive documentation on capabilities, parameters, and examples
+
+This ensures you give accurate, complete answers rather than guessing from memory.
+
 ## GitHub Operations
 
 When performing GitHub operations that require your username:
