@@ -230,6 +230,7 @@ async fn dispatch_email(
         text: message_content,
         message_id: Some(email.message_id.clone()),
         session_mode: None,
+        selected_network: None,
     };
 
     // Broadcast event

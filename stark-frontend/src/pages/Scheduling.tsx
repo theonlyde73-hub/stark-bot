@@ -7,12 +7,10 @@ import {
   Pause,
   RefreshCw,
   Timer,
-  Heart,
   ChevronDown,
   ChevronUp,
   CheckCircle,
   XCircle,
-  AlertCircle,
 } from 'lucide-react';
 import Card, { CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
@@ -25,19 +23,12 @@ import {
   pauseCronJob,
   resumeCronJob,
   getCronJobRuns,
-  getHeartbeatConfig,
-  updateHeartbeatConfig,
   CronJobInfo,
   CronJobRunInfo,
-  HeartbeatConfigInfo,
 } from '@/lib/api';
 
-type TabType = 'cron' | 'heartbeat';
-
 export default function Scheduling() {
-  const [activeTab, setActiveTab] = useState<TabType>('cron');
   const [cronJobs, setCronJobs] = useState<CronJobInfo[]>([]);
-  const [heartbeatConfig, setHeartbeatConfig] = useState<HeartbeatConfigInfo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -50,14 +41,10 @@ export default function Scheduling() {
     setIsLoading(true);
     setError(null);
     try {
-      const [jobs, hbConfig] = await Promise.all([
-        getCronJobs(),
-        getHeartbeatConfig(),
-      ]);
+      const jobs = await getCronJobs();
       setCronJobs(jobs);
-      setHeartbeatConfig(hbConfig);
     } catch (err) {
-      setError('Failed to load scheduling data');
+      setError('Failed to load cron jobs');
     } finally {
       setIsLoading(false);
     }
@@ -68,7 +55,7 @@ export default function Scheduling() {
       <div className="p-8 flex items-center justify-center">
         <div className="flex items-center gap-3">
           <div className="w-6 h-6 border-2 border-stark-500 border-t-transparent rounded-full animate-spin" />
-          <span className="text-slate-400">Loading scheduling...</span>
+          <span className="text-slate-400">Loading cron jobs...</span>
         </div>
       </div>
     );
@@ -78,9 +65,15 @@ export default function Scheduling() {
     <div className="p-8">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-white mb-2">Scheduling</h1>
-          <p className="text-slate-400">Manage cron jobs and heartbeat automation</p>
+          <h1 className="text-2xl font-bold text-white mb-2">Cron Jobs</h1>
+          <p className="text-slate-400">Schedule automated tasks</p>
         </div>
+        {!showCreateForm && (
+          <Button onClick={() => setShowCreateForm(true)}>
+            <Plus className="w-4 h-4 mr-2" />
+            Create Cron Job
+          </Button>
+        )}
       </div>
 
       {error && (
@@ -89,50 +82,13 @@ export default function Scheduling() {
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="flex gap-2 mb-6">
-        <button
-          onClick={() => setActiveTab('cron')}
-          className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
-            activeTab === 'cron'
-              ? 'bg-stark-500 text-white'
-              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-          }`}
-        >
-          <Clock className="w-4 h-4" />
-          Cron Jobs
-          <span className="ml-1 px-2 py-0.5 text-xs rounded-full bg-slate-800">
-            {cronJobs.length}
-          </span>
-        </button>
-        <button
-          onClick={() => setActiveTab('heartbeat')}
-          className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
-            activeTab === 'heartbeat'
-              ? 'bg-stark-500 text-white'
-              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-          }`}
-        >
-          <Heart className="w-4 h-4" />
-          Heartbeat
-        </button>
-      </div>
-
-      {activeTab === 'cron' ? (
-        <CronJobsTab
-          jobs={cronJobs}
-          setJobs={setCronJobs}
-          showCreateForm={showCreateForm}
-          setShowCreateForm={setShowCreateForm}
-          setError={setError}
-        />
-      ) : (
-        <HeartbeatTab
-          config={heartbeatConfig}
-          setConfig={setHeartbeatConfig}
-          setError={setError}
-        />
-      )}
+      <CronJobsTab
+        jobs={cronJobs}
+        setJobs={setCronJobs}
+        showCreateForm={showCreateForm}
+        setShowCreateForm={setShowCreateForm}
+        setError={setError}
+      />
     </div>
   );
 }
@@ -288,7 +244,7 @@ function CronJobsTab({ jobs, setJobs, showCreateForm, setShowCreateForm, setErro
   return (
     <div className="space-y-4">
       {/* Create Form */}
-      {showCreateForm ? (
+      {showCreateForm && (
         <Card>
           <CardHeader>
             <CardTitle>Create Cron Job</CardTitle>
@@ -395,11 +351,6 @@ function CronJobsTab({ jobs, setJobs, showCreateForm, setShowCreateForm, setErro
             </form>
           </CardContent>
         </Card>
-      ) : (
-        <Button onClick={() => setShowCreateForm(true)}>
-          <Plus className="w-4 h-4 mr-2" />
-          Create Cron Job
-        </Button>
       )}
 
       {/* Job List */}
@@ -542,209 +493,5 @@ function CronJobsTab({ jobs, setJobs, showCreateForm, setShowCreateForm, setErro
         </Card>
       )}
     </div>
-  );
-}
-
-interface HeartbeatTabProps {
-  config: HeartbeatConfigInfo | null;
-  setConfig: React.Dispatch<React.SetStateAction<HeartbeatConfigInfo | null>>;
-  setError: React.Dispatch<React.SetStateAction<string | null>>;
-}
-
-function HeartbeatTab({ config, setConfig, setError }: HeartbeatTabProps) {
-  const [isSaving, setIsSaving] = useState(false);
-  const [formData, setFormData] = useState({
-    interval_minutes: config?.interval_minutes || 60,
-    target: config?.target || '',
-    active_hours_start: config?.active_hours_start || '09:00',
-    active_hours_end: config?.active_hours_end || '17:00',
-    active_days: config?.active_days || 'mon,tue,wed,thu,fri',
-    enabled: config?.enabled || false,
-  });
-
-  useEffect(() => {
-    if (config) {
-      setFormData({
-        interval_minutes: config.interval_minutes,
-        target: config.target || '',
-        active_hours_start: config.active_hours_start || '09:00',
-        active_hours_end: config.active_hours_end || '17:00',
-        active_days: config.active_days || 'mon,tue,wed,thu,fri',
-        enabled: config.enabled,
-      });
-    }
-  }, [config]);
-
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSaving(true);
-    setError(null);
-
-    try {
-      const updated = await updateHeartbeatConfig(formData);
-      setConfig(updated);
-    } catch (err) {
-      setError('Failed to update heartbeat config');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const toggleEnabled = async () => {
-    setIsSaving(true);
-    try {
-      const updated = await updateHeartbeatConfig({
-        enabled: !formData.enabled,
-      });
-      setConfig(updated);
-      setFormData((prev) => ({ ...prev, enabled: !prev.enabled }));
-    } catch (err) {
-      setError('Failed to toggle heartbeat');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
-            <Heart className="w-5 h-5 text-red-400" />
-            Heartbeat Configuration
-          </CardTitle>
-          <button
-            onClick={toggleEnabled}
-            disabled={isSaving}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-              formData.enabled ? 'bg-stark-500' : 'bg-slate-600'
-            }`}
-          >
-            <span
-              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                formData.enabled ? 'translate-x-6' : 'translate-x-1'
-              }`}
-            />
-          </button>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSave} className="space-y-6">
-          <div className="bg-slate-800/50 rounded-lg p-4">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-stark-400 mt-0.5" />
-              <div>
-                <p className="text-sm text-slate-300">
-                  Heartbeat sends periodic check-in messages to your agent, prompting it to
-                  review pending tasks, notifications, and scheduled items.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                Interval (minutes)
-              </label>
-              <input
-                type="number"
-                min="1"
-                value={formData.interval_minutes}
-                onChange={(e) => setFormData({ ...formData, interval_minutes: parseInt(e.target.value) || 60 })}
-                className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-stark-500 focus:border-transparent"
-              />
-            </div>
-            <Input
-              label="Target (optional)"
-              value={formData.target}
-              onChange={(e) => setFormData({ ...formData, target: e.target.value })}
-              placeholder="Channel or identity to target"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                Active Hours Start
-              </label>
-              <input
-                type="time"
-                value={formData.active_hours_start}
-                onChange={(e) => setFormData({ ...formData, active_hours_start: e.target.value })}
-                className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-stark-500 focus:border-transparent"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                Active Hours End
-              </label>
-              <input
-                type="time"
-                value={formData.active_hours_end}
-                onChange={(e) => setFormData({ ...formData, active_hours_end: e.target.value })}
-                className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-stark-500 focus:border-transparent"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
-              Active Days
-            </label>
-            <div className="flex flex-wrap gap-2">
-              {['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].map((day) => {
-                const isActive = formData.active_days.toLowerCase().includes(day);
-                return (
-                  <button
-                    key={day}
-                    type="button"
-                    onClick={() => {
-                      const days = formData.active_days.split(',').map((d) => d.trim().toLowerCase());
-                      const newDays = isActive
-                        ? days.filter((d) => d !== day)
-                        : [...days, day];
-                      setFormData({ ...formData, active_days: newDays.join(',') });
-                    }}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                      isActive
-                        ? 'bg-stark-500 text-white'
-                        : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
-                    }`}
-                  >
-                    {day.charAt(0).toUpperCase() + day.slice(1)}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {config && (
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <p className="text-slate-500">Last heartbeat</p>
-                <p className="text-slate-300">
-                  {config.last_beat_at
-                    ? new Date(config.last_beat_at).toLocaleString()
-                    : 'Never'}
-                </p>
-              </div>
-              <div>
-                <p className="text-slate-500">Next heartbeat</p>
-                <p className="text-slate-300">
-                  {config.next_beat_at
-                    ? new Date(config.next_beat_at).toLocaleString()
-                    : 'Not scheduled'}
-                </p>
-              </div>
-            </div>
-          )}
-
-          <Button type="submit" isLoading={isSaving}>
-            Save Configuration
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
   );
 }

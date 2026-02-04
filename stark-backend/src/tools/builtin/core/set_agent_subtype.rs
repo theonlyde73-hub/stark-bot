@@ -68,6 +68,7 @@ impl SetAgentSubtypeTool {
             AgentSubtype::Finance => {
                 "💰 Finance toolbox activated.\n\n\
                  Tools now available:\n\
+                 • select_web3_network - Select the active blockchain network (mainnet/base/polygon/etc.)\n\
                  • web3_tx - Execute blockchain transactions\n\
                  • web3_function_call - Read smart contract data (use presets like erc20_balance)\n\
                  • token_lookup - Get token info and addresses\n\
@@ -75,8 +76,12 @@ impl SetAgentSubtypeTool {
                  • x402_fetch - Payment protocol fetch operations\n\
                  • register_set - Store transaction data safely\n\
                  • ask_user - Ask user for clarification (e.g., which network)\n\n\
+                 ⚠️ IMPORTANT: Call select_web3_network FIRST when:\n\
+                 • A skill instructs you to select a specific network\n\
+                 • The user mentions a specific chain (Base, Polygon, mainnet)\n\
+                 • Working with chain-specific tokens (e.g., Starkbot on Base, Polymarket on Polygon)\n\n\
                  Note: wallet_address is an intrinsic register - always available.\n\n\
-                 Skills: swap, transfer, bankr, token_price, weth, local_wallet"
+                 Skills: swap, transfer, bankr, token_price, weth, local_wallet, polymarket_trading"
                     .to_string()
             }
             AgentSubtype::CodeEngineer => {

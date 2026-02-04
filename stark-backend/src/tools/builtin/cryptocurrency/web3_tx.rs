@@ -12,7 +12,7 @@
 //! All RPC calls go through defirelay.com with x402 payments.
 
 use crate::tools::registry::Tool;
-use crate::tools::rpc_config::{resolve_rpc_from_context, ResolvedRpcConfig};
+use crate::tools::rpc_config::{resolve_rpc_from_context, Network, ResolvedRpcConfig};
 use crate::tools::types::{
     PropertySchema, ToolContext, ToolDefinition, ToolGroup, ToolInputSchema, ToolResult,
 };
@@ -25,6 +25,7 @@ use ethers::types::transaction::eip2718::TypedTransaction;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::str::FromStr;
 use uuid::Uuid;
 
 /// Signed transaction result with all details needed for queuing
@@ -55,10 +56,10 @@ impl SendEthTool {
             "network".to_string(),
             PropertySchema {
                 schema_type: "string".to_string(),
-                description: "Network: 'base' or 'mainnet'".to_string(),
-                default: Some(json!("base")),
+                description: "Network: 'base', 'mainnet', or 'polygon'. If not specified, uses the user's selected network from the UI.".to_string(),
+                default: None,  // No default - will use context's selected_network
                 items: None,
-                enum_values: Some(vec!["base".to_string(), "mainnet".to_string()]),
+                enum_values: Some(vec!["base".to_string(), "mainnet".to_string(), "polygon".to_string()]),
             },
         );
 
@@ -289,9 +290,8 @@ impl ResolvedTxData {
 /// Send ETH parameters
 #[derive(Debug, Deserialize)]
 struct SendEthParams {
-    /// Network
-    #[serde(default = "default_network")]
-    network: String,
+    /// Network - if not specified, uses context's selected_network or defaults to Base
+    network: Option<String>,
 }
 
 /// Resolved transfer data read from register
@@ -302,8 +302,15 @@ struct ResolvedTxData {
     source: String,
 }
 
-fn default_network() -> String {
-    "base".to_string()
+/// Resolve the network from params, context, or default
+fn resolve_network(param_network: Option<&str>, context_network: Option<&str>) -> Result<Network, String> {
+    // Priority: explicit param > context selected > default (Base)
+    let network_str = param_network
+        .or(context_network)
+        .unwrap_or("base");
+
+    Network::from_str(network_str)
+        .map_err(|_| format!("Invalid network '{}'. Must be one of: base, mainnet, polygon", network_str))
 }
 
 #[async_trait]
@@ -320,6 +327,18 @@ impl Tool for SendEthTool {
             Err(e) => return ToolResult::error(format!("Invalid parameters: {}", e)),
         };
 
+        // Resolve network: use provided network, or context's selected_network, or default to Base
+        let network = match resolve_network(
+            params.network.as_deref(),
+            context.selected_network.as_deref()
+        ) {
+            Ok(n) => n,
+            Err(e) => return ToolResult::error(e),
+        };
+
+        log::info!("[send_eth] Using network: {} (from param: {:?}, context: {:?})",
+            network, params.network, context.selected_network);
+
         // Resolve transfer data from individual registers (send_to, amount_raw)
         let tx_data = match ResolvedTxData::from_registers(context) {
             Ok(d) => d,
@@ -330,11 +349,6 @@ impl Tool for SendEthTool {
             "[send_eth] Resolved: to={}, value={}",
             tx_data.to, tx_data.value
         );
-
-        // Validate network
-        if params.network != "base" && params.network != "mainnet" {
-            return ToolResult::error("Network must be 'base' or 'mainnet'");
-        }
 
         // Check if we're in a gateway channel without rogue mode
         let is_gateway_channel = context.channel_type
@@ -363,11 +377,11 @@ impl Tool for SendEthTool {
         };
 
         // Resolve RPC configuration
-        let rpc_config = resolve_rpc_from_context(&context.extra, &params.network);
+        let rpc_config = resolve_rpc_from_context(&context.extra, network.as_ref());
 
         // Sign the ETH transfer (data is always "0x", gas is 21000 for simple transfer)
         match Self::sign_eth_transfer(
-            &params.network,
+            network.as_ref(),
             &tx_data.to,
             &tx_data.value,
             &rpc_config,
@@ -423,7 +437,7 @@ impl Tool for SendEthTool {
                     "max_priority_fee_per_gas": signed.max_priority_fee_per_gas
                 }))
             }
-            Err(e) => ToolResult::error(Self::parse_rpc_error(&e, &tx_data, &params.network)),
+            Err(e) => ToolResult::error(Self::parse_rpc_error(&e, &tx_data, network.as_ref())),
         }
     }
 }

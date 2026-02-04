@@ -70,7 +70,8 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("/config", web::get().to(get_heartbeat_config))
             .route("/config", web::put().to(update_heartbeat_config))
             .route("/config/{channel_id}", web::get().to(get_channel_heartbeat_config))
-            .route("/config/{channel_id}", web::put().to(update_channel_heartbeat_config)),
+            .route("/config/{channel_id}", web::put().to(update_channel_heartbeat_config))
+            .route("/pulse_once", web::post().to(pulse_heartbeat)),
     );
 }
 
@@ -563,6 +564,42 @@ async fn get_channel_heartbeat_config(
             success: false,
             config: None,
             error: Some(format!("Database error: {}", e)),
+        }),
+    }
+}
+
+/// Manually trigger a heartbeat pulse
+async fn pulse_heartbeat(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    scheduler: web::Data<Arc<Scheduler>>,
+) -> HttpResponse {
+    if let Err(resp) = validate_session_for_heartbeat(&state, &req) {
+        return resp;
+    }
+
+    // Get or create global heartbeat config
+    let config = match state.db.get_or_create_heartbeat_config(None) {
+        Ok(c) => c,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(HeartbeatConfigResponse {
+                success: false,
+                config: None,
+                error: Some(format!("Database error: {}", e)),
+            });
+        }
+    };
+
+    match scheduler.run_heartbeat_now(config.id).await {
+        Ok(_) => HttpResponse::Ok().json(HeartbeatConfigResponse {
+            success: true,
+            config: Some(config),
+            error: None,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(HeartbeatConfigResponse {
+            success: false,
+            config: None,
+            error: Some(e),
         }),
     }
 }

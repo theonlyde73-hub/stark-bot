@@ -78,11 +78,36 @@ When you call a tool:
 
 | Toolbox | When to Use | Key Tools Unlocked |
 |---------|-------------|--------------------|
-| `finance` | Crypto transactions, swaps, balances, DeFi | x402_rpc, web3_function_call, token_lookup, register_set, ask_user |
+| `finance` | Crypto transactions, swaps, balances, DeFi | select_web3_network, x402_rpc, web3_function_call, token_lookup, register_set, ask_user |
 | `code_engineer` | Code editing, git, testing, debugging | grep, glob, edit_file, git, exec |
 | `secretary` | Social media, messaging, scheduling | agent_send, moltx tools |
 
 **After selecting a toolbox:** Core tools become available (read_file, list_files, web_fetch, use_skill) plus toolbox-specific tools.
+
+## 🔗 Network Selection (Finance Toolbox)
+
+**IMPORTANT: When using the finance toolbox, select the correct network BEFORE performing operations.**
+
+Call `select_web3_network` when:
+- A skill instructs you to select a specific network (e.g., "select polygon" for Polymarket)
+- The user mentions a specific chain: "on Base", "on Polygon", "on mainnet"
+- Working with tokens that exist on a specific network
+
+### Network-Specific Tokens
+| Token/Protocol | Network | Action |
+|----------------|---------|--------|
+| Starkbot (STARKBOT) | Base | `select_web3_network(network="base")` |
+| Polymarket trading | Polygon | `select_web3_network(network="polygon")` |
+| Most DeFi (Uniswap, Aave) | Mainnet | `select_web3_network(network="mainnet")` |
+
+### Example:
+```
+User: "What's my Starkbot balance?"
+1. set_agent_subtype(subtype="finance")
+2. select_web3_network(network="base")  ← Starkbot is on Base
+3. use_skill(skill_name="local_wallet")
+4. token_lookup, web3_function_call, etc.
+```
 
 ## Skills
 

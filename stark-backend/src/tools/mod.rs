@@ -50,6 +50,8 @@ fn register_all_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(builtin::TokenLookupTool::new()));
     registry.register(Arc::new(builtin::ToRawAmountTool::new()));
     registry.register(Arc::new(builtin::RegisterSetTool::new()));
+    // Network selection for chain-specific operations
+    registry.register(Arc::new(builtin::SelectWeb3NetworkTool::new()));
     // Polymarket prediction market trading
     registry.register(Arc::new(builtin::PolymarketTradeTool::new()));
     // DexScreener market data

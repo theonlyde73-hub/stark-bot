@@ -60,6 +60,7 @@ impl Database {
                 waiting_for_user_context: None, // Reset on load
                 task_queue: TaskQueue::default(), // Reset on load
                 planner_completed: false,  // Reset on load
+                selected_network: None,    // Reset on load
             })
         });
 

@@ -131,8 +131,8 @@ impl PolymarketTradeTool {
             "limit".to_string(),
             PropertySchema {
                 schema_type: "integer".to_string(),
-                description: "Max number of results to return (default: 5, max: 5).".to_string(),
-                default: Some(json!(5)),
+                description: "Max results for search/trending (default: 10, max: 20).".to_string(),
+                default: Some(json!(10)),
                 items: None,
                 enum_values: None,
             },
@@ -176,7 +176,7 @@ impl PolymarketTradeTool {
             "price".to_string(),
             PropertySchema {
                 schema_type: "number".to_string(),
-                description: "Limit price per share (0.01 to 0.99, e.g., 0.65 = 65 cents). Required for place_order.".to_string(),
+                description: "Limit price 0.01-0.99 (auto-rounded to 3 decimals). 0.65 = 65% probability.".to_string(),
                 default: None,
                 items: None,
                 enum_values: None,
@@ -187,7 +187,7 @@ impl PolymarketTradeTool {
             "size".to_string(),
             PropertySchema {
                 schema_type: "number".to_string(),
-                description: "Number of shares to buy/sell (e.g., 100 = $100 max payout). Required for place_order.".to_string(),
+                description: "Number of shares (e.g., 100 shares @ $0.65 = $65 cost, $100 payout if correct).".to_string(),
                 default: None,
                 items: None,
                 enum_values: None,
@@ -312,8 +312,12 @@ impl PolymarketTradeTool {
             None => return ToolResult::error("side is required for place_order (buy or sell)"),
         };
 
+        // Price must be between 0.001 and 0.999, rounded to 3 decimal places (tick size 0.001)
         let price = match params.price {
-            Some(p) if p > 0.0 && p < 1.0 => p,
+            Some(p) if p > 0.0 && p < 1.0 => {
+                // Round to 3 decimal places (Polymarket tick size)
+                (p * 1000.0).round() / 1000.0
+            },
             Some(p) => return ToolResult::error(format!(
                 "price must be between 0.01 and 0.99, got {}. Price represents probability (0.65 = 65%)",
                 p
@@ -321,8 +325,12 @@ impl PolymarketTradeTool {
             None => return ToolResult::error("price is required for place_order"),
         };
 
+        // Size is in shares (whole numbers recommended, 2 decimal places max)
         let size = match params.size {
-            Some(s) if s > 0.0 => s,
+            Some(s) if s > 0.0 => {
+                // Round to 2 decimal places
+                (s * 100.0).round() / 100.0
+            },
             Some(s) => return ToolResult::error(format!("size must be positive, got {}", s)),
             None => return ToolResult::error("size is required for place_order"),
         };
@@ -570,10 +578,10 @@ impl PolymarketTradeTool {
 
     // ==================== DISCOVERY METHODS ====================
 
-    /// Search markets by keyword
+    /// Search markets by keyword (lightweight summaries only)
     async fn search_markets(&self, params: &PolymarketParams) -> ToolResult {
         let query = params.query.as_deref().unwrap_or("");
-        let limit = params.limit.unwrap_or(5).min(5);
+        let limit = params.limit.unwrap_or(10).min(20);
         let offset = params.offset.unwrap_or(0);
         let tag = params.tag.as_deref();
 
@@ -597,8 +605,8 @@ impl PolymarketTradeTool {
             Ok(response) => {
                 match response.json::<Value>().await {
                     Ok(events) => {
-                        // Transform events into a more useful format
-                        let markets = Self::transform_events_to_markets(&events);
+                        // Use lightweight summaries (no outcomes) to keep context small
+                        let markets = Self::transform_events_to_summaries(&events);
 
                         let result = json!({
                             "status": "success",
@@ -608,7 +616,7 @@ impl PolymarketTradeTool {
                             "offset": offset,
                             "limit": limit,
                             "markets": markets,
-                            "note": "Use token_id with place_order to trade. Use offset for next page."
+                            "note": "Use get_market with slug to see outcomes and token_ids for trading."
                         });
                         ToolResult::success(serde_json::to_string_pretty(&result).unwrap())
                     }
@@ -619,9 +627,9 @@ impl PolymarketTradeTool {
         }
     }
 
-    /// Get trending/popular markets
+    /// Get trending/popular markets (lightweight summaries only)
     async fn trending_markets(&self, params: &PolymarketParams) -> ToolResult {
-        let limit = params.limit.unwrap_or(5).min(5);
+        let limit = params.limit.unwrap_or(10).min(20);
         let offset = params.offset.unwrap_or(0);
         let tag = params.tag.as_deref();
 
@@ -641,7 +649,8 @@ impl PolymarketTradeTool {
             Ok(response) => {
                 match response.json::<Value>().await {
                     Ok(events) => {
-                        let markets = Self::transform_events_to_markets(&events);
+                        // Use lightweight summaries (no outcomes) to keep context small
+                        let markets = Self::transform_events_to_summaries(&events);
 
                         let result = json!({
                             "status": "success",
@@ -651,7 +660,7 @@ impl PolymarketTradeTool {
                             "offset": offset,
                             "limit": limit,
                             "markets": markets,
-                            "note": "Markets sorted by volume. Use token_id to trade. Use offset for next page."
+                            "note": "Use get_market with slug to see outcomes and token_ids for trading."
                         });
                         ToolResult::success(serde_json::to_string_pretty(&result).unwrap())
                     }
@@ -774,6 +783,36 @@ impl PolymarketTradeTool {
     // ==================== HELPER METHODS ====================
 
     /// Transform Gamma API events response into a cleaner market list
+    /// Transform events to lightweight market summaries (no outcomes - for listing)
+    fn transform_events_to_summaries(events: &Value) -> Vec<Value> {
+        let empty_vec = vec![];
+        let events_arr = events.as_array().unwrap_or(&empty_vec);
+
+        events_arr.iter().filter_map(|event| {
+            Self::transform_event_summary(event)
+        }).collect()
+    }
+
+    /// Transform a single event into a lightweight summary (no outcomes)
+    fn transform_event_summary(event: &Value) -> Option<Value> {
+        let title = event.get("title")?.as_str()?;
+        let slug = event.get("slug").and_then(|s| s.as_str()).unwrap_or("");
+        let description = event.get("description").and_then(|d| d.as_str()).unwrap_or("");
+        let end_date = event.get("endDate").and_then(|d| d.as_str()).unwrap_or("");
+        let volume = event.get("volume").and_then(|v| v.as_str()).unwrap_or("0");
+        let liquidity = event.get("liquidity").and_then(|l| l.as_str()).unwrap_or("0");
+
+        Some(json!({
+            "title": title,
+            "slug": slug,
+            "description": description.chars().take(150).collect::<String>(),
+            "end_date": end_date,
+            "volume": volume,
+            "liquidity": liquidity
+        }))
+    }
+
+    /// Transform events to full market info (with outcomes - for single market view)
     fn transform_events_to_markets(events: &Value) -> Vec<Value> {
         let empty_vec = vec![];
         let events_arr = events.as_array().unwrap_or(&empty_vec);
@@ -783,7 +822,7 @@ impl PolymarketTradeTool {
         }).collect()
     }
 
-    /// Transform a single event into market info
+    /// Transform a single event into full market info (with outcomes)
     fn transform_single_event(event: &Value) -> Option<Value> {
         let title = event.get("title")?.as_str()?;
         let slug = event.get("slug").and_then(|s| s.as_str()).unwrap_or("");

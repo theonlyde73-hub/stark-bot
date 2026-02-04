@@ -204,6 +204,7 @@ impl EventHandler for DiscordHandler {
                         text: text_with_hint,
                         message_id: Some(msg.id.to_string()),
                         session_mode: None,
+                        selected_network: None,
                     };
 
                     // Continue to dispatch below with this normalized message
@@ -249,6 +250,7 @@ impl EventHandler for DiscordHandler {
             text,
             message_id: Some(msg.id.to_string()),
             session_mode: None,
+            selected_network: None,
         };
 
         self.dispatch_and_respond(&ctx, &msg, normalized, &user_name).await;

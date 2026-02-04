@@ -650,7 +650,13 @@ impl MessageDispatcher {
             .with_session(session.id)
             .with_workspace(workspace_dir.clone())
             .with_broadcaster(self.broadcaster.clone())
-            .with_database(self.db.clone());
+            .with_database(self.db.clone())
+            .with_selected_network(message.selected_network.clone());
+
+        // Log selected network if present
+        if let Some(ref network) = message.selected_network {
+            log::info!("[DISPATCH] Selected network from UI: {}", network);
+        }
 
         // Add SubAgentManager for spawning background AI agents
         if let Some(ref manager) = self.subagent_manager {
@@ -913,6 +919,13 @@ impl MessageDispatcher {
                 Orchestrator::new(original_message.text.clone())
             }
         };
+
+        // Update the selected network from the current message
+        // This ensures the agent uses the network the user has selected in the UI
+        if let Some(ref network) = original_message.selected_network {
+            orchestrator.context_mut().selected_network = Some(network.clone());
+            log::info!("[MULTI_AGENT] Selected network set to: {}", network);
+        }
 
         // Broadcast initial mode
         let initial_mode = orchestrator.current_mode();

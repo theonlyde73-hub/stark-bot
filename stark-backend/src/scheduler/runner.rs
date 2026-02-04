@@ -206,6 +206,7 @@ impl Scheduler {
             text: message_text,
             message_id: Some(format!("cron-run-{}", started_at.timestamp())),
             session_mode: Some(job.session_mode.clone()),
+            selected_network: None,
         };
 
         // Execute the job
@@ -392,6 +393,15 @@ impl Scheduler {
 
         log::info!("Executing heartbeat (config_id: {})", config.id);
 
+        // IMPORTANT: Calculate and set next_beat_at BEFORE execution to prevent race conditions
+        // where the same heartbeat could be picked up twice if execution takes longer than poll interval
+        let next_beat = now + Duration::minutes(config.interval_minutes as i64);
+        let next_beat_str = next_beat.to_rfc3339();
+        if let Err(e) = self.db.update_heartbeat_next_beat(config.id, &next_beat_str) {
+            log::error!("Failed to update heartbeat next_beat_at: {}", e);
+            // Continue anyway - the heartbeat should still run
+        }
+
         // Broadcast heartbeat start event
         self.broadcaster.broadcast(GatewayEvent::custom(
             "heartbeat_started",
@@ -415,16 +425,14 @@ impl Scheduler {
             text: message_text,
             message_id: Some(format!("heartbeat-{}", now.timestamp())),
             session_mode: Some("isolated".to_string()),
+            selected_network: None,
         };
 
         // Execute the heartbeat
         let result = self.dispatcher.dispatch(normalized).await;
 
-        // Calculate next heartbeat time
-        let next_beat = now + Duration::minutes(config.interval_minutes as i64);
-        let next_beat_str = next_beat.to_rfc3339();
-
-        // Update heartbeat status
+        // Note: next_beat_at was already set at the start to prevent race conditions
+        // Update last_beat_at with final execution time
         self.db
             .update_heartbeat_last_beat(config.id, &now_str, &next_beat_str)
             .map_err(|e| format!("Failed to update heartbeat status: {}", e))?;
@@ -460,5 +468,18 @@ impl Scheduler {
         self.execute_cron_job(&job).await?;
 
         Ok(format!("Job '{}' executed successfully", job.name))
+    }
+
+    /// Manually trigger a heartbeat (force pulse)
+    pub async fn run_heartbeat_now(&self, config_id: i64) -> Result<String, String> {
+        let config = self
+            .db
+            .get_heartbeat_config_by_id(config_id)
+            .map_err(|e| format!("Database error: {}", e))?
+            .ok_or_else(|| format!("Heartbeat config not found: {}", config_id))?;
+
+        self.execute_heartbeat(&config).await?;
+
+        Ok("Heartbeat pulse executed successfully".to_string())
     }
 }

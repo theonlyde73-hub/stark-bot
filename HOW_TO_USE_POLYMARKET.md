@@ -371,13 +371,15 @@ The SDK handles L2 authentication automatically:
 ```
 You: "What's my Polymarket balance?"
 
-Bot: Your Polymarket wallet (0x1234...abcd) has:
+Bot: [First selects Polygon network with select_web3_network]
+     Your Polymarket wallet (0x1234...abcd) has:
      - USDC Balance: 150.50
      - Allowances: CTF Exchange approved
 
 You: "Find prediction markets about the Fed interest rate"
 
-Bot: Found 3 active markets:
+Bot: [Network already set to Polygon]
+     Found 3 active markets:
      1. "Fed rate cut in March 2025" - YES: $0.35, NO: $0.65
      2. "Fed holds rates steady Q1" - YES: $0.72, NO: $0.28
      3. "Fed rate above 5% end of 2025" - YES: $0.15, NO: $0.85

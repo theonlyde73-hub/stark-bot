@@ -181,6 +181,12 @@ impl Orchestrator {
             self.context.subtype.label()
         ));
 
+        // Add selected network - this is the network the user has selected in the UI
+        // The agent should use this for all web3 operations unless the user explicitly specifies otherwise
+        if let Some(ref network) = self.context.selected_network {
+            summary.push_str(&format!("**Selected Network**: {} (use this for web3 tool calls unless user explicitly specifies a different network)\n\n", network));
+        }
+
         // Add notes (capped, most recent)
         if !self.context.exploration_notes.is_empty() {
             summary.push_str("### Notes\n\n");

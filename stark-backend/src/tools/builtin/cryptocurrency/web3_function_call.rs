@@ -11,10 +11,11 @@
 use super::web3_tx::parse_u256;
 use crate::tools::presets::{get_web3_preset, list_web3_presets};
 use crate::tools::registry::Tool;
-use crate::tools::rpc_config::{resolve_rpc_from_context, ResolvedRpcConfig};
+use crate::tools::rpc_config::{resolve_rpc_from_context, Network, ResolvedRpcConfig};
 use crate::tools::types::{
     PropertySchema, ToolContext, ToolDefinition, ToolGroup, ToolInputSchema, ToolResult,
 };
+use std::str::FromStr;
 use crate::tx_queue::QueuedTransaction;
 use crate::x402::X402EvmRpc;
 use async_trait::async_trait;
@@ -129,10 +130,10 @@ impl Web3FunctionCallTool {
             "network".to_string(),
             PropertySchema {
                 schema_type: "string".to_string(),
-                description: "Network: 'base' or 'mainnet'".to_string(),
-                default: Some(json!("base")),
+                description: "Network: 'base', 'mainnet', or 'polygon'. If not specified, uses the user's selected network from the UI.".to_string(),
+                default: None,  // No default - will use context's selected_network
                 items: None,
-                enum_values: Some(vec!["base".to_string(), "mainnet".to_string()]),
+                enum_values: Some(vec!["base".to_string(), "mainnet".to_string(), "polygon".to_string()]),
             },
         );
 
@@ -486,8 +487,8 @@ struct Web3FunctionCallParams {
     params: Vec<Value>,
     #[serde(default = "default_value")]
     value: String,
-    #[serde(default = "default_network")]
-    network: String,
+    /// Network for the call. If not specified, uses context's selected_network or defaults to Base
+    network: Option<String>,
     #[serde(default)]
     call_only: bool,
 }
@@ -496,8 +497,15 @@ fn default_value() -> String {
     "0".to_string()
 }
 
-fn default_network() -> String {
-    "base".to_string()
+/// Resolve the network from params, context, or default
+fn resolve_network(param_network: Option<&str>, context_network: Option<&str>) -> Result<Network, String> {
+    // Priority: explicit param > context selected > default (Base)
+    let network_str = param_network
+        .or(context_network)
+        .unwrap_or("base");
+
+    Network::from_str(network_str)
+        .map_err(|_| format!("Invalid network '{}'. Must be one of: base, mainnet, polygon", network_str))
 }
 
 #[async_trait]
@@ -512,10 +520,17 @@ impl Tool for Web3FunctionCallTool {
             Err(e) => return ToolResult::error(format!("Invalid parameters: {}", e)),
         };
 
-        // Validate network
-        if params.network != "base" && params.network != "mainnet" {
-            return ToolResult::error("Network must be 'base' or 'mainnet'");
-        }
+        // Resolve network: use provided network, or context's selected_network, or default to Base
+        let network = match resolve_network(
+            params.network.as_deref(),
+            context.selected_network.as_deref()
+        ) {
+            Ok(n) => n,
+            Err(e) => return ToolResult::error(e),
+        };
+
+        log::info!("[WEB3_FUNCTION_CALL] Using network: {} (from param: {:?}, context: {:?})",
+            network, params.network, context.selected_network);
 
         // Resolve preset or use direct params
         let (abi_name, contract_addr, function_name, call_params, value) = if let Some(ref preset_name) = params.preset {
@@ -548,12 +563,12 @@ impl Tool for Web3FunctionCallTool {
                 }
             } else {
                 // Use hardcoded contract for network
-                match preset.contracts.get(&params.network) {
+                match preset.contracts.get(network.as_ref()) {
                     Some(c) => c.clone(),
                     None => {
                         return ToolResult::error(format!(
                             "Preset '{}' has no contract for network '{}'",
-                            preset_name, params.network
+                            preset_name, network
                         ));
                     }
                 }
@@ -670,7 +685,7 @@ impl Tool for Web3FunctionCallTool {
                     To check YOUR token balance, use the erc20_balance preset which automatically uses your wallet address:\n\
                     {{\n  \"preset\": \"erc20_balance\",\n  \"network\": \"{}\",\n  \"call_only\": true\n}}\n\n\
                     Make sure to first set the token_address register using token_lookup.",
-                    params.network
+                    network
                 ));
             }
         }
@@ -709,16 +724,16 @@ impl Tool for Web3FunctionCallTool {
         }
 
         // Resolve RPC configuration from context (respects custom RPC settings)
-        let rpc_config = resolve_rpc_from_context(&context.extra, &params.network);
+        let rpc_config = resolve_rpc_from_context(&context.extra, network.as_ref());
 
         log::info!(
             "[web3_function_call] {}::{}({:?}) on {} (call_only={}, rpc={})",
-            abi_name, function_name, call_params, params.network, params.call_only, rpc_config.url
+            abi_name, function_name, call_params, network, params.call_only, rpc_config.url
         );
 
         if params.call_only {
             // Read-only call
-            match Self::call_function(&params.network, contract, calldata, &rpc_config).await {
+            match Self::call_function(network.as_ref(), contract, calldata, &rpc_config).await {
                 Ok(result) => {
                     let decoded = self.decode_return(function, &result)
                         .unwrap_or_else(|_| json!(format!("0x{}", hex::encode(&result))));
@@ -771,7 +786,7 @@ impl Tool for Web3FunctionCallTool {
 
             // Sign the transaction (but don't broadcast)
             match Self::sign_transaction_for_queue(
-                &params.network,
+                network.as_ref(),
                 contract,
                 calldata,
                 tx_value,
@@ -839,7 +854,7 @@ impl Tool for Web3FunctionCallTool {
                         "to": contract_addr,
                         "value": signed.value,
                         "nonce": signed.nonce,
-                        "network": params.network
+                        "network": network
                     }))
                 }
                 Err(e) => ToolResult::error(e),
@@ -847,3 +862,4 @@ impl Tool for Web3FunctionCallTool {
         }
     }
 }
+

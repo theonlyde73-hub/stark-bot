@@ -1149,7 +1149,7 @@ export default function AgentChat() {
     setIsLoading(true);
 
     try {
-      const response = await sendChatMessage(trimmedInput, conversationHistory.current);
+      const response = await sendChatMessage(trimmedInput, conversationHistory.current, currentNetwork?.name);
       // Remove "still thinking" progress messages before adding the response
       setMessages((prev) => prev.filter(
         (m) => !(m.role === 'system' && m.content.startsWith('Still thinking'))

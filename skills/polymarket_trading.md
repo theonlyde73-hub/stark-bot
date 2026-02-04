@@ -1,7 +1,7 @@
 ---
 name: polymarket_trading
 description: "Explore and trade on Polymarket - search markets, check prices, place bets, manage orders."
-version: 2.0.0
+version: 2.1.0
 author: starkbot
 homepage: https://docs.polymarket.com/
 metadata: {"clawdbot":{"emoji":"🎲"}}
@@ -32,24 +32,37 @@ You can explore and trade on Polymarket prediction markets using the `polymarket
 2. **USDC on Polygon**: The wallet needs USDC on Polygon network for betting
 3. **Token Approvals**: One-time approval needed
 
+## 🚨 FIRST: Select the Polygon Network
+
+**Before ANY Polymarket operation, you MUST select the Polygon network:**
+
+```json
+{"tool": "select_web3_network", "network": "polygon"}
+```
+
+This sets the `network_name` register to "polygon" (chain ID 137) which is required for all Polymarket operations. Polymarket operates exclusively on Polygon.
+
 > **Note**: Market discovery (search, trending, get_market, get_price) works without a wallet!
 
 ---
 
 ## Market Discovery (No Wallet Needed)
 
-### Search Markets by Keyword
+> **Important**: `search_markets` and `trending_markets` return **lightweight summaries** (title, slug, description, volume) to keep context small. Use `get_market` with the slug to get **full details including outcomes and token_ids** for trading.
 
+### Step 1: Browse Markets
+
+**Search by keyword:**
 ```json
 {
   "tool": "polymarket_trade",
   "action": "search_markets",
-  "query": "bitcoin"
+  "query": "bitcoin",
+  "limit": 10
 }
 ```
 
-### Get Trending/Popular Markets
-
+**Get trending/popular markets:**
 ```json
 {
   "tool": "polymarket_trade",
@@ -58,8 +71,7 @@ You can explore and trade on Polymarket prediction markets using the `polymarket
 }
 ```
 
-### Filter by Category
-
+**Filter by category:**
 ```json
 {
   "tool": "polymarket_trade",
@@ -71,7 +83,19 @@ You can explore and trade on Polymarket prediction markets using the `polymarket
 
 Available tags: `politics`, `crypto`, `sports`, `finance`, `science`, `entertainment`, `world`
 
-### Get Market Details by Slug
+**Pagination:** Use `offset` to page through results (default limit: 10, max: 20)
+```json
+{
+  "tool": "polymarket_trade",
+  "action": "trending_markets",
+  "limit": 10,
+  "offset": 10
+}
+```
+
+### Step 2: Get Market Details (Required Before Trading)
+
+Use the `slug` from search results to get full details including outcomes and token_ids:
 
 ```json
 {
@@ -81,7 +105,9 @@ Available tags: `politics`, `crypto`, `sports`, `finance`, `science`, `entertain
 }
 ```
 
-### Get Current Price for a Token
+This returns the `token_id` values needed for `place_order` and `get_price`.
+
+### Step 3: Get Current Price for a Token
 
 ```json
 {
@@ -99,7 +125,7 @@ Returns midpoint, best bid/ask, spread, and orderbook depth.
 
 ### Step 1: Find a Market
 
-Use the discovery actions to find markets:
+Search or browse for markets:
 
 ```json
 {
@@ -109,9 +135,21 @@ Use the discovery actions to find markets:
 }
 ```
 
-### Step 2: Get Price Details
+### Step 2: Get Market Details
 
-Once you have a token_id from the market results:
+Use `get_market` with the slug to get outcomes and token_ids:
+
+```json
+{
+  "tool": "polymarket_trade",
+  "action": "get_market",
+  "slug": "will-trump-win-2024"
+}
+```
+
+### Step 3: Get Price Details
+
+Check current price for the token_id you want to trade:
 
 ```json
 {
@@ -121,7 +159,7 @@ Once you have a token_id from the market results:
 }
 ```
 
-### Step 3: Place Order
+### Step 4: Place Order
 
 Use the `polymarket_trade` tool:
 
@@ -152,9 +190,9 @@ Use the `polymarket_trade` tool:
 
 | Action | Parameters | Description |
 |--------|-----------|-------------|
-| `search_markets` | query, tag?, limit? | Search markets by keyword |
-| `trending_markets` | tag?, limit? | Get high-volume markets |
-| `get_market` | slug | Get market details by URL slug |
+| `search_markets` | query, tag?, limit?, offset? | Search markets (summaries only) |
+| `trending_markets` | tag?, limit?, offset? | Get high-volume markets (summaries only) |
+| `get_market` | slug | Get full market details with outcomes/token_ids |
 | `get_price` | token_id | Get current price and orderbook |
 
 ### Trading Actions (Wallet Required)
@@ -275,22 +313,30 @@ Use the `polymarket_trade` tool:
 
 **Agent Workflow:**
 
-1. **Search for market:**
+1. **Select Polygon network:**
 ```json
-{"tool": "web_fetch", "url": "https://gamma-api.polymarket.com/events?_q=bitcoin+100k&active=true"}
+{"tool": "select_web3_network", "network": "polygon"}
+```
+This MUST be done first for any Polymarket operation.
+
+2. **Search for market:**
+```json
+{"tool": "polymarket_trade", "action": "search_markets", "query": "bitcoin 100k"}
+```
+Returns lightweight list with slugs.
+
+3. **Get market details (for token_id):**
+```json
+{"tool": "polymarket_trade", "action": "get_market", "slug": "will-bitcoin-hit-100k-in-2025"}
+```
+Returns outcomes with token_ids.
+
+4. **Check price and spread:**
+```json
+{"tool": "polymarket_trade", "action": "get_price", "token_id": "<TOKEN_ID>"}
 ```
 
-2. **Get current price:**
-```json
-{"tool": "web_fetch", "url": "https://clob.polymarket.com/midpoint?token_id=<TOKEN_ID>"}
-```
-
-3. **Check spread:**
-```json
-{"tool": "web_fetch", "url": "https://clob.polymarket.com/spread?token_id=<TOKEN_ID>"}
-```
-
-4. **Place order** (if spread acceptable):
+5. **Place order** (if spread acceptable):
 ```json
 {
   "tool": "polymarket_trade",
@@ -303,7 +349,7 @@ Use the `polymarket_trade` tool:
 ```
 (44 shares × $0.45 = ~$20)
 
-5. **Confirm to user:**
+6. **Confirm to user:**
 "Placed order to buy 44 YES shares at $0.45 (45% implied probability). If Bitcoin hits $100k, you'll receive $44 profit. Order ID: xxx"
 
 ---
@@ -313,14 +359,14 @@ Use the `polymarket_trade` tool:
 | Contract | Address |
 |----------|---------|
 | CTF Exchange | `0xC5d563A36AE78145C45a50134d48A1215220f80a` |
-| USDC | `0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174` |
+| USDC | `0x3c499c542cef5e3811e1192ce70d8cc03d5c3359` |
 | Conditional Tokens | `0x4D97DCd97eC945f40cF65F87097ACe5EA0476045` |
 
 ---
 
 ## API Endpoints
 
-| API | Base URL | Purpose |
+| API | URL | Purpose |
 |-----|----------|---------|
 | Gamma | `https://gamma-api.polymarket.com` | Market discovery |
 | CLOB | `https://clob.polymarket.com` | Prices, orders, trading |

@@ -1,7 +1,7 @@
 //! Heartbeat configuration database operations
 
 use chrono::Utc;
-use rusqlite::Result as SqliteResult;
+use rusqlite::{OptionalExtension, Result as SqliteResult};
 
 use crate::models::HeartbeatConfig;
 use super::super::Database;
@@ -34,11 +34,12 @@ impl Database {
             return Ok(config);
         }
 
-        // Create new config
+        // Create new config with consistent defaults
+        // Default: 30 minute interval, disabled (must be explicitly enabled)
         let now = Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO heartbeat_configs (channel_id, interval_minutes, target, enabled, created_at, updated_at)
-             VALUES (?1, 1440, 'last', 0, ?2, ?2)",
+             VALUES (?1, 30, 'last', 0, ?2, ?2)",
             rusqlite::params![channel_id, now],
         )?;
 
@@ -52,7 +53,7 @@ impl Database {
             active_hours_start: None,
             active_hours_end: None,
             active_days: None,
-            enabled: true,
+            enabled: false,  // Disabled by default - must be explicitly enabled
             last_beat_at: None,
             next_beat_at: None,
             created_at: now.clone(),
@@ -128,7 +129,20 @@ impl Database {
         )
     }
 
-    /// Update heartbeat last run time
+    /// Update heartbeat next_beat_at BEFORE execution (prevents race conditions)
+    pub fn update_heartbeat_next_beat(&self, id: i64, next_beat_at: &str) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+
+        conn.execute(
+            "UPDATE heartbeat_configs SET next_beat_at = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![next_beat_at, now, id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Update heartbeat last run time (called after execution completes)
     pub fn update_heartbeat_last_beat(&self, id: i64, last_beat_at: &str, next_beat_at: &str) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
@@ -156,6 +170,19 @@ impl Database {
             .collect();
 
         Ok(configs)
+    }
+
+    /// Get heartbeat config by ID
+    pub fn get_heartbeat_config_by_id(&self, id: i64) -> SqliteResult<Option<HeartbeatConfig>> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.query_row(
+            "SELECT id, channel_id, interval_minutes, target, active_hours_start, active_hours_end,
+                    active_days, enabled, last_beat_at, next_beat_at, created_at, updated_at
+             FROM heartbeat_configs WHERE id = ?1",
+            [id],
+            |row| self.map_heartbeat_config_row(row),
+        ).optional()
     }
 
     /// Get enabled heartbeat configs that are due to run

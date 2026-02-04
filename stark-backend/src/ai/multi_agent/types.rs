@@ -409,6 +409,11 @@ pub struct AgentContext {
     /// Whether the planner phase has completed
     #[serde(default)]
     pub planner_completed: bool,
+
+    /// Currently selected network from UI (e.g., "base", "polygon", "mainnet")
+    /// Used as default for web3 operations unless user explicitly specifies otherwise
+    #[serde(default)]
+    pub selected_network: Option<String>,
 }
 
 /// Active skill context that persists across turns

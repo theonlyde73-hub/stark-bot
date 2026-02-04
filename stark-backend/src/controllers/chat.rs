@@ -16,6 +16,9 @@ pub struct ChatRequest {
     /// Optional user identifier for the web session
     #[serde(default)]
     pub user_id: Option<String>,
+    /// Currently selected network from the UI (e.g., "base", "polygon", "mainnet")
+    #[serde(default)]
+    pub network: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -202,6 +205,7 @@ async fn chat(
         text: user_message,
         message_id: None,
         session_mode: None,
+        selected_network: body.network.clone(),
     };
 
     // Dispatch through the unified pipeline

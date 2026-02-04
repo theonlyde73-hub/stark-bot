@@ -108,7 +108,8 @@ export async function logout(): Promise<void> {
 // Chat API
 export async function sendChatMessage(
   content: string,
-  conversationHistory: Array<{ role: string; content: string }>
+  conversationHistory: Array<{ role: string; content: string }>,
+  network?: string  // The currently selected network from the UI
 ): Promise<{ response: string }> {
   // Backend expects { messages: [...] } with the full conversation including the new message
   const messages = [
@@ -118,7 +119,7 @@ export async function sendChatMessage(
 
   const response = await apiFetch<{ success: boolean; message?: { content: string }; error?: string }>('/chat', {
     method: 'POST',
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, network }),
   });
 
   if (!response.success || !response.message) {
@@ -1000,6 +1001,16 @@ export async function updateHeartbeatConfig(data: {
   });
   if (!response.success || !response.config) {
     throw new Error(response.error || 'Failed to update heartbeat config');
+  }
+  return response.config;
+}
+
+export async function pulseHeartbeatOnce(): Promise<HeartbeatConfigInfo> {
+  const response = await apiFetch<HeartbeatConfigResponse>('/heartbeat/pulse_once', {
+    method: 'POST',
+  });
+  if (!response.success || !response.config) {
+    throw new Error(response.error || 'Failed to pulse heartbeat');
   }
   return response.config;
 }

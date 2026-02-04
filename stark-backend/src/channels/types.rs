@@ -70,6 +70,10 @@ pub struct NormalizedMessage {
     /// Session mode for cron jobs: "main" (shared with web) or "isolated" (separate session)
     #[serde(default)]
     pub session_mode: Option<String>,
+    /// Currently selected network from UI (e.g., "base", "polygon", "mainnet")
+    /// Used as default for web3 operations unless user explicitly specifies otherwise
+    #[serde(default)]
+    pub selected_network: Option<String>,
 }
 
 /// Handle to a running channel listener

@@ -7,6 +7,78 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::OnceLock;
+use strum::{Display, EnumString, AsRefStr};
+
+/// Supported blockchain networks
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString, AsRefStr)]
+#[strum(serialize_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum Network {
+    Base,
+    Mainnet,
+    Polygon,
+}
+
+impl Network {
+    /// Get the chain ID for this network
+    pub fn chain_id(&self) -> u64 {
+        match self {
+            Network::Base => 8453,
+            Network::Mainnet => 1,
+            Network::Polygon => 137,
+        }
+    }
+
+    /// Get the native currency symbol
+    pub fn native_currency(&self) -> &'static str {
+        match self {
+            Network::Base => "ETH",
+            Network::Mainnet => "ETH",
+            Network::Polygon => "MATIC",
+        }
+    }
+
+    /// Get the block explorer URL
+    pub fn explorer_url(&self) -> &'static str {
+        match self {
+            Network::Base => "https://basescan.org",
+            Network::Mainnet => "https://etherscan.io",
+            Network::Polygon => "https://polygonscan.com",
+        }
+    }
+
+    /// Get the USDC contract address for this network
+    pub fn usdc_address(&self) -> &'static str {
+        match self {
+            Network::Base => "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            Network::Mainnet => "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            Network::Polygon => "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
+        }
+    }
+
+    /// All supported networks
+    pub fn all() -> &'static [Network] {
+        &[Network::Base, Network::Mainnet, Network::Polygon]
+    }
+
+    /// Try to detect network from a known contract address
+    pub fn from_contract_address(address: &str) -> Option<Network> {
+        let addr_lower = address.to_lowercase();
+        match addr_lower.as_str() {
+            // USDC addresses
+            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" => Some(Network::Base),
+            "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" => Some(Network::Mainnet),
+            "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359" => Some(Network::Polygon),
+            _ => None,
+        }
+    }
+}
+
+impl Default for Network {
+    fn default() -> Self {
+        Network::Base
+    }
+}
 
 /// Global storage for RPC providers
 static RPC_PROVIDERS: OnceLock<HashMap<String, RpcProvider>> = OnceLock::new();
@@ -82,6 +154,10 @@ fn default_providers() -> HashMap<String, RpcProvider> {
     endpoints.insert(
         "mainnet".to_string(),
         "https://rpc.defirelay.com/rpc/light/mainnet".to_string(),
+    );
+    endpoints.insert(
+        "polygon".to_string(),
+        "https://rpc.defirelay.com/rpc/light/polygon".to_string(),
     );
 
     providers.insert(

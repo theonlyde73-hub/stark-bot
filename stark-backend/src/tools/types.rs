@@ -343,6 +343,9 @@ pub struct ToolContext {
     pub skill_registry: Option<Arc<SkillRegistry>>,
     /// Transaction queue manager for queued web3 transactions
     pub tx_queue: Option<Arc<TxQueueManager>>,
+    /// Currently selected network from the UI (e.g., "base", "polygon", "mainnet")
+    /// Web3 tools should use this as default unless user explicitly specifies otherwise
+    pub selected_network: Option<String>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -363,6 +366,7 @@ impl std::fmt::Debug for ToolContext {
             .field("process_manager", &self.process_manager.is_some())
             .field("skill_registry", &self.skill_registry.is_some())
             .field("tx_queue", &self.tx_queue.is_some())
+            .field("selected_network", &self.selected_network)
             .finish()
     }
 }
@@ -385,6 +389,7 @@ impl Default for ToolContext {
             process_manager: None,
             skill_registry: None,
             tx_queue: None,
+            selected_network: None,
         }
     }
 }
@@ -495,6 +500,12 @@ impl ToolContext {
     /// Add a TxQueueManager to the context (for web3 transaction queuing)
     pub fn with_tx_queue(mut self, tx_queue: Arc<TxQueueManager>) -> Self {
         self.tx_queue = Some(tx_queue);
+        self
+    }
+
+    /// Set the selected network from the UI (for web3 tools to use as default)
+    pub fn with_selected_network(mut self, network: Option<String>) -> Self {
+        self.selected_network = network;
         self
     }
 
