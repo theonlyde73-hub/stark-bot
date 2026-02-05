@@ -166,7 +166,17 @@ impl FlashWalletProvider {
 
         let r = U256::from_big_endian(&sig_bytes[0..32]);
         let s = U256::from_big_endian(&sig_bytes[32..64]);
-        let v = sig_bytes[64] as u64;
+        let v_byte = sig_bytes[64];
+
+        // Normalize v value: Privy may return 0/1, but ecrecover needs 27/28
+        // EIP-712 typed data signatures use v = 27 or 28
+        let v = if v_byte < 27 {
+            v_byte as u64 + 27
+        } else {
+            v_byte as u64
+        };
+
+        log::debug!("Parsed signature: v={} (raw byte was {})", v, v_byte);
 
         Ok(Signature { r, s, v })
     }

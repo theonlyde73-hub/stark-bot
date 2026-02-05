@@ -217,6 +217,14 @@ impl X402Signer {
         token_metadata: &TokenMetadata,
     ) -> Result<PaymentPayloadV2, String> {
         let from = self.address();
+
+        // Validate payer address is not empty (critical for x402 payment)
+        if from.is_empty() || from == "0x" || from == "0x0000000000000000000000000000000000000000" {
+            return Err(format!("Invalid payer address: '{}' - wallet not properly initialized", from));
+        }
+
+        log::info!("[X402] Signing permit from payer: {}", from);
+
         let value = requirements.max_amount_required.clone();
 
         // Get facilitator address (spender) from extra field
@@ -356,6 +364,14 @@ impl X402Signer {
         token_metadata: &TokenMetadata,
     ) -> Result<PaymentPayloadV2, String> {
         let from = self.address();
+
+        // Validate payer address is not empty (critical for x402 payment)
+        if from.is_empty() || from == "0x" || from == "0x0000000000000000000000000000000000000000" {
+            return Err(format!("Invalid payer address: '{}' - wallet not properly initialized", from));
+        }
+
+        log::info!("[X402] Signing transfer auth from payer: {}", from);
+
         let to = requirements.pay_to_address.to_lowercase();
         let value = requirements.max_amount_required.clone();
         let valid_after = "0".to_string();
