@@ -82,11 +82,18 @@ impl X402AgentInvokeTool {
     }
 
     /// Get or create the x402 signer
-    fn get_signer(&self) -> Result<X402Signer, String> {
-        let private_key = crate::config::burner_wallet_private_key()
-            .ok_or("BURNER_WALLET_BOT_PRIVATE_KEY environment variable not set")?;
+    /// Uses wallet_provider from context if available (Flash mode), otherwise falls back to env var
+    fn get_signer(&self, context: &ToolContext) -> Result<X402Signer, String> {
+        // Try wallet_provider from context first (works in both Standard and Flash mode)
+        if let Some(ref wallet_provider) = context.wallet_provider {
+            return Ok(X402Signer::new(wallet_provider.clone()));
+        }
 
-        X402Signer::new(&private_key)
+        // Fall back to private key from environment (Standard mode only)
+        let private_key = crate::config::burner_wallet_private_key()
+            .ok_or("No wallet provider in context and BURNER_WALLET_BOT_PRIVATE_KEY not set")?;
+
+        X402Signer::from_private_key(&private_key)
     }
 }
 
@@ -210,7 +217,7 @@ impl Tool for X402AgentInvokeTool {
         self.definition.clone()
     }
 
-    async fn execute(&self, params: Value, _context: &ToolContext) -> ToolResult {
+    async fn execute(&self, params: Value, context: &ToolContext) -> ToolResult {
         let params: X402AgentInvokeParams = match serde_json::from_value(params) {
             Ok(p) => p,
             Err(e) => return ToolResult::error(format!("Invalid parameters: {}", e)),
@@ -315,7 +322,7 @@ impl Tool for X402AgentInvokeTool {
         );
 
         // Get signer
-        let signer = match self.get_signer() {
+        let signer = match self.get_signer(context) {
             Ok(s) => s,
             Err(e) => return ToolResult::error(e),
         };

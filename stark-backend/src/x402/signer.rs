@@ -4,43 +4,46 @@
 //! - "permit" (EIP-2612): Permit signature allowing facilitator to transfer tokens
 //! - "exact" (EIP-3009): TransferWithAuthorization for direct transfers
 
-use ethers::core::k256::ecdsa::SigningKey;
-use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{H256, U256};
 use ethers::utils::keccak256;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::erc20;
 use super::types::*;
+use crate::wallet::WalletProvider;
 
-/// x402 payment signer using a local wallet
+/// x402 payment signer using WalletProvider for signing
+/// Works with both Standard mode (LocalWallet) and Flash mode (Privy)
 pub struct X402Signer {
-    wallet: LocalWallet,
-    private_key: String,
+    wallet_provider: Arc<dyn WalletProvider>,
 }
 
 impl X402Signer {
-    /// Create a new signer from a private key (hex string with or without 0x prefix)
-    pub fn new(private_key: &str) -> Result<Self, String> {
-        let key_hex = private_key.strip_prefix("0x").unwrap_or(private_key);
-        let key_bytes = hex::decode(key_hex)
-            .map_err(|e| format!("Invalid private key hex: {}", e))?;
+    /// Create a new signer from a WalletProvider (preferred)
+    pub fn new(wallet_provider: Arc<dyn WalletProvider>) -> Self {
+        Self { wallet_provider }
+    }
 
-        let signing_key = SigningKey::from_bytes(key_bytes.as_slice().into())
-            .map_err(|e| format!("Invalid private key: {}", e))?;
-
-        // Default chain ID, will be overridden per-signature based on network
-        let wallet = LocalWallet::from(signing_key).with_chain_id(BASE_CHAIN_ID);
-
+    /// Create a new signer from a private key (backward compatible)
+    /// This creates an EnvWalletProvider internally
+    pub fn from_private_key(private_key: &str) -> Result<Self, String> {
+        let provider = crate::wallet::EnvWalletProvider::from_private_key(private_key)?;
         Ok(Self {
-            wallet,
-            private_key: private_key.to_string(),
+            wallet_provider: Arc::new(provider),
         })
     }
 
-    /// Get the wallet address
+    /// Get the wallet address as a string
     pub fn address(&self) -> String {
-        format!("{:?}", self.wallet.address()).to_lowercase()
+        self.wallet_provider.get_address()
+    }
+
+    /// Get the wallet address as an ethers Address type
+    fn eth_address(&self) -> Result<ethers::types::Address, String> {
+        self.wallet_provider.get_address()
+            .parse()
+            .map_err(|e| format!("Invalid wallet address: {}", e))
     }
 
     /// Generate a cryptographically secure nonce (for EIP-3009)
@@ -63,7 +66,7 @@ impl X402Signer {
         };
 
         // Encode the nonces(address) call
-        let call_data = erc20::encode_nonces(self.wallet.address());
+        let call_data = erc20::encode_nonces(self.eth_address()?);
 
         // Build JSON-RPC request
         let request = serde_json::json!({
@@ -173,7 +176,7 @@ impl X402Signer {
 
         // Build permit message
         let message = PermitMessage {
-            owner: self.wallet.address(),
+            owner: self.eth_address()?,
             spender: spender.parse()
                 .map_err(|e| format!("Invalid facilitatorSigner address: {}", e))?,
             value: U256::from_dec_str(&requirements.max_amount_required)
@@ -244,7 +247,7 @@ impl X402Signer {
 
         // Build permit message
         let message = PermitMessage {
-            owner: self.wallet.address(),
+            owner: self.eth_address()?,
             spender: spender.parse()
                 .map_err(|e| format!("Invalid facilitatorSigner address: {}", e))?,
             value: U256::from_dec_str(&requirements.max_amount_required)
@@ -309,7 +312,7 @@ impl X402Signer {
         let domain = Eip712Domain::from_token_metadata(token_metadata)?;
 
         let message = TransferWithAuthorizationMessage {
-            from: self.wallet.address(),
+            from: self.eth_address()?,
             to: requirements.pay_to_address.parse()
                 .map_err(|e| format!("Invalid pay_to_address: {}", e))?,
             value: U256::from_dec_str(&requirements.max_amount_required)
@@ -370,7 +373,7 @@ impl X402Signer {
         let domain = Eip712Domain::from_token_metadata(token_metadata)?;
 
         let message = TransferWithAuthorizationMessage {
-            from: self.wallet.address(),
+            from: self.eth_address()?,
             to: requirements.pay_to_address.parse()
                 .map_err(|e| format!("Invalid pay_to_address: {}", e))?,
             value: U256::from_dec_str(&requirements.max_amount_required)
@@ -431,9 +434,10 @@ impl X402Signer {
         to_sign.extend_from_slice(struct_hash.as_bytes());
         let digest = H256::from(keccak256(&to_sign));
 
-        // Sign the digest
-        let signature = self.wallet
+        // Sign the digest using WalletProvider
+        let signature = self.wallet_provider
             .sign_hash(digest)
+            .await
             .map_err(|e| format!("Failed to sign: {}", e))?;
 
         Ok(format!("0x{}", hex::encode(signature.to_vec())))
@@ -549,7 +553,7 @@ mod tests {
     fn test_address_derivation() {
         // Test with a known private key
         let private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-        let signer = X402Signer::new(private_key).unwrap();
+        let signer = X402Signer::from_private_key(private_key).unwrap();
         // This is Hardhat's first default account
         assert_eq!(signer.address(), "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266");
     }

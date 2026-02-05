@@ -4,7 +4,9 @@
 //! two operational modes:
 //!
 //! - **Standard Mode**: Private key loaded from ENV (BURNER_WALLET_BOT_PRIVATE_KEY)
-//! - **Flash Mode**: Private key fetched from Flash control plane via Privy
+//!   - Signs transactions locally using LocalWallet
+//! - **Flash Mode**: Wallet managed by Privy via Flash control plane
+//!   - Signs transactions remotely via Flash's signing proxy
 //!
 //! The mode is determined by the `STARKBOT_MODE` environment variable:
 //! - `standard` (default): Use EnvWalletProvider
@@ -17,7 +19,7 @@ pub use env_provider::EnvWalletProvider;
 pub use flash_provider::FlashWalletProvider;
 
 use async_trait::async_trait;
-use ethers::signers::LocalWallet;
+use ethers::types::{Signature, H256, transaction::eip2718::TypedTransaction};
 use std::sync::Arc;
 
 /// Environment variable for mode selection
@@ -26,16 +28,26 @@ pub const STARKBOT_MODE_ENV: &str = "STARKBOT_MODE";
 /// Trait for wallet providers - abstracts wallet access for different modes
 #[async_trait]
 pub trait WalletProvider: Send + Sync {
-    /// Get the wallet for signing transactions
-    /// May fetch from remote source (Flash mode) or return cached wallet (Standard mode)
-    async fn get_wallet(&self) -> Result<LocalWallet, String>;
+    /// Sign a message (EIP-191 personal_sign)
+    async fn sign_message(&self, message: &[u8]) -> Result<Signature, String>;
+
+    /// Sign a typed transaction
+    async fn sign_transaction(&self, tx: &TypedTransaction) -> Result<Signature, String>;
+
+    /// Sign a raw 32-byte hash (for EIP-712 when hash is pre-computed)
+    /// Standard mode: uses LocalWallet.sign_hash()
+    /// Flash mode: NOT SUPPORTED - use sign_typed_data instead
+    async fn sign_hash(&self, hash: H256) -> Result<Signature, String>;
+
+    /// Sign EIP-712 typed data
+    /// Standard mode: computes hash and signs with LocalWallet
+    /// Flash mode: calls Privy's eth_signTypedData_v4
+    async fn sign_typed_data(&self, typed_data: &serde_json::Value) -> Result<Signature, String>;
 
     /// Get the wallet address (always available, cached)
     fn get_address(&self) -> String;
 
-    /// Refresh wallet from source if needed
-    /// Standard mode: no-op
-    /// Flash mode: re-fetch from control plane
+    /// Refresh wallet/connection if needed
     async fn refresh(&self) -> Result<(), String> {
         Ok(())
     }

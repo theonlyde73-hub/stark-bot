@@ -71,11 +71,18 @@ impl X402FetchTool {
     }
 
     /// Get or create the x402 client
-    fn get_client(&self) -> Result<X402Client, String> {
-        let private_key = crate::config::burner_wallet_private_key()
-            .ok_or("BURNER_WALLET_BOT_PRIVATE_KEY environment variable not set")?;
+    /// Uses wallet_provider from context if available (Flash mode), otherwise falls back to env var
+    fn get_client(&self, context: &ToolContext) -> Result<X402Client, String> {
+        // Try wallet_provider from context first (works in both Standard and Flash mode)
+        if let Some(ref wallet_provider) = context.wallet_provider {
+            return X402Client::new(wallet_provider.clone());
+        }
 
-        X402Client::new(&private_key)
+        // Fall back to private key from environment (Standard mode only)
+        let private_key = crate::config::burner_wallet_private_key()
+            .ok_or("No wallet provider in context and BURNER_WALLET_BOT_PRIVATE_KEY not set")?;
+
+        X402Client::from_private_key(&private_key)
     }
 
     /// Apply a simple jq-like filter to extract fields from JSON
@@ -263,7 +270,7 @@ impl Tool for X402FetchTool {
         }
 
         // Get the x402 client
-        let client = match self.get_client() {
+        let client = match self.get_client(context) {
             Ok(c) => c,
             Err(e) => return ToolResult::error(e),
         };

@@ -402,7 +402,7 @@ impl KeystoreClient {
         );
 
         // Use our x402 signer to create the payment
-        let signer = crate::x402::X402Signer::new(private_key)
+        let signer = crate::x402::X402Signer::from_private_key(private_key)
             .map_err(|e| format!("Failed to create x402 signer: {}", e))?;
 
         // Parse extra field to get token metadata

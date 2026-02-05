@@ -104,6 +104,48 @@ impl AiClient {
         Ok(AiClient::OpenAI(client))
     }
 
+    /// Create an AI client from agent settings with WalletProvider for x402
+    /// This works with both Standard mode (LocalWallet) and Flash mode (Privy)
+    pub fn from_settings_with_wallet_provider(
+        settings: &AgentSettings,
+        wallet_provider: Option<std::sync::Arc<dyn crate::wallet::WalletProvider>>,
+    ) -> Result<Self, String> {
+        use crate::x402::is_x402_endpoint;
+
+        // Get archetype to determine client type and default model
+        let archetype_id = Self::infer_archetype(settings);
+        let registry = ArchetypeRegistry::new();
+        let archetype = registry.get(archetype_id).unwrap_or_else(|| registry.default_archetype());
+        let model = archetype.default_model();
+
+        // Determine API key: x402 endpoints don't need one, others use secret_key
+        let api_key = if is_x402_endpoint(&settings.endpoint) {
+            ""  // x402 endpoints use crypto signatures, no API key needed
+        } else {
+            settings.secret_key.as_deref().unwrap_or("")
+        };
+
+        // Use ClaudeClient for Claude archetype (native Anthropic API with x-api-key header)
+        if archetype_id == ArchetypeId::Claude {
+            let client = ClaudeClient::new(
+                api_key,
+                Some(&settings.endpoint),
+                Some(model),
+            )?;
+            return Ok(AiClient::Claude(client));
+        }
+
+        // All other archetypes use OpenAI-compatible client
+        let client = OpenAIClient::new_with_wallet_provider(
+            api_key,
+            Some(&settings.endpoint),
+            Some(model),
+            wallet_provider,
+            Some(settings.max_response_tokens as u32),
+        )?;
+        Ok(AiClient::OpenAI(client))
+    }
+
     /// Get the archetype ID from agent settings
     pub fn infer_archetype(settings: &AgentSettings) -> ArchetypeId {
         ArchetypeId::from_str(&settings.model_archetype).unwrap_or(ArchetypeId::Kimi)

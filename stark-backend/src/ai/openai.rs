@@ -4,6 +4,7 @@ use crate::ai::Message;
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::tools::ToolDefinition;
+use crate::wallet::WalletProvider;
 use crate::x402::{X402Client, X402PaymentInfo, is_x402_endpoint};
 use futures_util::StreamExt;
 use reqwest::{header, Client};
@@ -160,6 +161,83 @@ impl OpenAIClient {
         Self::new_with_x402_and_tokens(api_key, endpoint, model, burner_private_key, None)
     }
 
+    /// Create OpenAI client with WalletProvider for x402 payments
+    /// This works with both Standard mode (LocalWallet) and Flash mode (Privy)
+    pub fn new_with_wallet_provider(
+        api_key: &str,
+        endpoint: Option<&str>,
+        model: Option<&str>,
+        wallet_provider: Option<Arc<dyn WalletProvider>>,
+        max_tokens: Option<u32>,
+    ) -> Result<Self, String> {
+        let endpoint_url = endpoint
+            .unwrap_or("https://api.openai.com/v1/chat/completions")
+            .to_string();
+
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("application/json"),
+        );
+
+        // Only add auth header if API key is provided and not empty
+        if !api_key.is_empty() {
+            let auth_value = header::HeaderValue::from_str(&format!("Bearer {}", api_key))
+                .map_err(|e| format!("Invalid API key format: {}", e))?;
+            headers.insert(header::AUTHORIZATION, auth_value);
+        }
+
+        let client = Client::builder()
+            .default_headers(headers)
+            .timeout(Duration::from_secs(120))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+        // Create x402 client if wallet provider is provided and endpoint uses x402
+        let x402_client = if is_x402_endpoint(&endpoint_url) {
+            if let Some(provider) = wallet_provider {
+                match X402Client::new(provider) {
+                    Ok(c) => {
+                        log::info!("[AI] x402 enabled for endpoint {} with wallet {}", endpoint_url, c.wallet_address());
+                        Some(Arc::new(c))
+                    }
+                    Err(e) => {
+                        log::warn!("[AI] Failed to create x402 client: {}", e);
+                        None
+                    }
+                }
+            } else {
+                log::warn!("[AI] x402 endpoint {} requires wallet_provider", endpoint_url);
+                None
+            }
+        } else {
+            None
+        };
+
+        // Determine model with smart defaults
+        let effective_model = match model {
+            Some(m) if !m.is_empty() => m.to_string(),
+            _ => {
+                if endpoint_url.contains("openai.com") {
+                    "gpt-4o".to_string()
+                } else if endpoint_url.contains("kimi") || endpoint_url.contains("moonshot") {
+                    "moonshot-v1-32k".to_string()
+                } else {
+                    "default".to_string()
+                }
+            }
+        };
+
+        Ok(Self {
+            api_key: api_key.to_string(),
+            endpoint: endpoint_url,
+            model: effective_model,
+            client,
+            x402_client,
+            max_tokens,
+        })
+    }
+
     pub fn new_with_x402_and_tokens(
         api_key: &str,
         endpoint: Option<&str>,
@@ -194,7 +272,7 @@ impl OpenAIClient {
         let x402_client = if is_x402_endpoint(&endpoint_url) {
             if let Some(pk) = burner_private_key {
                 if !pk.is_empty() {
-                    match X402Client::new(pk) {
+                    match X402Client::from_private_key(pk) {
                         Ok(c) => {
                             log::info!("[AI] x402 enabled for endpoint {} with wallet {}", endpoint_url, c.wallet_address());
                             Some(Arc::new(c))

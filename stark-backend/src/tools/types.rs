@@ -8,6 +8,7 @@ use crate::qmd_memory::MemoryStore;
 use crate::skills::SkillRegistry;
 use crate::tools::register::RegisterStore;
 use crate::tx_queue::TxQueueManager;
+use crate::wallet::WalletProvider;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -356,6 +357,8 @@ pub struct ToolContext {
     pub selected_network: Option<String>,
     /// QMD Memory store for markdown-based memory system
     pub memory_store: Option<Arc<MemoryStore>>,
+    /// Wallet provider for signing transactions (Standard or Flash mode)
+    pub wallet_provider: Option<Arc<dyn WalletProvider>>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -378,6 +381,7 @@ impl std::fmt::Debug for ToolContext {
             .field("tx_queue", &self.tx_queue.is_some())
             .field("selected_network", &self.selected_network)
             .field("memory_store", &self.memory_store.is_some())
+            .field("wallet_provider", &self.wallet_provider.is_some())
             .finish()
     }
 }
@@ -402,6 +406,7 @@ impl Default for ToolContext {
             tx_queue: None,
             selected_network: None,
             memory_store: None,
+            wallet_provider: None,
         }
     }
 }

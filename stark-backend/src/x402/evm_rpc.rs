@@ -66,7 +66,7 @@ pub struct TransactionReceipt {
 impl X402EvmRpc {
     /// Create a new X402 EVM RPC client with default settings (x402 enabled)
     pub fn new(private_key: &str, network: &str) -> Result<Self, String> {
-        let client = X402Client::new(private_key)?;
+        let client = X402Client::from_private_key(private_key)?;
         Ok(Self {
             client,
             network: network.to_string(),
@@ -82,7 +82,7 @@ impl X402EvmRpc {
         rpc_url: Option<String>,
         use_x402: bool,
     ) -> Result<Self, String> {
-        let client = X402Client::new(private_key)?;
+        let client = X402Client::from_private_key(private_key)?;
         Ok(Self {
             client,
             network: network.to_string(),
