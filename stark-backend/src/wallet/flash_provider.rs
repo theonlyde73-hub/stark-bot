@@ -116,6 +116,17 @@ impl FlashWalletProvider {
         // Parse private key into wallet
         let key_hex = data.private_key.strip_prefix("0x").unwrap_or(&data.private_key);
 
+        // Check if this looks like an encrypted key (Privy embedded wallets return encrypted keys)
+        // A valid private key should be exactly 64 hex characters
+        if key_hex.len() != 64 || !key_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(
+                "Flash keystore returned an encrypted or invalid private key. \
+                This usually means Privy is configured with embedded wallets instead of server wallets. \
+                Please configure Privy to use server wallets, or switch to self-generated wallets. \
+                See: https://docs.privy.io/guide/server-wallets/create".to_string()
+            );
+        }
+
         let key_bytes = hex::decode(key_hex)
             .map_err(|e| format!("Invalid private key from keystore: {}", e))?;
 
