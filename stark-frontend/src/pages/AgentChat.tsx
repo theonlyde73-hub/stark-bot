@@ -1413,9 +1413,9 @@ export default function AgentChat() {
                     <Copy className="w-4 h-4" />
                   )}
                 </button>
-                {walletMode && (
+                {walletMode === 'flash' && (
                   <span className="text-xs px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded font-medium ml-1">
-                    {walletMode === 'flash' ? 'Flash' : walletMode === 'standard' ? 'Std' : walletMode}
+                    Flash
                   </span>
                 )}
               </div>

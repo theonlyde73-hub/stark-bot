@@ -174,14 +174,19 @@ impl DiscordHooksConfig {
                         false
                     }
                     Err(e) => {
-                        log::warn!("Discord hooks: Failed to get guild for role check: {}", e);
+                        log::warn!(
+                            "Discord hooks: Failed to get guild for role check: {}. \
+                            Consider configuring discord_admin_user_ids in channel settings for reliable admin detection.",
+                            e
+                        );
                         false
                     }
                 }
             }
             Err(e) => {
                 log::warn!(
-                    "Discord hooks: Failed to get member for {}: {}",
+                    "Discord hooks: Failed to get member for {}: {}. \
+                    Consider configuring discord_admin_user_ids in channel settings for reliable admin detection.",
                     msg.author.name,
                     e
                 );

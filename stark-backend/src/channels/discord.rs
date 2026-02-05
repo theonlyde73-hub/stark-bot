@@ -223,6 +223,14 @@ impl EventHandler for DiscordHandler {
                 if !result.handled {
                     return;
                 }
+
+                // Safety: If we get here, result.handled is true but neither response nor forward was set.
+                // This should never happen with correct ProcessResult usage, but guard against it.
+                log::warn!(
+                    "Discord hooks: BUG - handled=true but no response or forward for message from {}. Ignoring to prevent duplicate processing.",
+                    msg.author.name
+                );
+                return;
             }
             Err(e) => {
                 log::error!("Discord hooks error: {}", e);

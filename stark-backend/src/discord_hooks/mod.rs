@@ -257,7 +257,15 @@ pub async fn process(
         // Admin flow: implement query mode state machine
         let is_listening = is_listening_for_query(&user_id);
 
-        if is_listening {
+        // Check for "query" keyword FIRST - this resets/activates listening mode
+        // even if they were already listening (prevents forwarding "query" as an agent query)
+        if contains_query_keyword(&command_text) {
+            // Admin said "query" - activate (or re-activate) listening mode
+            set_listening_for_query(&user_id, true);
+            Ok(ProcessResult::handled(
+                "Okay, I am ready for your query. Send your next message with @starkbot and I'll process it.".to_string(),
+            ))
+        } else if is_listening {
             // Admin was listening for a query - this message IS the query
             // Reset the listening state and forward to agent
             set_listening_for_query(&user_id, false);
@@ -277,12 +285,6 @@ pub async fn process(
                 is_admin: true,
                 force_safe_mode: false,
             }))
-        } else if contains_query_keyword(&command_text) {
-            // Admin said "query" - activate listening mode
-            set_listening_for_query(&user_id, true);
-            Ok(ProcessResult::handled(
-                "Okay, I am ready for your query. Send your next message with @starkbot and I'll process it.".to_string(),
-            ))
         } else {
             // Admin mentioned bot without "query" keyword and wasn't in listening mode
             let cmd_lower = command_text.to_lowercase();
