@@ -1,6 +1,7 @@
 use crate::channels::dispatcher::MessageDispatcher;
 use crate::channels::types::{ChannelType, NormalizedMessage};
 use crate::db::Database;
+use crate::discord_hooks::db as user_db;
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::models::channel_settings::ChannelSettingKey;
@@ -131,6 +132,149 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
     chunks
 }
 
+/// Check for shortcircuit commands (register, status, help, love, unregister)
+/// Returns Some(response) if handled, None to continue to AI dispatch
+async fn handle_shortcircuit_command(
+    text: &str,
+    user_id: &str,
+    user_name: &str,
+    db: &Database,
+) -> Option<String> {
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    let first_word = parts.first()?.to_lowercase();
+    let text_lower = text.to_lowercase();
+
+    // Love easter egg
+    if text_lower == "love"
+        || text_lower.starts_with("love ")
+        || text_lower.ends_with(" love")
+        || text_lower.contains(" love ")
+    {
+        let responses = [
+            "I love you too.",
+            "I don't know, let me think about that.",
+            "How much do you love me?",
+        ];
+        return Some(
+            responses
+                .choose(&mut rand::thread_rng())
+                .unwrap_or(&responses[0])
+                .to_string(),
+        );
+    }
+
+    // Use tg: prefix to distinguish Telegram users from Discord users in the same DB
+    let tg_user_id = format!("tg:{}", user_id);
+
+    match first_word.as_str() {
+        "register" => {
+            let addr = match parts.get(1) {
+                Some(a) => *a,
+                None => {
+                    return Some(
+                        "Usage: register <address>\nExample: register 0x1234...abcd".to_string(),
+                    )
+                }
+            };
+
+            // Validate address format
+            if !addr.starts_with("0x")
+                || addr.len() < 42
+                || addr.len() > 66
+                || !addr[2..].chars().all(|c| c.is_ascii_hexdigit())
+            {
+                return Some(
+                    "Invalid address format. Please provide a valid address starting with 0x."
+                        .to_string(),
+                );
+            }
+
+            // Ensure profile exists
+            if let Err(e) = user_db::get_or_create_profile(db, &tg_user_id, user_name) {
+                log::error!("Telegram: Failed to create profile for {}: {}", user_id, e);
+                return Some("Sorry, failed to create your profile.".to_string());
+            }
+
+            // Check if address already registered
+            if let Ok(Some(existing)) = user_db::get_profile_by_address(db, addr) {
+                if existing.discord_user_id == tg_user_id {
+                    return Some(format!(
+                        "You already have this address registered: {}",
+                        addr
+                    ));
+                } else {
+                    return Some(
+                        "This address is already registered to another user.".to_string(),
+                    );
+                }
+            }
+
+            // Register
+            match user_db::register_address(db, &tg_user_id, addr) {
+                Ok(()) => Some(format!(
+                    "Successfully registered your address: {}\nYou can now receive tips. 🚀",
+                    addr
+                )),
+                Err(e) => {
+                    log::error!("Telegram: Failed to register address: {}", e);
+                    Some("Sorry, failed to register your address.".to_string())
+                }
+            }
+        }
+        "status" | "whoami" | "me" => {
+            match user_db::get_profile(db, &tg_user_id) {
+                Ok(Some(profile)) => {
+                    if let Some(addr) = profile.public_address {
+                        let registered_at =
+                            profile.registered_at.as_deref().unwrap_or("Unknown");
+                        Some(format!(
+                            "Your Profile\n\nStatus: Registered\nAddress: {}\nRegistered: {}",
+                            addr, registered_at
+                        ))
+                    } else {
+                        Some(
+                            "Your Profile\n\nStatus: Not registered\n\nUse \"register <address>\" to register."
+                                .to_string(),
+                        )
+                    }
+                }
+                Ok(None) => Some(
+                    "Your Profile\n\nStatus: Not registered\n\nUse \"register <address>\" to register."
+                        .to_string(),
+                ),
+                Err(e) => {
+                    log::error!("Telegram: Failed to get profile: {}", e);
+                    Some("Sorry, failed to retrieve your profile.".to_string())
+                }
+            }
+        }
+        "help" | "?" => Some(
+            "StarkBot Commands\n\n\
+            register <address> - Register your public address for tipping\n\
+            status - Check your registration status\n\
+            unregister - Remove your registered address\n\
+            help - Show this message\n\n\
+            For anything else, just @ me with your question!"
+                .to_string(),
+        ),
+        "unregister" | "deregister" | "remove" => {
+            if let Err(e) = user_db::get_or_create_profile(db, &tg_user_id, user_name) {
+                log::error!("Telegram: Failed to get profile for {}: {}", user_id, e);
+                return Some("Sorry, failed to process your request.".to_string());
+            }
+
+            match user_db::unregister_address(db, &tg_user_id) {
+                Ok(()) => Some("Your address has been unregistered.".to_string()),
+                Err(e) => {
+                    log::error!("Telegram: Failed to unregister: {}", e);
+                    Some("Sorry, failed to unregister your address.".to_string())
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Start a Telegram bot listener
 pub async fn start_telegram_listener(
     channel: Channel,
@@ -200,10 +344,11 @@ pub async fn start_telegram_listener(
     // Clone for handler closure
     let broadcaster_for_handler = broadcaster.clone();
     let bot_username_for_handler = bot_username.clone();
+    let db_for_handler = db.clone();
 
     // Create message handler
     let handler = Update::filter_message().endpoint(
-        move |bot: Bot, msg: teloxide::types::Message, dispatcher: Arc<MessageDispatcher>| {
+        move |bot: Bot, msg: teloxide::types::Message, dispatcher: Arc<MessageDispatcher>, db: Arc<Database>| {
             let channel_id = channel_id;
             let broadcaster = broadcaster_for_handler.clone();
             let admin_user_id = admin_user_id.clone();
@@ -256,6 +401,18 @@ pub async fn start_telegram_listener(
                             clean_text.clone()
                         }
                     );
+
+                    // Check for shortcircuit commands (register, status, help, love)
+                    if let Some(response) = handle_shortcircuit_command(&clean_text, &user_id, &user_name, &db).await {
+                        if let Err(e) = bot
+                            .send_message(msg.chat.id, &response)
+                            .reply_to_message_id(msg.id)
+                            .await
+                        {
+                            log::error!("Telegram: Failed to send shortcircuit response: {}", e);
+                        }
+                        return Ok(());
+                    }
 
                     // Determine safe mode: if admin is configured, only admin gets full access
                     let force_safe_mode = match &admin_user_id {
@@ -544,7 +701,7 @@ pub async fn start_telegram_listener(
 
     // Create dispatcher
     let mut tg_dispatcher = Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![dispatcher])
+        .dependencies(dptree::deps![dispatcher, db_for_handler])
         .enable_ctrlc_handler()
         .build();
 
