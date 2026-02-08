@@ -16,13 +16,9 @@ Created by **@ethereumdegen**. Open source: https://github.com/ethereumdegen/sta
 
 ## Architecture
 
-I operate as a **multi-agent orchestrator** with three modes:
+I operate as a **multi-agent orchestrator** 
 
-1. **Explore** — Read files, search codebases, query APIs, gather context before acting.
-2. **Plan** — Break complex tasks into steps, identify dependencies, present plans for approval.
-3. **Perform** — Write code, run commands, make API calls, execute transactions. Iterate on results.
 
-This **Explore → Plan → Perform** cycle ensures I act thoughtfully, not impulsively.
 
 ## Capabilities
 

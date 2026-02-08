@@ -1,231 +1,138 @@
 ---
 name: transfer_erc20
 description: "Transfer (Send) ERC20 tokens on Base/Ethereum using the burner wallet"
-version: 1.3.0
+version: 2.0.0
 author: starkbot
 homepage: https://basescan.org
 metadata: {"requires_auth": false, "clawdbot":{"emoji":"🪙"}}
 tags: [crypto, transfer, send, erc20, tokens, base, wallet]
-requires_tools: [set_address, token_lookup, to_raw_amount, web3_preset_function_call, list_queued_web3_tx, broadcast_web3_tx, select_web3_network]
+requires_tools: [set_address, token_lookup, to_raw_amount, web3_preset_function_call, list_queued_web3_tx, broadcast_web3_tx, verify_tx_broadcast, select_web3_network, define_tasks]
 ---
 
-# ERC20 Token Transfer/Send Skill
+# ERC20 Token Transfer Skill
 
-Transfer or Send ERC20 tokens from the burner wallet to any address.
+## CRITICAL RULES
 
-> **IMPORTANT: This skill uses the REGISTER PATTERN to prevent hallucination of transaction data.**
->
-> - Use `token_lookup` to get token address and decimals
-> - Use `to_raw_amount` to convert human amounts to raw units
-> - Use `set_address` to set the recipient address (validated)
-> - The `erc20_transfer` preset reads all values from registers — no manual params needed
+1. **ONE TASK AT A TIME.** Only do the work described in the CURRENT task. Do NOT work ahead.
+2. **Do NOT call `say_to_user` with `finished_task: true` until the current task is truly done.** Using `finished_task: true` advances the task queue — if you use it prematurely, tasks get skipped.
+3. **Use `say_to_user` WITHOUT `finished_task`** for progress updates. Only set `finished_task: true` OR call `task_fully_completed` when ALL steps in the current task are done.
+4. **Sequential tool calls only.** Never call two tools in parallel when the second depends on the first.
+5. **Register pattern prevents hallucination.** Never pass raw addresses/amounts directly — always use registers set by the tools.
 
-## Step 0: Network Selection (If Specified)
+## Step 1: Define the four tasks
 
-**Before ANY transfer operation, check if the user specified a network in their query.**
-
-If the user mentions a specific network (e.g., "on polygon", "on mainnet", "on base"), you MUST call `select_web3_network` FIRST:
+Call `define_tasks` with all 4 tasks in order:
 
 ```json
-{"tool": "select_web3_network", "network": "<network_from_query>"}
+{"tool": "define_tasks", "tasks": [
+  "TASK 1 — Prepare: select network (if specified), look up token, check token balance, check ETH for gas. See transfer_erc20 skill 'Task 1'.",
+  "TASK 2 — Set up: set recipient address, convert amount to raw units. See transfer_erc20 skill 'Task 2'.",
+  "TASK 3 — Execute: call erc20_transfer preset, then broadcast_web3_tx. See transfer_erc20 skill 'Task 3'.",
+  "TASK 4 — Verify: call verify_tx_broadcast, report result. See transfer_erc20 skill 'Task 4'."
+]}
 ```
 
-**Examples of network detection:**
-- "send 1 USDC **on polygon**" -> `{"tool": "select_web3_network", "network": "polygon"}`
-- "transfer 0.5 ETH **on mainnet**" -> `{"tool": "select_web3_network", "network": "mainnet"}`
-- "send tokens **on arbitrum**" -> `{"tool": "select_web3_network", "network": "arbitrum"}`
-
-**If no network is specified**, proceed with the current/default network (usually base).
-
 ---
 
-## Tools Used
+## Task 1: Prepare — look up token, check balances
 
-| Tool | Purpose |
-|------|---------|
-| `token_lookup` | Get token address and decimals |
-| `to_raw_amount` | Convert human amount to raw units safely |
-| `web3_preset_function_call` | Execute ERC20 transfers and check balances via presets |
-| `set_address` | Set recipient address (validated) |
+### 1a. Select network (if user specified one)
 
-**Note:** `wallet_address` is an intrinsic register - always available automatically.
-
----
-
-## Required Tool Flow
-
-**ALWAYS follow this sequence for ERC20 transfers:**
-
-0. `select_web3_network` -> **If user specified a network** (e.g., "on polygon")
-1. `token_lookup` -> Get token address and decimals
-2. `to_raw_amount` -> Convert human amount to raw units (sets `transfer_amount` register)
-3. `set_address` -> Set `recipient_address` register
-4. `web3_preset_function_call` -> Execute the transfer via `erc20_transfer` preset
-
----
-
-## Step 1: Look up the token
-
-```tool:token_lookup
-symbol: "STARKBOT"
-network: base
-cache_as: token_address
+```json
+{"tool": "select_web3_network", "network": "<network>"}
 ```
 
-This sets registers:
-- `token_address` -> contract address
-- `token_address_decimals` -> decimals (e.g., 18)
+If no network specified, skip this step (default is base).
 
----
+### 1b. Look up the token
 
-## Step 2: Convert amount to raw units
-
-```tool:to_raw_amount
-amount: "1"
-cache_as: "transfer_amount"
+```json
+{"tool": "token_lookup", "symbol": "<TOKEN>", "cache_as": "token_address"}
 ```
 
-This reads `token_address_decimals` automatically and sets:
-- `transfer_amount` -> "1000000000000000000" (for 18 decimals)
+This sets registers: `token_address` and `token_address_decimals`.
+
+### 1c. Check token balance
+
+```json
+{"tool": "web3_preset_function_call", "preset": "erc20_balance", "network": "<network>", "call_only": true}
+```
+
+### 1d. Report findings and complete
+
+Tell the user what you found (token address, balance, whether they have enough) using `say_to_user` with `finished_task: true`:
+
+```json
+{"tool": "say_to_user", "message": "Found token: <TOKEN>=0x...\nBalance: ...\nReady to transfer.", "finished_task": true}
+```
+
+**Do NOT proceed to setting address or converting amounts in this task. Just report findings.**
 
 ---
 
-## Step 3: Set recipient address
+## Task 2: Set recipient address and convert amount
+
+### 2a. Set recipient address
 
 ```json
 {"tool": "set_address", "register": "recipient_address", "address": "<RECIPIENT_ADDRESS>"}
 ```
 
+### 2b. Convert amount to raw units
+
+```json
+{"tool": "to_raw_amount", "amount": "<human_amount>", "cache_as": "transfer_amount"}
+```
+
+This reads `token_address_decimals` automatically and sets the `transfer_amount` register.
+
+After both succeed:
+```json
+{"tool": "task_fully_completed", "summary": "Recipient set and amount converted. Ready to execute transfer."}
+```
+
 ---
 
-## Step 4: Execute the transfer
+## Task 3: Execute the transfer
 
-```tool:web3_preset_function_call
-preset: erc20_transfer
-network: base
+**Exactly 2 tool calls, SEQUENTIALLY (one at a time, NOT in parallel):**
+
+### 3a. Create the transfer transaction (FIRST call)
+
+```json
+{"tool": "web3_preset_function_call", "preset": "erc20_transfer", "network": "<network>"}
 ```
 
 The `erc20_transfer` preset reads `token_address`, `recipient_address`, and `transfer_amount` from registers automatically.
 
----
+Wait for the result. Extract the `uuid` from the response.
 
-## Complete Example: Send 10 USDC
-
-```tool:token_lookup
-symbol: "USDC"
-network: base
-cache_as: token_address
-```
-
-```tool:to_raw_amount
-amount: "10"
-cache_as: "transfer_amount"
-```
+### 3b. Broadcast it (SECOND call — after 3a succeeds)
 
 ```json
-{"tool": "set_address", "register": "recipient_address", "address": "0x1234567890abcdef1234567890abcdef12345678"}
+{"tool": "broadcast_web3_tx", "uuid": "<uuid_from_3a>"}
 ```
 
-```tool:web3_preset_function_call
-preset: erc20_transfer
-network: base
-```
-
-> **Note:** The `transfer_amount` register is validated by the tool to prevent hallucinated amounts.
-
----
-
-## Verify and Broadcast
-
-After queueing, verify the transaction:
-```tool:list_queued_web3_tx
-status: pending
-limit: 1
-```
-
-Broadcast when ready:
-```tool:broadcast_web3_tx
+After broadcast succeeds:
+```json
+{"tool": "task_fully_completed", "summary": "Transfer broadcast. Verifying next."}
 ```
 
 ---
 
-## Check ERC20 Token Balance
+## Task 4: Verify the transfer
 
-First look up the token, then use the erc20_balance preset:
+Call `verify_tx_broadcast` to poll for the receipt and confirm the result:
 
-```tool:token_lookup
-symbol: "USDC"
-network: base
-cache_as: token_address
+```json
+{"tool": "verify_tx_broadcast"}
 ```
 
-```tool:web3_preset_function_call
-preset: erc20_balance
-network: base
-call_only: true
-```
+Read the output:
 
----
+- **"TRANSACTION VERIFIED"** → The transfer succeeded AND the AI confirmed it matches the user's intent. Report success with tx hash and explorer link.
+- **"TRANSACTION CONFIRMED — INTENT MISMATCH"** → Confirmed on-chain but AI flagged a concern. Tell the user to check the explorer.
+- **"TRANSACTION REVERTED"** → The transfer failed. Tell the user.
+- **"CONFIRMATION TIMEOUT"** → Tell the user to check the explorer link.
 
-## Common Token Addresses (Base)
-
-Use `token_lookup` to get addresses automatically, or use these directly:
-
-| Token | Address | Decimals |
-|-------|---------|----------|
-| USDC | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | 6 |
-| WETH | `0x4200000000000000000000000000000000000006` | 18 |
-| BNKR | `0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b` | 18 |
-| cbBTC | `0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf` | 8 |
-| DAI | `0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb` | 18 |
-| USDbC | `0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA` | 6 |
-
----
-
-## Amount Conversion Reference
-
-| Token | Decimals | Human Amount | Raw Value |
-|-------|----------|--------------|-----------|
-| USDC | 6 | 1 | `1000000` |
-| USDC | 6 | 10 | `10000000` |
-| USDC | 6 | 100 | `100000000` |
-| BNKR | 18 | 1 | `1000000000000000000` |
-| BNKR | 18 | 100 | `100000000000000000000` |
-| cbBTC | 8 | 0.001 | `100000` |
-| cbBTC | 8 | 0.01 | `1000000` |
-
----
-
-## Pre-Transfer Checklist
-
-Before executing a transfer:
-
-1. **Verify recipient address** - Double-check the address is correct
-2. **Check balance** - Use `web3_preset_function_call` (erc20_balance preset) for tokens
-3. **Confirm amount** - Ensure decimals are correct for the token (use `to_raw_amount`!)
-4. **Network** - Confirm you're on the right network (base vs mainnet)
-5. **ETH for gas** - You need ETH to pay for gas, even when sending ERC20s
-
----
-
-## Error Handling
-
-| Error | Cause | Solution |
-|-------|-------|----------|
-| "Insufficient funds" | Not enough ETH for gas | Add ETH to wallet |
-| "Transfer amount exceeds balance" | Not enough tokens | Check token balance |
-| "Gas estimation failed" | Invalid recipient or params | Verify addresses |
-| "Transaction reverted" | Contract rejection | Check amounts |
-| "Register not found" | Missing register | Use token_lookup/to_raw_amount/set_address first |
-
----
-
-## Security Notes
-
-1. **Register pattern prevents hallucination** - tx data flows through registers
-2. **set_address validates addresses** - rejects invalid formats and zero address
-3. **to_raw_amount validates amounts** - prevents incorrect decimal conversions
-4. **Always double-check addresses** - Transactions cannot be reversed
-5. **Start with small test amounts** - Verify the flow works first
-6. **Verify token contracts** - Use official addresses from block explorer
-7. **Gas costs** - ETH needed for gas even when sending ERC20s
+Call `task_fully_completed` when verify_tx_broadcast returned VERIFIED or CONFIRMED.

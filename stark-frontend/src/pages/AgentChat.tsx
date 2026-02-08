@@ -15,7 +15,7 @@ import SubagentBadge from '@/components/chat/SubagentBadge';
 import { Subagent, SubagentStatus } from '@/lib/subagent-types';
 import { useGateway } from '@/hooks/useGateway';
 import { useWallet, SUPPORTED_NETWORKS, type SupportedNetwork } from '@/hooks/useWallet';
-import { sendChatMessage, getAgentSettings, getSkills, getTools, confirmTransaction, cancelTransaction, stopExecution, listSubagents, getActiveWebSession, getSessionTranscript, getExecutionStatus, createNewWebSession } from '@/lib/api';
+import { sendChatMessage, getAgentSettings, getSkills, getTools, confirmTransaction, cancelTransaction, stopExecution, listSubagents, getActiveWebSession, getSessionTranscript, getExecutionStatus, createNewWebSession, getPlannerTasks } from '@/lib/api';
 import { Command, COMMAND_DEFINITIONS, getAllCommands } from '@/lib/commands';
 import type { ChatMessage as ChatMessageType, MessageRole, SlashCommand, TrackedTransaction, TxPendingEvent, TxConfirmedEvent, PendingConfirmation, ConfirmationRequiredEvent, PlannerTask, TaskQueueUpdateEvent, TaskStatusChangeEvent } from '@/types';
 
@@ -889,6 +889,36 @@ export default function AgentChat() {
       off('execution.stopped', handleExecutionStopped);
     };
   }, [on, off, dbSessionId]);
+
+  // Poll for planner tasks while loading (fallback for missed WS events)
+  useEffect(() => {
+    if (!isLoading) return;
+
+    const poll = async () => {
+      try {
+        const response = await getPlannerTasks();
+        if (response.success && response.tasks.length > 0) {
+          setPlannerTasks(response.tasks.map((t) => ({
+            id: t.id,
+            description: t.description,
+            status: t.status as 'pending' | 'in_progress' | 'completed',
+          })));
+        }
+      } catch {
+        // Ignore polling errors
+      }
+    };
+
+    // Initial fetch after a short delay (give WS a chance first)
+    const initialTimeout = setTimeout(poll, 1500);
+    // Then poll every 2 seconds
+    const interval = setInterval(poll, 2000);
+
+    return () => {
+      clearTimeout(initialTimeout);
+      clearInterval(interval);
+    };
+  }, [isLoading]);
 
   // Fetch initial subagent list when connected
   useEffect(() => {

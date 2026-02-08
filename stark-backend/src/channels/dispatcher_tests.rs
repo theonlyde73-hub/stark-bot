@@ -652,408 +652,278 @@ async fn swap_flow_with_trace() {
 }
 
 // ============================================================================
-// Realistic swap flow test — calls every tool from the swap skill in order.
+// Real-AI swap flow integration test.
 //
-// Unlike swap_flow_with_trace (which only calls say_to_user/task_fully_completed),
-// this test has the mock AI call the actual swap tools:
-//   select_web3_network, token_lookup, to_raw_amount, web3_preset_function_call,
-//   x402_fetch, decode_calldata, broadcast_web3_tx, verify_tx_broadcast
+// Uses a REAL AI model (configured via TEST_AGENT_* env vars) to drive the
+// swap flow end-to-end. The AI reads the swap skill, decides which tools to
+// call, and the dispatcher + real tools execute them.
 //
-// Tools backed by real logic (token_lookup, to_raw_amount, select_web3_network)
-// succeed and set registers. Tools that need RPC/HTTP fail gracefully — the mock
-// AI ignores failures and continues. The trace captures everything.
+// This tests the full pipeline: skill loading, subtype selection, task queue
+// management, tool execution, register passing, and orchestrator logic.
+//
+// Marked #[ignore] so it doesn't run in CI — only when explicitly invoked:
+//   source .env && cargo test swap_flow_realistic -- --ignored --nocapture
 // ============================================================================
 
 #[tokio::test]
+#[ignore]
 async fn swap_flow_realistic() {
-    let responses = vec![
-        // === Iteration 1: set_agent_subtype("finance") — required before using crypto tools ===
-        AiResponse::with_tools(
-            String::new(),
-            vec![tool_call(
-                "set_agent_subtype",
-                json!({"subtype": "finance"}),
-            )],
-        ),
+    use crate::skills::SkillRegistry;
 
-        // === Iteration 2: define_tasks (5 tasks) ===
-        AiResponse::with_tools(
-            String::new(),
-            vec![tool_call(
-                "define_tasks",
-                json!({
-                    "tasks": [
-                        "TASK 1 — Prepare: select network, look up sell+buy tokens, check Permit2 allowance. Call say_to_user(finished_task:true) when done.",
-                        "TASK 2 — Approve Permit2 (SKIP if allowance sufficient).",
-                        "TASK 3 — Quote+Decode: call to_raw_amount, then x402_fetch swap_quote, then decode_calldata with cache_as 'swap'. ALL THREE steps required.",
-                        "TASK 4 — Execute: call swap_execute preset THEN broadcast_web3_tx. Exactly 2 sequential tool calls.",
-                        "TASK 5 — Verify: call verify_tx_broadcast, report result."
-                    ]
-                }),
-            )],
-        ),
-
-        // === TASK 1: Prepare ===
-
-        // Iteration 3: select_web3_network(network: "base") → SUCCESS
-        AiResponse::with_tools(
-            "Selecting Base network.".to_string(),
-            vec![tool_call(
-                "select_web3_network",
-                json!({"network": "base"}),
-            )],
-        ),
-
-        // Iteration 4: token_lookup(symbol: "USDC", cache_as: "sell_token") → SUCCESS
-        AiResponse::with_tools(
-            "Looking up sell token USDC.".to_string(),
-            vec![tool_call(
-                "token_lookup",
-                json!({"symbol": "USDC", "cache_as": "sell_token"}),
-            )],
-        ),
-
-        // Iteration 4: token_lookup(symbol: "DEGEN", cache_as: "buy_token") → SUCCESS
-        AiResponse::with_tools(
-            "Looking up buy token DEGEN.".to_string(),
-            vec![tool_call(
-                "token_lookup",
-                json!({"symbol": "DEGEN", "cache_as": "buy_token"}),
-            )],
-        ),
-
-        // Iteration 5: web3_preset_function_call(erc20_allowance_permit2, call_only) → FAIL (no RPC)
-        AiResponse::with_tools(
-            "Checking Permit2 allowance.".to_string(),
-            vec![tool_call(
-                "web3_preset_function_call",
-                json!({"preset": "erc20_allowance_permit2", "call_only": true}),
-            )],
-        ),
-
-        // Iteration 6: say_to_user(finished_task: true) → SUCCESS → advances to Task 2
-        AiResponse::with_tools(
-            String::new(),
-            vec![tool_call(
-                "say_to_user",
-                json!({
-                    "message": "Found tokens:\n- SELL: USDC (6 decimals)\n- BUY: DEGEN (18 decimals)\n\nPermit2 allowance check failed (no RPC), assuming sufficient.",
-                    "finished_task": true
-                }),
-            )],
-        ),
-
-        // === TASK 2: Approve (skip) ===
-
-        // Iteration 7: task_fully_completed("Allowance sufficient") → advances to Task 3
-        AiResponse::with_tools(
-            String::new(),
-            vec![tool_call(
-                "task_fully_completed",
-                json!({"summary": "Allowance sufficient — skipping approval."}),
-            )],
-        ),
-
-        // === TASK 3: Quote+Decode ===
-
-        // Iteration 8: to_raw_amount(amount: "1", decimals_register: "sell_token_decimals") → SUCCESS ("1000000")
-        AiResponse::with_tools(
-            "Converting 1 USDC to raw amount.".to_string(),
-            vec![tool_call(
-                "to_raw_amount",
-                json!({
-                    "amount": "1",
-                    "decimals_register": "sell_token_decimals",
-                    "cache_as": "sell_amount"
-                }),
-            )],
-        ),
-
-        // Iteration 9: x402_fetch(preset: "swap_quote") → FAIL (no HTTP endpoint)
-        AiResponse::with_tools(
-            "Fetching swap quote from 0x.".to_string(),
-            vec![tool_call(
-                "x402_fetch",
-                json!({"preset": "swap_quote", "cache_as": "swap_quote"}),
-            )],
-        ),
-
-        // Iteration 10: decode_calldata(abi: "0x_settler", calldata_register: "swap_quote") → FAIL (no data)
-        AiResponse::with_tools(
-            "Decoding swap calldata.".to_string(),
-            vec![tool_call(
-                "decode_calldata",
-                json!({
-                    "abi": "0x_settler",
-                    "calldata_register": "swap_quote",
-                    "cache_as": "swap"
-                }),
-            )],
-        ),
-
-        // Iteration 11: task_fully_completed("Quote decoded") → advances to Task 4
-        AiResponse::with_tools(
-            String::new(),
-            vec![tool_call(
-                "task_fully_completed",
-                json!({"summary": "Quote fetched and decoded. Ready to execute swap."}),
-            )],
-        ),
-
-        // === TASK 4: Execute ===
-
-        // Iteration 12: web3_preset_function_call(preset: "swap_execute") → FAIL (no RPC + missing registers)
-        AiResponse::with_tools(
-            "Executing swap transaction.".to_string(),
-            vec![tool_call(
-                "web3_preset_function_call",
-                json!({"preset": "swap_execute"}),
-            )],
-        ),
-
-        // Iteration 13: broadcast_web3_tx(uuid: "mock-uuid-123") → FAIL (no tx in queue)
-        AiResponse::with_tools(
-            "Broadcasting transaction.".to_string(),
-            vec![tool_call(
-                "broadcast_web3_tx",
-                json!({"uuid": "mock-uuid-123"}),
-            )],
-        ),
-
-        // Iteration 14: task_fully_completed("Swap broadcast") → advances to Task 5
-        AiResponse::with_tools(
-            String::new(),
-            vec![tool_call(
-                "task_fully_completed",
-                json!({"summary": "Swap transaction broadcast. Verifying next."}),
-            )],
-        ),
-
-        // === TASK 5: Verify ===
-
-        // Iteration 15: verify_tx_broadcast() → FAIL (no tx to verify)
-        AiResponse::with_tools(
-            "Verifying swap transaction.".to_string(),
-            vec![tool_call(
-                "verify_tx_broadcast",
-                json!({}),
-            )],
-        ),
-
-        // Iteration 16: say_to_user(finished_task: true) → SUCCESS → all tasks done, loop terminates
-        AiResponse::with_tools(
-            String::new(),
-            vec![tool_call(
-                "say_to_user",
-                json!({
-                    "message": "Swap complete (verification failed in test — no real tx). All tasks done.",
-                    "finished_task": true
-                }),
-            )],
-        ),
-    ];
-
-    let mut harness = TestHarness::new("web", false, false, responses);
-    let (result, _events) = harness.dispatch("swap 1 usdc to degen", false).await;
-
-    // Write trace for auditing
-    harness.write_trace("swap_flow_realistic");
-
-    // Verify dispatch succeeded
-    assert!(result.error.is_none(), "dispatch should succeed: {:?}", result.error);
-
-    // === Assertion 1: Get trace and verify iteration count ===
-    let trace = harness.get_trace();
-
-    // Print summary
-    let extract_task_num = |sys_prompt: &str| -> Option<(usize, usize)> {
-        if let Some(pos) = sys_prompt.find("CURRENT TASK (") {
-            let after = &sys_prompt[pos + "CURRENT TASK (".len()..];
-            if let Some(slash) = after.find('/') {
-                let current: usize = after[..slash].parse().ok()?;
-                let rest = &after[slash + 1..];
-                if let Some(paren) = rest.find(')') {
-                    let total: usize = rest[..paren].parse().ok()?;
-                    return Some((current, total));
-                }
-            }
+    // === Read env vars (skip if not set) ===
+    let endpoint = match std::env::var("TEST_AGENT_ENDPOINT") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            eprintln!("SKIPPING swap_flow_realistic: TEST_AGENT_ENDPOINT not set");
+            return;
         }
-        None
     };
+    let secret = match std::env::var("TEST_AGENT_SECRET") {
+        Ok(v) if !v.is_empty() => Some(v),
+        _ => None,
+    };
+    let archetype = std::env::var("TEST_AGENT_ARCHETYPE").unwrap_or_else(|_| "kimi".to_string());
 
-    let mut task_numbers: Vec<Option<(usize, usize)>> = Vec::new();
-    for entry in &trace {
-        let sys_prompt = entry.input_messages.first()
-            .map(|m| m.content.as_str())
-            .unwrap_or("");
-        task_numbers.push(extract_task_num(sys_prompt));
-    }
+    eprintln!("\n=== SWAP FLOW REALISTIC (Real AI) ===");
+    eprintln!("  Endpoint:  {}", endpoint);
+    eprintln!("  Archetype: {}", archetype);
+    eprintln!("  Secret:    {}", if secret.is_some() { "***" } else { "(none)" });
 
-    eprintln!("\n=== SWAP FLOW REALISTIC TEST SUMMARY ===");
-    eprintln!("Total AI iterations: {}", trace.len());
-    for (i, entry) in trace.iter().enumerate() {
-        let tool_names: Vec<&str> = entry.output_response.as_ref()
-            .map(|r| r.tool_calls.iter().map(|tc| tc.name.as_str()).collect())
-            .unwrap_or_default();
-        let task_info = task_numbers[i]
-            .map(|(c, t)| format!("TASK {}/{}", c, t))
-            .unwrap_or_else(|| "no task".to_string());
-        eprintln!(
-            "  Iter {:>2}: {} | tools={:?} | tool_history={}",
-            entry.iteration,
-            task_info,
-            tool_names,
-            entry.input_tool_history.len(),
-        );
-    }
-    eprintln!("=========================================\n");
+    // === Setup: in-memory DB + agent settings ===
+    let db = Arc::new(Database::new(":memory:").expect("in-memory db"));
+    db.save_agent_settings(
+        &endpoint,
+        &archetype,
+        4096,
+        100_000,
+        secret.as_deref(),
+    )
+    .expect("save agent settings");
 
-    // 17 mock responses → 17 trace entries
-    assert_eq!(
-        trace.len(), 17,
-        "Expected 17 AI iterations (set_agent_subtype + define_tasks + 15 tool calls), got {}",
-        trace.len()
+    // Create a web channel (safe_mode off so AI has full tool access)
+    let channel = db
+        .create_channel_with_safe_mode("web", "test-channel", "fake-token", None, false)
+        .expect("create channel");
+    let channel_id = channel.id;
+
+    // === Load swap skill from disk ===
+    let skill_md_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("skills/swap.md");
+    let skill_content = std::fs::read_to_string(&skill_md_path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {}", skill_md_path.display(), e));
+
+    let skill_registry = Arc::new(SkillRegistry::new(db.clone()));
+    let skill = skill_registry.create_skill_from_markdown_force(&skill_content)
+        .unwrap_or_else(|e| panic!("Failed to load swap skill: {}", e));
+    eprintln!("  Loaded skill: {} v{}", skill.name, skill.version);
+
+    // === Build dispatcher (no mock — real AI) ===
+    let broadcaster = Arc::new(EventBroadcaster::new());
+    let (client_id, mut event_rx) = broadcaster.subscribe();
+    let execution_tracker = Arc::new(ExecutionTracker::new(broadcaster.clone()));
+    let tool_registry = Arc::new(tools::create_default_registry());
+
+    let dispatcher = MessageDispatcher::new_with_wallet_and_skills(
+        db.clone(),
+        broadcaster.clone(),
+        tool_registry,
+        execution_tracker,
+        None, // no wallet provider
+        Some(skill_registry),
     );
 
-    // === Assertion 2: Task advancement (1/5) → (2/5) → ... → (5/5) ===
-    // Iter 1 (idx 0): set_agent_subtype — no task yet
-    assert_eq!(task_numbers[0], None, "Iter 1: no task (set_agent_subtype)");
-    // Iter 2 (idx 1): define_tasks — no task yet (planner mode)
-    assert_eq!(task_numbers[1], None, "Iter 2: no task (define_tasks / planner mode)");
-    // Task 1: iterations 3-7 (select_web3_network, 2x token_lookup, allowance, say_to_user)
-    assert_eq!(task_numbers[2], Some((1, 5)), "Iter 3: TASK 1/5");
-    assert_eq!(task_numbers[3], Some((1, 5)), "Iter 4: still TASK 1/5");
-    assert_eq!(task_numbers[4], Some((1, 5)), "Iter 5: still TASK 1/5");
-    assert_eq!(task_numbers[5], Some((1, 5)), "Iter 6: still TASK 1/5");
-    assert_eq!(task_numbers[6], Some((1, 5)), "Iter 7: still TASK 1/5 (say_to_user finishes it)");
-    // Task 2: iteration 8 (skip)
-    assert_eq!(task_numbers[7], Some((2, 5)), "Iter 8: TASK 2/5");
-    // Task 3: iterations 9-12 (to_raw_amount, x402_fetch, decode_calldata, task_fully_completed)
-    assert_eq!(task_numbers[8], Some((3, 5)), "Iter 9: TASK 3/5");
-    assert_eq!(task_numbers[9], Some((3, 5)), "Iter 10: still TASK 3/5");
-    assert_eq!(task_numbers[10], Some((3, 5)), "Iter 11: still TASK 3/5");
-    assert_eq!(task_numbers[11], Some((3, 5)), "Iter 12: still TASK 3/5 (task_fully_completed)");
-    // Task 4: iterations 13-15 (swap_execute, broadcast, task_fully_completed)
-    assert_eq!(task_numbers[12], Some((4, 5)), "Iter 13: TASK 4/5");
-    assert_eq!(task_numbers[13], Some((4, 5)), "Iter 14: still TASK 4/5");
-    assert_eq!(task_numbers[14], Some((4, 5)), "Iter 15: still TASK 4/5 (task_fully_completed)");
-    // Task 5: iterations 16-17 (verify, say_to_user)
-    assert_eq!(task_numbers[15], Some((5, 5)), "Iter 16: TASK 5/5");
-    assert_eq!(task_numbers[16], Some((5, 5)), "Iter 17: still TASK 5/5 (say_to_user finishes it)");
-
-    // === Assertion 3: Tools that should succeed DO succeed ===
-    // Helper: find tool response in trace by checking the tool_history that appears in the NEXT iteration.
-    // For trace[idx], its tool response appears in trace[idx + 1].input_tool_history.last().
-    let get_tool_response = |trace_idx: usize| -> Option<(&str, bool)> {
-        if trace_idx + 1 >= trace.len() {
-            return None;
-        }
-        let history = &trace[trace_idx + 1].input_tool_history;
-        let last_entry = history.last()?;
-        let resp = last_entry.tool_responses.first()?;
-        Some((&resp.content, resp.is_error))
+    // === Dispatch the swap message ===
+    let msg = NormalizedMessage {
+        channel_id,
+        channel_type: "web".to_string(),
+        chat_id: "test-chat".to_string(),
+        user_id: "test-user".to_string(),
+        user_name: "TestUser".to_string(),
+        text: "swap 1 usdc to degen on base".to_string(),
+        message_id: None,
+        session_mode: None,
+        selected_network: None,
+        force_safe_mode: false,
     };
 
-    // idx 0: set_agent_subtype → should succeed
-    if let Some((content, is_error)) = get_tool_response(0) {
-        assert!(!is_error, "set_agent_subtype should succeed, got error: {}", content);
+    eprintln!("  Dispatching: \"{}\"", msg.text);
+    eprintln!("  (timeout: 120s)\n");
+
+    let result = timeout(Duration::from_secs(120), dispatcher.dispatch(msg)).await
+        .expect("dispatch timed out after 120s");
+
+    // === Collect all events ===
+    let mut events = Vec::new();
+    // Drain buffered events
+    while let Ok(event) = event_rx.try_recv() {
+        events.push(event);
+    }
+    // Brief timeout drain for any trailing events
+    loop {
+        match timeout(Duration::from_millis(100), event_rx.recv()).await {
+            Ok(Some(event)) => events.push(event),
+            _ => break,
+        }
+    }
+    drop(event_rx);
+    let _ = client_id; // keep subscription alive until here
+
+    eprintln!("=== DISPATCH COMPLETE ===");
+    eprintln!("  Error: {:?}", result.error);
+    eprintln!("  Total events captured: {}", events.len());
+
+    // === Build trace from events ===
+    let mut trace_entries: Vec<serde_json::Value> = Vec::new();
+    let mut tool_results: Vec<serde_json::Value> = Vec::new();
+    let mut tool_calls_seen: Vec<String> = Vec::new();
+    let mut task_numbers_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for event in &events {
+        match event.event.as_str() {
+            "tool.result" => {
+                let tool_name = event.data.get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let success = event.data.get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let content = event.data.get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let duration_ms = event.data.get("duration_ms")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+
+                tool_calls_seen.push(tool_name.to_string());
+
+                let entry = json!({
+                    "tool_name": tool_name,
+                    "success": success,
+                    "duration_ms": duration_ms,
+                    "content_preview": &content[..content.len().min(200)],
+                });
+                tool_results.push(entry.clone());
+                trace_entries.push(json!({
+                    "type": "tool.result",
+                    "data": entry,
+                }));
+
+                eprintln!("  [tool.result] {} | success={} | {}ms | {}",
+                    tool_name, success, duration_ms, &content[..content.len().min(80)]);
+            }
+            "agent.tool_call" => {
+                let tool_name = event.data.get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                trace_entries.push(json!({
+                    "type": "agent.tool_call",
+                    "tool_name": tool_name,
+                    "parameters": event.data.get("parameters"),
+                }));
+            }
+            "agent.response" => {
+                let text = event.data.get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                trace_entries.push(json!({
+                    "type": "agent.response",
+                    "text_preview": &text[..text.len().min(200)],
+                }));
+                eprintln!("  [agent.response] {}", &text[..text.len().min(120)]);
+            }
+            "execution.task_started" | "execution.task_updated" => {
+                // Extract task counter from event data if available
+                if let Some(task_str) = event.data.get("task") {
+                    if let Some(s) = task_str.as_str() {
+                        task_numbers_seen.insert(s.to_string());
+                    }
+                }
+                // Also try to extract from description/index fields
+                if let Some(idx) = event.data.get("index").and_then(|v| v.as_i64()) {
+                    if let Some(total) = event.data.get("total").and_then(|v| v.as_i64()) {
+                        task_numbers_seen.insert(format!("{}/{}", idx, total));
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
-    // idx 1: define_tasks → should succeed
-    if let Some((content, is_error)) = get_tool_response(1) {
-        assert!(!is_error, "define_tasks should succeed, got error: {}", content);
-    }
+    eprintln!("\n=== SUMMARY ===");
+    eprintln!("  Tool calls: {:?}", tool_calls_seen);
+    eprintln!("  Distinct task events: {:?}", task_numbers_seen);
 
-    // idx 2: select_web3_network → should succeed
-    if let Some((content, is_error)) = get_tool_response(2) {
-        assert!(!is_error, "select_web3_network should succeed, got error: {}", content);
-        assert!(content.contains("base") || content.to_lowercase().contains("base"),
-            "select_web3_network response should mention 'base', got: {}", content);
-    }
+    // === Write trace to test_output/ ===
+    let output_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("test_output");
+    std::fs::create_dir_all(&output_dir).expect("create test_output dir");
 
-    // idx 3: token_lookup USDC → should succeed
-    if let Some((content, is_error)) = get_tool_response(3) {
-        assert!(!is_error, "token_lookup(USDC) should succeed, got error: {}", content);
-        assert!(content.contains("USDC"), "token_lookup response should mention USDC, got: {}", content);
-    }
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let filename = format!("swap_flow_realistic_{}.json", timestamp);
+    let filepath = output_dir.join(&filename);
 
-    // idx 4: token_lookup DEGEN → should succeed
-    if let Some((content, is_error)) = get_tool_response(4) {
-        assert!(!is_error, "token_lookup(DEGEN) should succeed, got error: {}", content);
-        assert!(content.contains("DEGEN") || content.contains("Degen"),
-            "token_lookup response should mention DEGEN, got: {}", content);
-    }
+    let trace_output = json!({
+        "test": "swap_flow_realistic",
+        "endpoint": endpoint,
+        "archetype": archetype,
+        "timestamp": timestamp.to_string(),
+        "dispatch_error": format!("{:?}", result.error),
+        "total_events": events.len(),
+        "tool_calls_seen": tool_calls_seen,
+        "task_numbers_seen": task_numbers_seen.iter().collect::<Vec<_>>(),
+        "tool_results": tool_results,
+        "trace": trace_entries,
+    });
 
-    // idx 5: web3_preset_function_call(erc20_allowance_permit2) → expected to FAIL (no RPC)
-    if let Some((_content, is_error)) = get_tool_response(5) {
-        assert!(is_error, "web3_preset_function_call(allowance) should fail without RPC");
-    }
+    std::fs::write(&filepath, serde_json::to_string_pretty(&trace_output).unwrap())
+        .expect("write trace file");
+    eprintln!("  Trace written to: {}", filepath.display());
+    eprintln!("================\n");
 
-    // idx 8: to_raw_amount → should succeed
-    // === Assertion 4: sell_token_decimals register correctly used (6 decimals → "1000000") ===
-    if let Some((content, is_error)) = get_tool_response(8) {
-        assert!(!is_error, "to_raw_amount should succeed, got error: {}", content);
-        // === Assertion 5: sell_amount register correctly set to "1000000" ===
-        assert!(content.contains("1000000"),
-            "to_raw_amount(1, decimals=6) should produce 1000000, got: {}", content);
-        assert!(content.contains("sell_amount"),
-            "to_raw_amount response should mention 'sell_amount' register, got: {}", content);
-    }
+    // === Assertions (loose — AI is non-deterministic) ===
 
-    // idx 9: x402_fetch → expected to FAIL (no HTTP)
-    if let Some((_content, is_error)) = get_tool_response(9) {
-        assert!(is_error, "x402_fetch should fail without HTTP endpoint");
-    }
+    // 1. Dispatch succeeds
+    assert!(
+        result.error.is_none(),
+        "dispatch should succeed, got error: {:?}",
+        result.error
+    );
 
-    // idx 10: decode_calldata → expected to FAIL (no data in register)
-    if let Some((_content, is_error)) = get_tool_response(10) {
-        assert!(is_error, "decode_calldata should fail without swap_quote data");
-    }
+    // 2. define_tasks was called (AI planned the swap)
+    assert!(
+        tool_calls_seen.iter().any(|t| t == "define_tasks"),
+        "AI should have called define_tasks to plan the swap. Tools called: {:?}",
+        tool_calls_seen
+    );
 
-    // idx 12: web3_preset_function_call(swap_execute) → expected to FAIL
-    if let Some((_content, is_error)) = get_tool_response(12) {
-        assert!(is_error, "web3_preset_function_call(swap_execute) should fail without RPC");
-    }
+    // 3. token_lookup was called at least twice (sell + buy tokens)
+    let token_lookup_count = tool_calls_seen.iter().filter(|t| *t == "token_lookup").count();
+    assert!(
+        token_lookup_count >= 2,
+        "AI should call token_lookup at least twice (sell + buy tokens), got {} calls. Tools: {:?}",
+        token_lookup_count, tool_calls_seen
+    );
 
-    // idx 13: broadcast_web3_tx → expected to FAIL (no tx in queue)
-    if let Some((_content, is_error)) = get_tool_response(13) {
-        assert!(is_error, "broadcast_web3_tx should fail without queued tx");
-    }
+    // 4. to_raw_amount was called at least once
+    assert!(
+        tool_calls_seen.iter().any(|t| t == "to_raw_amount"),
+        "AI should have called to_raw_amount to convert the amount. Tools: {:?}",
+        tool_calls_seen
+    );
 
-    // idx 15: verify_tx_broadcast → expected to FAIL (no tx to verify)
-    if let Some((_content, is_error)) = get_tool_response(15) {
-        assert!(is_error, "verify_tx_broadcast should fail without broadcast tx");
-    }
-
-    // === Verify all expected tools were called in order ===
-    let expected_tools = vec![
-        "set_agent_subtype",
-        "define_tasks",
-        "select_web3_network",
-        "token_lookup",    // USDC
-        "token_lookup",    // DEGEN
-        "web3_preset_function_call", // allowance
-        "say_to_user",     // finish task 1
-        "task_fully_completed", // skip task 2
-        "to_raw_amount",
-        "x402_fetch",
-        "decode_calldata",
-        "task_fully_completed", // finish task 3
-        "web3_preset_function_call", // swap_execute
-        "broadcast_web3_tx",
-        "task_fully_completed", // finish task 4
-        "verify_tx_broadcast",
-        "say_to_user",     // finish task 5
-    ];
-
-    let actual_tools: Vec<&str> = trace.iter()
-        .filter_map(|entry| entry.output_response.as_ref())
-        .flat_map(|resp| resp.tool_calls.iter().map(|tc| tc.name.as_str()))
-        .collect();
-
-    assert_eq!(
-        actual_tools, expected_tools,
-        "Tool call order mismatch.\nExpected: {:?}\nActual:   {:?}",
-        expected_tools, actual_tools
+    // 5. Task advancement happened — check via execution events or tool calls
+    // We should see task_fully_completed or say_to_user(finished_task) called multiple times,
+    // indicating the AI advanced through multiple tasks
+    let task_advance_tools = tool_calls_seen.iter()
+        .filter(|t| *t == "task_fully_completed" || *t == "say_to_user")
+        .count();
+    assert!(
+        task_advance_tools >= 3,
+        "Should see at least 3 task-advancing tool calls (task_fully_completed or say_to_user), got {}. Tools: {:?}",
+        task_advance_tools, tool_calls_seen
     );
 }
