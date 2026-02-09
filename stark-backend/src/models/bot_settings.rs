@@ -29,6 +29,8 @@ pub struct BotSettings {
     pub keystore_url: Option<String>,
     /// Whether to save a memory entry when a chat session completes
     pub chat_session_memory_generation: bool,
+    /// Whether unauthenticated users can view the guest dashboard
+    pub guest_dashboard_enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -47,6 +49,7 @@ impl Default for BotSettings {
             safe_mode_max_queries_per_10min: DEFAULT_SAFE_MODE_MAX_QUERIES_PER_10MIN,
             keystore_url: None, // Uses default: https://keystore.defirelay.com
             chat_session_memory_generation: true,
+            guest_dashboard_enabled: false,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -67,4 +70,5 @@ pub struct UpdateBotSettingsRequest {
     /// Custom keystore URL (empty string or null = use default)
     pub keystore_url: Option<String>,
     pub chat_session_memory_generation: Option<bool>,
+    pub guest_dashboard_enabled: Option<bool>,
 }

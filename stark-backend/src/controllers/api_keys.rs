@@ -801,6 +801,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 max_tool_iterations: Some(settings.max_tool_iterations),
                 rogue_mode_enabled: settings.rogue_mode_enabled,
                 safe_mode_max_queries_per_10min: Some(settings.safe_mode_max_queries_per_10min),
+                guest_dashboard_enabled: settings.guest_dashboard_enabled,
             });
         }
         Err(e) => {
@@ -1533,6 +1534,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
             settings.safe_mode_max_queries_per_10min,
             None, // Don't restore keystore_url - it's infrastructure config
             None,
+            Some(settings.guest_dashboard_enabled),
         ) {
             log::warn!("Failed to restore bot settings: {}", e);
         }

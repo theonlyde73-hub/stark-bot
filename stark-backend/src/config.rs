@@ -20,8 +20,6 @@ pub mod env_vars {
     pub const MEMORY_ENABLE_PRE_COMPACTION_FLUSH: &str = "STARK_MEMORY_ENABLE_PRE_COMPACTION_FLUSH";
     pub const MEMORY_ENABLE_CROSS_SESSION: &str = "STARK_MEMORY_ENABLE_CROSS_SESSION";
     pub const MEMORY_CROSS_SESSION_LIMIT: &str = "STARK_MEMORY_CROSS_SESSION_LIMIT";
-    // Guest dashboard feature flag
-    pub const GUEST_DASHBOARD: &str = "GUEST_DASHBOARD";
 }
 
 /// Default values
@@ -86,13 +84,6 @@ pub fn soul_dir() -> String {
 /// Get the burner wallet private key from environment (for tools)
 pub fn burner_wallet_private_key() -> Option<String> {
     env::var(env_vars::BURNER_WALLET_PRIVATE_KEY).ok()
-}
-
-/// Check if guest dashboard is enabled via environment variable
-pub fn guest_dashboard_enabled() -> bool {
-    env::var(env_vars::GUEST_DASHBOARD)
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
 }
 
 /// Derive the public address from a private key

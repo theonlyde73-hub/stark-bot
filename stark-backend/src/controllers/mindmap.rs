@@ -60,7 +60,8 @@ async fn get_graph(
 
 /// Get the full mind map graph for guest users (no auth required, feature flag controlled)
 async fn get_graph_guest(data: web::Data<AppState>) -> impl Responder {
-    if !crate::config::guest_dashboard_enabled() {
+    let guest_enabled = data.db.get_bot_settings().map(|s| s.guest_dashboard_enabled).unwrap_or(false);
+    if !guest_enabled {
         return HttpResponse::Forbidden().json(serde_json::json!({
             "error": "Guest dashboard is not enabled"
         }));

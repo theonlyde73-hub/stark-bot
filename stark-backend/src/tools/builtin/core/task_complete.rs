@@ -24,7 +24,7 @@ impl TaskFullyCompletedTool {
             "summary".to_string(),
             PropertySchema {
                 schema_type: "string".to_string(),
-                description: "A brief summary of what was accomplished. This will be shown to the user.".to_string(),
+                description: "A brief summary of what was accomplished (internal log only — NOT shown to the user on social channels). Use say_to_user if you need the user to see your response.".to_string(),
                 default: None,
                 items: None,
                 enum_values: None,

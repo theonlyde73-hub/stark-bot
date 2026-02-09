@@ -1,6 +1,6 @@
 use actix_web::{web, HttpResponse, Responder};
 
-use crate::{config, AppState};
+use crate::AppState;
 
 /// Version from Cargo.toml, available at compile time
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -31,11 +31,13 @@ async fn get_config_status(state: web::Data<AppState>) -> impl Responder {
         None => (None, None),
     };
 
+    let guest_dashboard = state.db.get_bot_settings().map(|s| s.guest_dashboard_enabled).unwrap_or(false);
+
     HttpResponse::Ok().json(serde_json::json!({
         "login_configured": state.config.login_admin_public_address.is_some(),
-        "burner_wallet_configured": config::burner_wallet_private_key().is_some(),
+        "burner_wallet_configured": crate::config::burner_wallet_private_key().is_some(),
         "wallet_configured": state.wallet_provider.is_some(),
-        "guest_dashboard_enabled": config::guest_dashboard_enabled(),
+        "guest_dashboard_enabled": guest_dashboard,
         "wallet_address": wallet_address,
         "wallet_mode": wallet_mode
     }))

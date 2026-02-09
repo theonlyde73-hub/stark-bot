@@ -356,6 +356,20 @@ impl Database {
             conn.execute("ALTER TABLE bot_settings ADD COLUMN chat_session_memory_generation INTEGER NOT NULL DEFAULT 1", [])?;
         }
 
+        // Migration: Add guest_dashboard_enabled column to bot_settings if it doesn't exist
+        let has_guest_dashboard: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('bot_settings') WHERE name='guest_dashboard_enabled'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_guest_dashboard {
+            conn.execute("ALTER TABLE bot_settings ADD COLUMN guest_dashboard_enabled INTEGER NOT NULL DEFAULT 0", [])?;
+        }
+
         // Initialize bot_settings with defaults if empty
         let bot_settings_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM bot_settings", [], |row| row.get(0))

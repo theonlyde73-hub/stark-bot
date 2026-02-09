@@ -177,14 +177,26 @@ When `finished_task` is false or omitted, the message is shown but the loop cont
 - You want to give a progress update while still working → omit `finished_task`
 - You want to explain something, answer a question, or share results → set `finished_task: true`
 
+### CRITICAL — Twitter / social media:
+On Twitter, **only your LAST `say_to_user` message becomes the tweet**. Earlier messages are discarded. Therefore:
+- Your final `say_to_user` MUST contain the **actual content** the user should see — not a meta-summary like "I summarized the data" or "Done! Here's a summary."
+- **Never** end with a vague summary of what you did. End with the actual answer, data, or insight.
+- If you have a multi-step task, put the real content in your **last** `say_to_user` call.
+
 ### ❌ WRONG (user sees nothing useful):
 ```
 use_skill("starkbot") → task_fully_completed("Provided overview of capabilities")
+```
+```
+say_to_user("I looked up the price and summarized it for you", finished_task=true)
 ```
 
 ### ✅ CORRECT (user sees the actual answer):
 ```
 use_skill("starkbot") → say_to_user(message="Here's what I can do:\n- Software development...\n- Crypto operations...", finished_task=true)
+```
+```
+say_to_user(message="BTC is at $97,234 (+2.3% today). ETH at $3,102 (-0.5%).", finished_task=true)
 ```
 
 ## Completing Tasks (Alternative)

@@ -213,6 +213,7 @@ pub struct BotSettingsEntry {
     pub max_tool_iterations: Option<i32>,
     pub rogue_mode_enabled: bool,
     pub safe_mode_max_queries_per_10min: Option<i32>,
+    pub guest_dashboard_enabled: bool,
 }
 
 /// Channel setting entry in backup

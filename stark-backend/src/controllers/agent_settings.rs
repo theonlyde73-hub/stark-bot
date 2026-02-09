@@ -262,6 +262,7 @@ pub async fn update_bot_settings(
         request.safe_mode_max_queries_per_10min,
         request.keystore_url.as_deref(),
         request.chat_session_memory_generation,
+        request.guest_dashboard_enabled,
     ) {
         Ok(settings) => {
             log::info!(

@@ -364,6 +364,7 @@ async fn restore_backup_data(
             settings.safe_mode_max_queries_per_10min,
             None, // Don't restore keystore_url - it's infrastructure config
             None,
+            Some(settings.guest_dashboard_enabled),
         ) {
             Ok(_) => log::info!("[Keystore] Restored bot settings"),
             Err(e) => log::warn!("[Keystore] Failed to restore bot settings: {}", e),

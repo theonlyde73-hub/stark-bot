@@ -1182,6 +1182,7 @@ export interface BotSettings {
   safe_mode_max_queries_per_10min: number;
   keystore_url?: string;
   chat_session_memory_generation: boolean;
+  guest_dashboard_enabled: boolean;
   created_at: string;
   updated_at: string;
 }

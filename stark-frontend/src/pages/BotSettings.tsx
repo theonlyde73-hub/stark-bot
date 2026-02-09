@@ -28,6 +28,7 @@ export default function BotSettings() {
   const [safeModeMaxQueries, setSafeModeMaxQueries] = useState(5);
   const [keystoreUrl, setKeystoreUrl] = useState('');
   const [chatSessionMemoryGeneration, setChatSessionMemoryGeneration] = useState(true);
+  const [guestDashboardEnabled, setGuestDashboardEnabled] = useState(false);
   const [autoSyncStatus, setAutoSyncStatus] = useState<AutoSyncStatus | null>(null);
   const [walletAddress, setWalletAddress] = useState<string>('');
   const [walletMode, setWalletMode] = useState<string>('');
@@ -86,6 +87,7 @@ export default function BotSettings() {
       setSafeModeMaxQueries(data.safe_mode_max_queries_per_10min || 5);
       setKeystoreUrl(data.keystore_url || '');
       setChatSessionMemoryGeneration(data.chat_session_memory_generation ?? true);
+      setGuestDashboardEnabled(data.guest_dashboard_enabled ?? false);
       if (data.custom_rpc_endpoints) {
         setCustomRpcBase(data.custom_rpc_endpoints.base || '');
         setCustomRpcMainnet(data.custom_rpc_endpoints.mainnet || '');
@@ -127,6 +129,7 @@ export default function BotSettings() {
         safe_mode_max_queries_per_10min: safeModeMaxQueries,
         keystore_url: keystoreUrl,
         chat_session_memory_generation: chatSessionMemoryGeneration,
+        guest_dashboard_enabled: guestDashboardEnabled,
       });
       setSettings(updated);
       setMessage({ type: 'success', text: 'Settings saved successfully' });
@@ -408,6 +411,32 @@ export default function BotSettings() {
             <p className="text-xs text-slate-500">
               When enabled, the user's input and the bot's final response are appended to the daily memory log
               when a chat session completes. Safe mode sessions are logged under the safemode identity.
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Guest Dashboard Section */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="w-5 h-5 text-stark-400" />
+              Guest Dashboard
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={guestDashboardEnabled}
+                onChange={(e) => setGuestDashboardEnabled(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-stark-500 focus:ring-stark-500"
+              />
+              <span className="text-sm text-slate-300">
+                Enable Guest Dashboard
+              </span>
+            </label>
+            <p className="text-xs text-slate-500">
+              Allow unauthenticated users to view the mind map dashboard without logging in.
             </p>
           </CardContent>
         </Card>

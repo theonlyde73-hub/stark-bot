@@ -1000,12 +1000,12 @@ async fn process_mention(
 
     let text_with_hint = if let Some(ref ctx) = thread_context {
         format!(
-            "[TWITTER MENTION from @{} - {}. Reply using say_to_user — your reply will be posted to Twitter automatically.]\n\n[THREAD CONTEXT - conversation history:]\n{}\n\n[POST DIRECTED TO YOU - YOU ARE REPLYING TO THIS POST:]\n@{}: {}",
+            "[TWITTER MENTION from @{} - {}. Reply using say_to_user — your LAST say_to_user message becomes the tweet. It MUST contain the actual answer/content, NOT a meta-summary like 'I summarized X'. Put real data in it.]\n\n[THREAD CONTEXT - conversation history:]\n{}\n\n[POST DIRECTED TO YOU - YOU ARE REPLYING TO THIS POST:]\n@{}: {}",
             author_username, char_hint, ctx, author_username, command_text
         )
     } else {
         format!(
-            "[TWITTER MENTION from @{} - {}. Reply using say_to_user — your reply will be posted to Twitter automatically.]\n\n{}",
+            "[TWITTER MENTION from @{} - {}. Reply using say_to_user — your LAST say_to_user message becomes the tweet. It MUST contain the actual answer/content, NOT a meta-summary like 'I summarized X'. Put real data in it.]\n\n{}",
             author_username, char_hint, command_text
         )
     };
@@ -1499,7 +1499,7 @@ mod tests {
         let thread_ctx = "@alice: Has anyone tried the new DeFi protocol?\n@bob: Yeah it looks promising but the TVL is low";
 
         let hint_with_thread = format!(
-            "[TWITTER MENTION from @{} - {}. Reply using say_to_user — your reply will be posted to Twitter automatically.]\n\n[THREAD CONTEXT - conversation history:]\n{}\n\n[POST DIRECTED TO YOU - YOU ARE REPLYING TO THIS POST:]\n@{}: {}",
+            "[TWITTER MENTION from @{} - {}. Reply using say_to_user — your LAST say_to_user message becomes the tweet. It MUST contain the actual answer/content, NOT a meta-summary like 'I summarized X'. Put real data in it.]\n\n[THREAD CONTEXT - conversation history:]\n{}\n\n[POST DIRECTED TO YOU - YOU ARE REPLYING TO THIS POST:]\n@{}: {}",
             author_username, char_hint, thread_ctx, author_username, command_text
         );
 
@@ -1511,7 +1511,7 @@ mod tests {
 
         // Without thread context (standalone)
         let hint_standalone = format!(
-            "[TWITTER MENTION from @{} - {}. Reply using say_to_user — your reply will be posted to Twitter automatically.]\n\n{}",
+            "[TWITTER MENTION from @{} - {}. Reply using say_to_user — your LAST say_to_user message becomes the tweet. It MUST contain the actual answer/content, NOT a meta-summary like 'I summarized X'. Put real data in it.]\n\n{}",
             author_username, char_hint, command_text
         );
 
