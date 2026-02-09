@@ -20,3 +20,4 @@ pub mod sessions;
 pub mod skills;
 pub mod tools;
 pub mod tx_queue;
+pub mod well_known;

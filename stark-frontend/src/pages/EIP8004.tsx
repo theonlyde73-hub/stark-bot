@@ -266,6 +266,22 @@ export default function EIP8004() {
                     </div>
                   )}
 
+                  <div className="p-4 bg-slate-700/50 rounded-lg">
+                    <p className="text-slate-400 text-sm mb-1">Public Registration Endpoint</p>
+                    <a
+                      href="/.well-known/agent-registration.json"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-stark-400 hover:text-stark-300 flex items-center gap-1 text-sm"
+                    >
+                      /.well-known/agent-registration.json
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                    <p className="text-slate-500 text-xs mt-1">
+                      EIP-8004 domain verification endpoint (public, no auth required)
+                    </p>
+                  </div>
+
                   {/* Animated License Card */}
                   <AnimatedLicense
                     agentId={identity.agent_id}

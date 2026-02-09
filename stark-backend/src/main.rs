@@ -852,6 +852,7 @@ async fn main() -> std::io::Result<()> {
             .configure(controllers::broadcasted_transactions::config)
             .configure(controllers::mindmap::config)
             .configure(controllers::memory::config)
+            .configure(controllers::well_known::config)
             // WebSocket Gateway route (same port as HTTP, required for single-port platforms)
             .route("/ws", web::get().to(gateway::actix_ws::ws_handler));
 
