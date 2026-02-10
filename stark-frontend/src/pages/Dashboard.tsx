@@ -3,13 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import Card, { CardContent } from '@/components/ui/Card';
 import { useApi } from '@/hooks/useApi';
 
-const APP_VERSION = '0.5.17';
-
 export default function Dashboard() {
   const navigate = useNavigate();
   const { data: sessions } = useApi<Array<unknown>>('/sessions');
   const { data: tools } = useApi<Array<unknown>>('/tools');
   const { data: skills } = useApi<Array<unknown>>('/skills');
+  const { data: versionData } = useApi<{ version: string }>('/version');
+  const appVersion = versionData?.version || '...';
 
   const stats = [
     {
@@ -129,11 +129,12 @@ export default function Dashboard() {
 
       <div className="mt-8 flex justify-center">
         <button
-          onClick={() => navigate(`/agent-chat?message=${encodeURIComponent(`What's new in version ${APP_VERSION}?`)}`)}
-          className="flex items-center gap-2 px-6 py-3 rounded-lg bg-stark-500/20 border border-stark-500/30 text-stark-400 hover:bg-stark-500/30 hover:text-stark-300 transition-colors"
+          onClick={() => versionData && navigate(`/agent-chat?message=${encodeURIComponent(`What's new in version ${appVersion}?`)}`)}
+          disabled={!versionData}
+          className="flex items-center gap-2 px-6 py-3 rounded-lg bg-stark-500/20 border border-stark-500/30 text-stark-400 hover:bg-stark-500/30 hover:text-stark-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Sparkles className="w-5 h-5" />
-          <span>What's new in version {APP_VERSION}?</span>
+          <span>What's new in version {appVersion}?</span>
         </button>
       </div>
     </div>
