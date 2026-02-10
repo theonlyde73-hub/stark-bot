@@ -37,7 +37,7 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         SchedulerConfig {
             cron_enabled: true,
-            poll_interval_secs: 1,     // Check every second
+            poll_interval_secs: 10,    // Check every 10 seconds (saves ~90% scheduler CPU)
             max_concurrent_jobs: 5,
         }
     }
@@ -128,9 +128,9 @@ impl Scheduler {
             log::error!("Error processing heartbeats: {}", e);
         }
 
-        // Run periodic cleanup tasks once per hour (at minute 0, second 0-1)
+        // Run periodic cleanup tasks once per hour (at minute 0, within first poll window)
         let now = Local::now();
-        if now.minute() == 0 && now.second() <= 1 {
+        if now.minute() == 0 && now.second() < self.config.poll_interval_secs as u32 {
             self.run_periodic_cleanup();
         }
     }
