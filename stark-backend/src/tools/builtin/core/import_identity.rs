@@ -182,7 +182,7 @@ impl Tool for ImportIdentityTool {
             }
         };
 
-        // Verify the agent exists on-chain by fetching its URI
+        // Fetch the agent URI (tokenURI on-chain) to find the hosted identity file
         let agent_uri = match registry.get_agent_uri(agent_id).await {
             Ok(uri) => Some(uri),
             Err(e) => {
@@ -190,6 +190,55 @@ impl Tool for ImportIdentityTool {
                 None
             }
         };
+
+        // Fetch the identity file from the URI and save it locally
+        let mut identity_hash: Option<String> = None;
+        if let Some(ref uri) = agent_uri {
+            // Extract identity hash from URLs like:
+            // https://identity.defirelay.com/api/identity/<hash>/raw
+            if let Some(hash) = extract_identity_hash(uri) {
+                identity_hash = Some(hash);
+            }
+
+            match registry.fetch_registration(uri).await {
+                Ok(registration) => {
+                    // Save as IDENTITY.json in the soul directory
+                    let identity_path = crate::config::identity_document_path();
+
+                    // Ensure the soul directory exists
+                    if let Some(parent) = identity_path.parent() {
+                        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                            log::warn!("[import_identity] Could not create soul dir: {}", e);
+                        }
+                    }
+
+                    match serde_json::to_string_pretty(&registration) {
+                        Ok(json_str) => {
+                            match tokio::fs::write(&identity_path, &json_str).await {
+                                Ok(_) => {
+                                    log::info!(
+                                        "[import_identity] Saved IDENTITY.json to {}",
+                                        identity_path.display()
+                                    );
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "[import_identity] Failed to write IDENTITY.json: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("[import_identity] Failed to serialize identity: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[import_identity] Could not fetch identity file from {}: {}", uri, e);
+                }
+            }
+        }
 
         // Persist to SQLite
         let agent_registry = config.agent_registry_string();
@@ -254,6 +303,12 @@ impl Tool for ImportIdentityTool {
             }
         }
 
+        // Set agent_id register so subsequent preset calls (identity_get_uri, etc.) work
+        context.set_register("agent_id", json!(agent_id), "import_identity");
+        if let Some(ref uri) = agent_uri {
+            context.set_register("agent_uri", json!(uri), "import_identity");
+        }
+
         // Emit tool-result event
         if let (Some(broadcaster), Some(ch_id)) = (&context.broadcaster, context.channel_id) {
             broadcaster.broadcast(GatewayEvent::tool_result(
@@ -264,11 +319,14 @@ impl Tool for ImportIdentityTool {
             ));
         }
 
+        let identity_path = crate::config::identity_document_path();
         let msg = format!(
             "IDENTITY IMPORTED ✓\n\n\
             Agent ID: {}\n\
             Owner: {}\n\
             URI: {}\n\
+            Identity file: {}\n\
+            Identity hash: {}\n\
             Registry: {}\n\
             Chain: {} ({})\n\n\
             The identity NFT has been imported and saved locally.\n\
@@ -276,6 +334,8 @@ impl Tool for ImportIdentityTool {
             agent_id,
             wallet_address,
             agent_uri.as_deref().unwrap_or("(unknown)"),
+            identity_path.display(),
+            identity_hash.as_deref().unwrap_or("(none)"),
             config.identity_registry,
             config.chain_name,
             config.chain_id,
@@ -285,11 +345,29 @@ impl Tool for ImportIdentityTool {
             "agent_id": agent_id,
             "owner": wallet_address,
             "agent_uri": agent_uri,
+            "identity_hash": identity_hash,
             "agent_registry": agent_registry,
             "chain_id": config.chain_id,
             "persisted": true,
         }))
     }
+}
+
+/// Extract identity hash from identity.defirelay.com URLs.
+/// URL format: https://identity.defirelay.com/api/identity/<hash>/raw
+fn extract_identity_hash(uri: &str) -> Option<String> {
+    let parts: Vec<&str> = uri.split('/').collect();
+    // Look for the pattern: .../identity/<hash>/raw or .../identity/<hash>
+    for window in parts.windows(3) {
+        if window[0] == "identity" && (window[2] == "raw" || !window[1].is_empty()) {
+            let hash = window[1];
+            // Sanity check: hex hashes are typically 64 chars
+            if hash.len() >= 32 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Some(hash.to_string());
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -309,5 +387,20 @@ mod tests {
         let def = tool.definition();
         assert!(def.input_schema.properties.contains_key("agent_id"));
         assert!(def.input_schema.required.is_empty());
+    }
+
+    #[test]
+    fn test_extract_identity_hash() {
+        let url = "https://identity.defirelay.com/api/identity/9148161cbf5bc8600533a462a8f84dcceb31b8f5714a403d6122ba7ae774217e/raw";
+        assert_eq!(
+            extract_identity_hash(url),
+            Some("9148161cbf5bc8600533a462a8f84dcceb31b8f5714a403d6122ba7ae774217e".to_string())
+        );
+
+        // No hash in URL
+        assert_eq!(extract_identity_hash("https://example.com/foo"), None);
+
+        // IPFS URL — no hash to extract
+        assert_eq!(extract_identity_hash("ipfs://QmFoo"), None);
     }
 }

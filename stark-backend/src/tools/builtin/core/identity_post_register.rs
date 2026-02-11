@@ -304,6 +304,12 @@ impl Tool for IdentityPostRegisterTool {
             }
         }
 
+        // Set agent_id register so subsequent preset calls work
+        context.set_register("agent_id", json!(registered.agent_id), "identity_post_register");
+        if !registered.agent_uri.is_empty() {
+            context.set_register("agent_uri", json!(&registered.agent_uri), "identity_post_register");
+        }
+
         // Emit tool-result event
         if let (Some(broadcaster), Some(ch_id)) = (&context.broadcaster, context.channel_id) {
             broadcaster.broadcast(GatewayEvent::tool_result(

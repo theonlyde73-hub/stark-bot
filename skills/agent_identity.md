@@ -5,7 +5,7 @@ version: 1.2.2
 author: starkbot
 homepage: https://eips.ethereum.org/EIPS/eip-8004
 tags: [crypto, identity, eip8004, registration, agent, discovery, nft]
-requires_tools: [modify_identity, x402_rpc, web3_preset_function_call]
+requires_tools: [modify_identity, import_identity, x402_rpc, web3_preset_function_call]
 arguments:
   agent_name:
     description: "Name for the agent identity"
@@ -45,7 +45,26 @@ This creates `IDENTITY.json` in the soul/ directory with:
 - Active status set to true
 - Default trust types: reputation, x402-payments
 
-## 2. Reading Your Identity
+## 2. Importing an Existing Identity
+
+If you already have an agent identity NFT (e.g. transferred from another wallet or received from someone), import it instead of creating a new one:
+
+### Import a specific agent ID
+
+```tool:import_identity
+agent_id: 1
+```
+
+### Auto-discover your identity NFTs
+
+If you don't know your agent ID, omit it and the tool will scan your wallet:
+
+```tool:import_identity
+```
+
+This verifies ownership on-chain, fetches the agent URI, persists the agent_id locally, and sets the `agent_id` register so you can immediately use on-chain presets like `identity_get_uri`, `identity_owner_of`, etc.
+
+## 3. Reading Your Identity
 
 View the current contents of your identity file:
 
@@ -53,7 +72,7 @@ View the current contents of your identity file:
 action: read
 ```
 
-## 3. Updating Fields
+## 4. Updating Fields
 
 Update individual fields in your identity:
 
@@ -65,7 +84,7 @@ value: <new name>
 
 Supported fields: `name`, `description`, `image`, `active`
 
-## 4. Managing Services
+## 5. Managing Services
 
 ### Add a Service
 
@@ -92,7 +111,7 @@ action: remove_service
 service_name: <name of service to remove>
 ```
 
-## 5. Publishing to identity.defirelay.com
+## 6. Publishing to identity.defirelay.com
 
 Upload your identity file to the hosted identity registry. This costs up to 1000 STARKBOT via x402 payment.
 
@@ -104,7 +123,7 @@ The server returns a hosted URL where your identity file can be accessed by othe
 
 > **IMPORTANT:** If the upload fails for ANY reason (connection error, server down, payment failure), you MUST stop and report the error to the user. Do NOT proceed with on-chain registration without a successful upload — the registration requires a valid hosted URL.
 
-## 6. On-Chain Registration (Base)
+## 7. On-Chain Registration (Base)
 
 Registration on the StarkLicense contract mints an ERC-721 NFT that represents your agent identity. It costs 1000 STARKBOT (burned, not held).
 
@@ -139,7 +158,7 @@ network: base
 
 Then set the URI later with `identity_set_uri`.
 
-## 7. Managing On-Chain Identity
+## 8. Managing On-Chain Identity
 
 ### Update Agent URI
 
@@ -179,7 +198,7 @@ network: base
 
 Set `agent_id` and `metadata_key` registers first.
 
-## 8. Querying the Registry
+## 9. Querying the Registry
 
 ### Check registration fee
 
@@ -247,12 +266,18 @@ The IDENTITY.json file follows the EIP-8004 registration file schema:
 
 ## Full Workflow Summary
 
+### New Identity
 1. **Create** your identity with `modify_identity` action=create
 2. **Add services** as you deploy endpoints
 3. **Upload** to identity.defirelay.com (`modify_identity` action=upload, x402 payment)
 4. **Approve** 1000 STARKBOT → `identity_approve_registry` preset
 5. **Register** on-chain → `identity_register` preset (mints NFT, burns STARKBOT)
 6. **Update** fields and URI as your agent evolves
+
+### Import Existing Identity
+1. **Import** with `import_identity` (with or without specific agent_id)
+2. Tool verifies ownership, fetches URI, persists locally, sets `agent_id` register
+3. You can now query/update the identity using on-chain presets
 
 ## Available Presets
 
