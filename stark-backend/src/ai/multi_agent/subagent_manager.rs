@@ -325,13 +325,29 @@ impl SubAgentManager {
             },
         ];
 
+        // SECURITY: Check if parent channel is in safe mode BEFORE building tool context
+        let parent_channel_safe_mode = db
+            .get_channel(context.parent_channel_id)
+            .ok()
+            .flatten()
+            .map(|ch| ch.safe_mode)
+            .unwrap_or(false);
+
         // Build tool context
         let workspace_dir = crate::config::workspace_dir();
-        let tool_context = ToolContext::new()
+        let mut tool_context = ToolContext::new()
             .with_channel(context.parent_channel_id, "subagent".to_string())
             .with_session(session.id)
             .with_workspace(workspace_dir)
             .with_broadcaster(broadcaster.clone());
+
+        // SECURITY: Pass safe_mode flag to tool context so memory tools sandbox to safemode/
+        if parent_channel_safe_mode {
+            tool_context.extra.insert(
+                "safe_mode".to_string(),
+                serde_json::json!(true),
+            );
+        }
 
         // Get tool configuration — enforce safe mode and read_only restrictions
         let mut tool_config = db
@@ -341,16 +357,9 @@ impl SubAgentManager {
         // SECURITY: If parent channel is in safe mode, override to safe mode config.
         // Defense-in-depth — the subagent tool shouldn't be callable in safe mode,
         // but if we ever get here, enforce the restriction.
-        let parent_channel_safe_mode = db
-            .get_channel(context.parent_channel_id)
-            .ok()
-            .flatten()
-            .map(|ch| ch.safe_mode)
-            .unwrap_or(false);
-
         if parent_channel_safe_mode {
             log::info!(
-                "[SUBAGENT] {} parent channel is safe mode — restricting to safe mode tools",
+                "[SUBAGENT] {} parent channel is safe mode — restricting to safe mode tools + sandboxed memory",
                 context.id
             );
             tool_config = crate::tools::ToolConfig::safe_mode();
