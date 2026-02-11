@@ -121,7 +121,13 @@ impl SetAgentSubtypeTool {
                  • deploy-github — Deploy via GitHub Actions CI/CD\n\n\
                  👉 Pick the matching skill and follow its instructions.\n\n\
                  ## Low-level tools (only when no skill fits)\n\
-                 grep, glob, edit_file, write_file, delete_file, rename_file, git, exec"
+                 grep, glob, edit_file, write_file, delete_file, rename_file, git, exec,\n\
+                 read_symbol, verify_changes, index_project\n\n\
+                 ## Smart Workflow\n\
+                 • Use `index_project` first on unfamiliar codebases to understand the structure.\n\
+                 • Use `read_symbol` to inspect specific functions/structs without reading entire files.\n\
+                 • After editing code, ALWAYS use `verify_changes` to confirm it compiles.\n\
+                 • Use `verify_changes` with checks='test' to run the full test suite."
                     .to_string()
             }
             AgentSubtype::Secretary => {

@@ -566,6 +566,7 @@ impl SubAgentManager {
                         .get::<_, Option<String>>(14)?
                         .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
                         .map(|dt| dt.with_timezone(&chrono::Utc)),
+                    read_only: false,
                 })
             },
         );
@@ -616,6 +617,7 @@ impl SubAgentManager {
                         .get::<_, Option<String>>(14)?
                         .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
                         .map(|dt| dt.with_timezone(&chrono::Utc)),
+                    read_only: false,
                 })
             })
             .map_err(|e| format!("Failed to execute query: {}", e))?;
