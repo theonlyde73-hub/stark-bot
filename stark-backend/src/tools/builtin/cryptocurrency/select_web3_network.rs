@@ -176,9 +176,7 @@ impl Tool for SelectWeb3NetworkTool {
         }))
     }
 
-    fn safety_level(&self) -> ToolSafetyLevel {
-        ToolSafetyLevel::ReadOnly
-    }
+    // Standard — writes to context registers (persists network selection)
 }
 
 #[cfg(test)]

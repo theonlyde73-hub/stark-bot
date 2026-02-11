@@ -339,9 +339,7 @@ impl Tool for VerifyTxBroadcastTool {
         }))
     }
 
-    fn safety_level(&self) -> ToolSafetyLevel {
-        ToolSafetyLevel::ReadOnly
-    }
+    // Standard — mutates tx_queue state, broadcasts events, makes RPC calls
 }
 
 // ─── ERC20 Transfer log decoding ─────────────────────────────────────────────

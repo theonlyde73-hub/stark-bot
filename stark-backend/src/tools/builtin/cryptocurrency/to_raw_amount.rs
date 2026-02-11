@@ -243,9 +243,7 @@ impl Tool for ToRawAmountTool {
         }))
     }
 
-    fn safety_level(&self) -> ToolSafetyLevel {
-        ToolSafetyLevel::ReadOnly
-    }
+    // Standard — writes raw amount to context registers
 }
 
 #[cfg(test)]

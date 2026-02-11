@@ -426,7 +426,5 @@ impl Tool for DecodeCalldataTool {
         }))
     }
 
-    fn safety_level(&self) -> ToolSafetyLevel {
-        ToolSafetyLevel::ReadOnly
-    }
+    // Standard — writes decoded results to context registers
 }

@@ -344,7 +344,5 @@ impl Tool for ListQueuedWeb3TxTool {
         }))
     }
 
-    fn safety_level(&self) -> ToolSafetyLevel {
-        ToolSafetyLevel::ReadOnly
-    }
+    // Standard — writes to registers + broadcasts UI events
 }
