@@ -14,7 +14,7 @@ export function CTA() {
     <section className="py-20 px-6">
       <div className="max-w-4xl mx-auto text-center">
         <h2 className="text-3xl sm:text-4xl font-bold mb-6 text-white">
-          Ready to Build Web3-Native AI?
+          Ready to Build Crypto-Native AI?
         </h2>
         <p className="text-white/50 text-lg mb-8 max-w-2xl mx-auto">
           Connect your wallet, leverage x402 micropayments, and deploy your own crypto-native AI agent. Open source and permissionless.
