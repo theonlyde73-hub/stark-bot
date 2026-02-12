@@ -339,6 +339,14 @@ impl Tool for WebFetchTool {
             _ => client.get(&params.url),
         };
 
+        // Default to application/json unless custom headers override it
+        let has_custom_content_type = params.headers.as_ref()
+            .map(|h| h.keys().any(|k| k.eq_ignore_ascii_case("content-type")))
+            .unwrap_or(false);
+        if !has_custom_content_type {
+            request = request.header("Content-Type", "application/json");
+        }
+
         // Add request body for POST/PUT/PATCH
         if let Some(ref body) = params.body {
             if matches!(method.as_str(), "POST" | "PUT" | "PATCH") {
@@ -366,18 +374,8 @@ impl Tool for WebFetchTool {
                     body.clone()
                 };
 
-                // Serialize body manually and use .body() instead of .json()
-                // to avoid duplicate Content-Type headers (.json() auto-adds one,
-                // which can conflict with custom headers and cause API rejections)
                 let body_str = serde_json::to_string(&effective_body)
                     .unwrap_or_else(|_| effective_body.to_string());
-                // Only add default Content-Type if custom headers don't already include one
-                let has_custom_content_type = params.headers.as_ref()
-                    .map(|h| h.keys().any(|k| k.eq_ignore_ascii_case("content-type")))
-                    .unwrap_or(false);
-                if !has_custom_content_type {
-                    request = request.header("Content-Type", "application/json");
-                }
                 request = request.body(body_str);
             }
         }
@@ -419,6 +417,140 @@ impl Tool for WebFetchTool {
 
         let final_url = response.url().to_string();
         let status = response.status();
+
+        // Handle x402 Payment Required — sign payment and retry with X-PAYMENT header
+        // SECURITY: Never auto-pay in safe mode (untrusted users)
+        let is_safe_mode = context.extra.get("safe_mode")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if status.as_u16() == 402 {
+            if is_safe_mode {
+                let body = response.text().await.unwrap_or_default();
+                return ToolResult::error(format!(
+                    "HTTP 402 Payment Required for {} (x402 auto-payment disabled in safe mode)\n\nResponse:\n{}",
+                    params.url,
+                    if body.len() > 2000 { format!("{}...", &body[..2000]) } else { body }
+                ));
+            }
+            if let Some(ref wallet_provider) = context.wallet_provider {
+                log::info!("[web_fetch] Received 402 Payment Required for {}, attempting x402 payment", params.url);
+
+                let retry_result = crate::x402::retry_with_x402_payment(
+                    response,
+                    wallet_provider,
+                    || {
+                        let mut r = match method.as_str() {
+                            "POST" => client.post(&params.url),
+                            "PUT" => client.put(&params.url),
+                            "PATCH" => client.patch(&params.url),
+                            "DELETE" => client.delete(&params.url),
+                            _ => client.get(&params.url),
+                        };
+                        if !has_custom_content_type {
+                            r = r.header("Content-Type", "application/json");
+                        }
+                        if let Some(ref body) = params.body {
+                            if matches!(method.as_str(), "POST" | "PUT" | "PATCH") {
+                                let effective_body = if let Value::String(s) = body {
+                                    serde_json::from_str::<Value>(s).unwrap_or_else(|_| body.clone())
+                                } else {
+                                    body.clone()
+                                };
+                                let body_str = serde_json::to_string(&effective_body)
+                                    .unwrap_or_else(|_| effective_body.to_string());
+                                r = r.body(body_str);
+                            }
+                        }
+                        if let Some(ref token) = params.bearer_auth_token {
+                            let expanded_token = expand_context_vars(token, &var_map);
+                            if !expanded_token.is_empty() {
+                                r = r.header("Authorization", format!("Bearer {}", expanded_token));
+                            }
+                        }
+                        if let Some(ref headers) = params.headers {
+                            for (key, value) in headers {
+                                let expanded_value = expand_context_vars(value, &var_map);
+                                if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes()) {
+                                    if let Ok(header_value) = reqwest::header::HeaderValue::from_str(&expanded_value) {
+                                        r = r.header(header_name, header_value);
+                                    }
+                                }
+                            }
+                        }
+                        r
+                    },
+                )
+                .await;
+
+                match retry_result {
+                    Ok(result) => {
+                        let payment_info = result.payment.as_ref();
+                        let retry_status = result.response.status();
+                        if !retry_status.is_success() {
+                            let retry_body = result.response.text().await.unwrap_or_default();
+                            return ToolResult::error(format!(
+                                "HTTP {} (after x402 payment): {}",
+                                retry_status,
+                                if retry_body.len() > 2000 { format!("{}...", &retry_body[..2000]) } else { retry_body }
+                            ));
+                        }
+                        retry_manager.record_success(&retry_key);
+                        let content_type = result.response
+                            .headers()
+                            .get("content-type")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("")
+                            .to_string();
+                        let body = match result.response.bytes().await {
+                            Ok(b) => String::from_utf8_lossy(&b).to_string(),
+                            Err(e) => return ToolResult::error(format!("Failed to read paid response: {}", e)),
+                        };
+                        let original_length = body.len();
+                        let is_html = content_type.contains("text/html");
+                        let content = match extract_mode.as_str() {
+                            "raw" => body,
+                            "text" if is_html => extract_text_from_html(&body),
+                            "markdown" if is_html => extract_markdown_from_html(&body),
+                            _ => body,
+                        };
+                        let truncated = content.len() > max_chars;
+                        let final_content = if truncated {
+                            format!("{}...\n\n(truncated, {} chars total)", &content[..max_chars], content.len())
+                        } else {
+                            content
+                        };
+                        return ToolResult::success(final_content).with_metadata(serde_json::json!({
+                            "url": params.url,
+                            "final_url": final_url,
+                            "content_type": content_type,
+                            "extract_mode": extract_mode,
+                            "truncated": truncated,
+                            "original_length": original_length,
+                            "x402_payment": payment_info.map(|p| serde_json::json!({
+                                "amount": p.amount_formatted,
+                                "asset": p.asset,
+                                "pay_to": p.pay_to,
+                                "tx_hash": p.tx_hash,
+                            })),
+                        }));
+                    }
+                    Err(e) => {
+                        return ToolResult::error(format!(
+                            "HTTP 402 Payment Required for {} — x402 payment failed: {}",
+                            params.url, e
+                        ));
+                    }
+                }
+            } else {
+                // No wallet provider — can't pay, return the 402 as-is
+                let body = response.text().await.unwrap_or_default();
+                return ToolResult::error(format!(
+                    "HTTP 402 Payment Required for {} (no wallet available for x402 payment)\n\nResponse:\n{}",
+                    params.url,
+                    if body.len() > 2000 { format!("{}...", &body[..2000]) } else { body }
+                ));
+            }
+        }
 
         if !status.is_success() {
             // Extract the response body to include in the error message (truncate to avoid huge HTML pages)

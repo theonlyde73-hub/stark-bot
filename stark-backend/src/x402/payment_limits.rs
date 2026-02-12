@@ -133,7 +133,11 @@ pub fn remove_limit(asset: &str) {
 pub fn check_payment_limit(asset: &str, amount_raw: &str) -> Result<(), String> {
     let limit = match get_limit(asset) {
         Some(l) => l,
-        None => return Ok(()), // no limit configured → allow
+        None => return Err(format!(
+            "x402 payment rejected: no payment limit configured for asset {}. \
+             Add a limit on the Crypto Transactions page to enable payments with this token.",
+            asset
+        )),
     };
 
     let requested: u128 = amount_raw

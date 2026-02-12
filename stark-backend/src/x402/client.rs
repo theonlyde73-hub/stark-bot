@@ -249,3 +249,127 @@ impl X402Client {
 pub fn is_x402_endpoint(url: &str) -> bool {
     url.contains("defirelay.com") || url.contains("defirelay.io")
 }
+
+/// Parse a 402 response and sign an x402 payment, returning the X-PAYMENT header value.
+///
+/// Tries to parse payment requirements from:
+/// 1. `payment-required` / `PAYMENT-REQUIRED` response header (base64-encoded)
+/// 2. Response body as JSON (direct `PaymentRequired` structure)
+///
+/// Returns `(x_payment_header_value, payment_info)` on success.
+pub async fn sign_402_payment(
+    response_body: &str,
+    response_headers: &reqwest::header::HeaderMap,
+    wallet_provider: &Arc<dyn WalletProvider>,
+) -> Result<(String, X402PaymentInfo), String> {
+    // Try header first (base64-encoded)
+    let payment_required = if let Some(header_val) = response_headers
+        .get("payment-required")
+        .or_else(|| response_headers.get("PAYMENT-REQUIRED"))
+        .and_then(|v| v.to_str().ok())
+    {
+        PaymentRequired::from_base64(header_val)?
+    } else {
+        // Fall back to response body (JSON)
+        serde_json::from_str::<PaymentRequired>(response_body)
+            .map_err(|e| format!("Failed to parse 402 payment requirements from body: {}", e))?
+    };
+
+    let requirements = payment_required
+        .accepts
+        .first()
+        .ok_or_else(|| "No payment options in 402 response".to_string())?;
+
+    // Check payment limit
+    super::payment_limits::check_payment_limit(
+        &requirements.asset,
+        &requirements.max_amount_required,
+    )?;
+
+    let payment_info = X402PaymentInfo::from_requirements(requirements);
+
+    // Sign the payment
+    let signer = X402Signer::new(wallet_provider.clone());
+    let payment_payload = signer.sign_payment_v2(requirements).await?;
+    let header_value = payment_payload.to_base64()?;
+
+    log::info!(
+        "[X402] Signed payment for {} {} to {}",
+        payment_info.amount_formatted,
+        payment_info.asset,
+        payment_info.pay_to
+    );
+
+    Ok((header_value, payment_info))
+}
+
+/// Result of an x402-aware request that may have required payment.
+pub struct X402RetryResult {
+    /// The final response (after payment if needed)
+    pub response: Response,
+    /// Payment info if an x402 payment was made
+    pub payment: Option<X402PaymentInfo>,
+}
+
+/// Handle a 402 response by signing an x402 payment and retrying the request.
+///
+/// `build_retry_request` is a closure that builds a fresh `RequestBuilder` for the retry.
+/// The caller is responsible for attaching all original headers/body to the retry builder.
+/// This function only adds the `X-PAYMENT` header.
+///
+/// Returns `Ok(X402RetryResult)` with the paid response on success,
+/// or `Err(error_message)` if payment fails.
+pub async fn retry_with_x402_payment<F>(
+    initial_response: Response,
+    wallet_provider: &Arc<dyn WalletProvider>,
+    build_retry_request: F,
+) -> Result<X402RetryResult, String>
+where
+    F: FnOnce() -> reqwest::RequestBuilder,
+{
+    let response_headers = initial_response.headers().clone();
+    let body_402 = initial_response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read 402 body: {}", e))?;
+
+    let (x_payment_header, payment_info) =
+        sign_402_payment(&body_402, &response_headers, wallet_provider).await?;
+
+    log::info!(
+        "[X402] Retrying request with payment ({} {} to {})",
+        payment_info.amount_formatted,
+        payment_info.asset,
+        payment_info.pay_to
+    );
+
+    let retry_req = build_retry_request().header("X-PAYMENT", x_payment_header);
+
+    let paid_response = retry_req
+        .send()
+        .await
+        .map_err(|e| format!("Paid request failed: {}", e))?;
+
+    // Extract tx hash from response headers
+    let tx_hash = paid_response
+        .headers()
+        .get("x-transaction-hash")
+        .or_else(|| paid_response.headers().get("X-Transaction-Hash"))
+        .or_else(|| paid_response.headers().get("x-payment-transaction"))
+        .or_else(|| paid_response.headers().get("X-Payment-Transaction"))
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    let payment_info = if let Some(hash) = tx_hash {
+        payment_info.with_tx_hash(hash)
+    } else if paid_response.status().is_success() {
+        payment_info.mark_confirmed()
+    } else {
+        payment_info
+    };
+
+    Ok(X402RetryResult {
+        response: paid_response,
+        payment: Some(payment_info),
+    })
+}

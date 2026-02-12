@@ -1,7 +1,7 @@
 ---
 name: starkhub
 description: "Browse, search, install, and submit skills on StarkHub (hub.starkbot.ai) — the decentralized skills directory for StarkBot agents."
-version: 2.2.0
+version: 2.6.0
 author: starkbot
 homepage: https://hub.starkbot.ai
 metadata: {"clawdbot":{"emoji":"🌐"}}
@@ -26,7 +26,7 @@ StarkHub (https://hub.starkbot.ai) is the public skills marketplace for StarkBot
 
 **Base URL:** `https://hub.starkbot.ai/api`
 
-All read endpoints are public. Writing (submit, update, set username) requires authentication via `erc8128_fetch`.
+All read endpoints are public. Download, submit, update, and set username require authentication via `erc8128_fetch`.
 
 **Authentication:** Use `erc8128_fetch` for any endpoint that requires auth. It signs each request with your wallet's Ethereum identity (ERC-8128 / RFC 9421) — no login handshake or tokens needed. Use `web_fetch` for public read-only endpoints.
 
@@ -37,6 +37,9 @@ All read endpoints are public. Writing (submit, update, set username) requires a
 1. **ONE TASK AT A TIME.** Only do the work described in the CURRENT task. Do NOT work ahead.
 2. **Do NOT call `say_to_user` with `finished_task: true` until the current task is truly done.** Using `finished_task: true` advances the task queue — if you use it prematurely, tasks get skipped.
 3. **Use `say_to_user` WITHOUT `finished_task`** for progress updates. Only set `finished_task: true` OR call `task_fully_completed` when ALL steps in the current task are done.
+4. **During install, do NOT ask the user unnecessary questions.** Just download, install, and report the result. If the installed skill has requirements (API keys, config, binaries), mention them AFTER installation as "next steps" — do NOT block the install by asking about targets, delivery methods, or key configuration.
+5. **NO AUTH TOKENS NEEDED.** Do NOT check for, ask for, or try to create auth tokens (SIWA, session tokens, bearer tokens, etc.). Authentication is handled AUTOMATICALLY by `erc8128_fetch` — it signs requests with the wallet. There is zero setup required.
+6. **EXACT TASK COUNT.** Define EXACTLY the number of tasks shown below for each action. Do NOT add extra tasks for auth, username setup, API key checks, or any other prerequisite unless explicitly listed. The task definitions below are COMPLETE — follow them verbatim.
 
 ## Step 1: Define tasks
 
@@ -55,9 +58,8 @@ Before doing any work, call `define_tasks` based on the requested action.
 
 ```json
 {"tool": "define_tasks", "tasks": [
-  "TASK 1 — Download: fetch the raw skill markdown from StarkHub via web_fetch. See starkhub skill 'Install'.",
-  "TASK 2 — Install: install the skill locally via manage_skills. See starkhub skill 'Install'.",
-  "TASK 3 — Record: POST the install to StarkHub and confirm to the user. See starkhub skill 'Install'."
+  "TASK 1 — Download & install: fetch skill markdown from StarkHub via erc8128_fetch /download endpoint, then install locally via manage_skills. See starkhub skill 'Install'.",
+  "TASK 2 — Confirm: tell the user the skill was installed. Mention any requirements (API keys, config) as next steps."
 ]}
 ```
 
@@ -166,13 +168,13 @@ Returns: `name`, `description`, `version`, `content`, `raw_markdown`, `tags`, `r
 
 ## Install a Skill from StarkHub
 
-**Step 1:** Download the raw skill markdown:
+**Step 1:** Download the skill markdown (requires auth — uses `erc8128_fetch`). This also records the install on StarkHub and handles x402 payment for paid skills automatically.
 
 ```json
 {
-  "tool": "web_fetch",
-  "url": "https://hub.starkbot.ai/api/skills/@{{username}}/{{query}}/raw",
-  "extract_mode": "raw"
+  "tool": "erc8128_fetch",
+  "url": "https://hub.starkbot.ai/api/skills/@{{username}}/{{query}}/download",
+  "chain_id": 8453
 }
 ```
 
@@ -187,17 +189,6 @@ Returns: `name`, `description`, `version`, `content`, `raw_markdown`, `tags`, `r
 ```
 
 If the skill already exists locally, use `"action": "update"` instead.
-
-**Step 3 (optional):** Record the install on StarkHub:
-
-```json
-{
-  "tool": "web_fetch",
-  "url": "https://hub.starkbot.ai/api/skills/@{{username}}/{{query}}/install",
-  "method": "POST",
-  "extract_mode": "raw"
-}
-```
 
 ---
 
@@ -335,9 +326,8 @@ Only the original author can update their skill.
 
 ### "Install @username/slug from StarkHub"
 
-1. Download raw: `web_fetch GET /api/skills/@{username}/{slug}/raw`
+1. Download: `erc8128_fetch GET /api/skills/@{username}/{slug}/download` (chain_id: 8453)
 2. Install locally via `manage_skills` → `install`
-3. Record install: `web_fetch POST /api/skills/@{username}/{slug}/install`
 
 ### "Publish my skill to StarkHub"
 
@@ -403,7 +393,7 @@ Use `author_username` + `slug` to construct the scoped URL: `/api/skills/@{autho
 
 ## Paid Skills (x402)
 
-Skills with `x402_cost` > `"0"` cost STARKBOT tokens to install. The install endpoint may return **402 Payment Required** with x402 payment instructions.
+Skills with `x402_cost` > `"0"` cost STARKBOT tokens to install. The `/download` endpoint returns **402 Payment Required** with x402 payment instructions for paid skills — `erc8128_fetch` handles this automatically.
 
 ---
 

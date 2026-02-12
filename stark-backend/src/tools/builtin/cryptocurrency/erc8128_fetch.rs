@@ -111,7 +111,7 @@ impl Erc8128FetchTool {
                     properties,
                     required: vec!["url".to_string()],
                 },
-                group: ToolGroup::Finance,
+                group: ToolGroup::Web,
                 hidden: true, // Only available when a skill requires it
             },
         }
@@ -195,7 +195,7 @@ impl Tool for Erc8128FetchTool {
             }
         };
 
-        let signer = Erc8128Signer::new(wallet_provider, params.chain_id);
+        let signer = Erc8128Signer::new(wallet_provider.clone(), params.chain_id);
         let method = params.method.to_uppercase();
         let body_bytes = params.body.as_ref().map(|b| b.as_bytes());
 
@@ -262,6 +262,97 @@ impl Tool for Erc8128FetchTool {
 
         let status = response.status();
         let status_code = status.as_u16();
+
+        // Handle x402 Payment Required — sign payment and retry with both ERC-8128 + X-PAYMENT
+        if status_code == 402 {
+            log::info!("[ERC8128] Received 402 Payment Required, attempting x402 payment");
+
+            // Re-sign ERC-8128 headers before retry (fresh timestamp/nonce)
+            let signed_retry = match signer
+                .sign_request(&method, &authority, &path, query.as_deref(), body_bytes)
+                .await
+            {
+                Ok(h) => h,
+                Err(e) => return ToolResult::error(format!("ERC-8128 re-signing failed: {}", e)),
+            };
+
+            let retry_result = crate::x402::retry_with_x402_payment(
+                response,
+                &wallet_provider,
+                || {
+                    let mut r = match method.as_str() {
+                        "POST" => client.post(&params.url),
+                        "PUT" => client.put(&params.url),
+                        "DELETE" => client.delete(&params.url),
+                        _ => client.get(&params.url),
+                    };
+                    // Re-attach ERC-8128 signature headers
+                    r = r
+                        .header("Signature-Input", &signed_retry.signature_input)
+                        .header("Signature", &signed_retry.signature);
+                    if let Some(ref digest) = signed_retry.content_digest {
+                        r = r.header("Content-Digest", digest.as_str());
+                    }
+                    if let Some(ref custom_headers) = params.headers {
+                        for (k, v) in custom_headers {
+                            r = r.header(k.as_str(), v.as_str());
+                        }
+                    }
+                    if let Some(ref body) = params.body {
+                        r = r.header("Content-Type", "application/json").body(body.clone());
+                    }
+                    r
+                },
+            )
+            .await;
+
+            match retry_result {
+                Ok(result) => {
+                    let payment_info = result.payment.as_ref();
+                    let retry_status = result.response.status();
+                    let retry_body = result.response.text().await.unwrap_or_default();
+
+                    if let Some(ref register_name) = params.cache_as {
+                        let cache_value = serde_json::from_str::<Value>(&retry_body)
+                            .unwrap_or_else(|_| json!(retry_body));
+                        context.set_register(register_name, cache_value, "erc8128_fetch");
+                    }
+
+                    let metadata = json!({
+                        "status": retry_status.as_u16(),
+                        "method": method,
+                        "url": params.url,
+                        "wallet": signer.address(),
+                        "chain_id": params.chain_id,
+                        "x402_payment": payment_info.map(|p| json!({
+                            "amount": p.amount_formatted,
+                            "asset": p.asset,
+                            "pay_to": p.pay_to,
+                            "tx_hash": p.tx_hash,
+                        })),
+                    });
+
+                    if retry_status.is_success() {
+                        let display_body = if retry_body.len() > 8000 {
+                            format!("{}...\n\n(truncated, {} bytes total)", &retry_body[..8000], retry_body.len())
+                        } else {
+                            retry_body
+                        };
+                        return ToolResult::success(display_body).with_metadata(metadata);
+                    } else {
+                        return ToolResult::error(format!(
+                            "HTTP {} {} (after x402 payment): {}",
+                            retry_status.as_u16(),
+                            retry_status.canonical_reason().unwrap_or(""),
+                            if retry_body.len() > 2000 { format!("{}...", &retry_body[..2000]) } else { retry_body }
+                        )).with_metadata(metadata);
+                    }
+                }
+                Err(e) => {
+                    return ToolResult::error(format!("HTTP 402 Payment Required — x402 payment failed: {}", e));
+                }
+            }
+        }
 
         let body_text = match response.text().await {
             Ok(t) => t,

@@ -63,6 +63,7 @@ pub struct PaymentRequirements {
     pub scheme: String,
     pub network: String,
     pub max_amount_required: String,
+    #[serde(alias = "payTo")]
     pub pay_to_address: String,
     pub asset: String,
     #[serde(default)]
@@ -260,8 +261,8 @@ pub struct X402PaymentInfo {
 impl X402PaymentInfo {
     /// Create from payment requirements (starts as pending with no tx_hash)
     pub fn from_requirements(req: &PaymentRequirements) -> Self {
-        // Format amount (USDC has 6 decimals)
-        let amount_formatted = format_usdc_amount(&req.max_amount_required);
+        let decimals = req.extra.as_ref().and_then(|e| e.decimals).unwrap_or(6);
+        let amount_formatted = format_token_amount(&req.max_amount_required, decimals);
 
         Self {
             amount: req.max_amount_required.clone(),
@@ -295,18 +296,18 @@ impl X402PaymentInfo {
     }
 }
 
-/// Format USDC amount from raw value (6 decimals) to human-readable string
-fn format_usdc_amount(raw: &str) -> String {
-    // Parse as u128 to handle large values
+/// Format token amount from raw value to human-readable string using the given decimals
+fn format_token_amount(raw: &str, decimals: u8) -> String {
     if let Ok(value) = raw.parse::<u128>() {
-        // USDC has 6 decimals
-        let whole = value / 1_000_000;
-        let frac = value % 1_000_000;
+        let divisor = 10u128.pow(decimals as u32);
+        let whole = value / divisor;
+        let frac = value % divisor;
         if frac == 0 {
             format!("{}", whole)
         } else {
-            // Remove trailing zeros
-            let frac_str = format!("{:06}", frac).trim_end_matches('0').to_string();
+            let frac_str = format!("{:0>width$}", frac, width = decimals as usize)
+                .trim_end_matches('0')
+                .to_string();
             format!("{}.{}", whole, frac_str)
         }
     } else {

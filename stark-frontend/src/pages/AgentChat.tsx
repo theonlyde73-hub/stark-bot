@@ -327,8 +327,20 @@ export default function AgentChat() {
       console.log('[AgentChat] Received tool.result event:', data);
       const event = data as { tool_name: string; success: boolean; duration_ms: number; content: string };
 
-      // Skip say_to_user in event stream — content comes through the API response
-      if (event.tool_name === 'say_to_user') return;
+      // Show say_to_user messages immediately as assistant bubbles
+      if (event.tool_name === 'say_to_user') {
+        if (event.success && event.content.trim()) {
+          const message: ChatMessageType = {
+            id: crypto.randomUUID(),
+            role: 'assistant' as MessageRole,
+            content: event.content,
+            timestamp: new Date(),
+            sessionId,
+          };
+          setMessages((prev) => [...prev, message]);
+        }
+        return;
+      }
 
       const statusEmoji = event.success ? '✅' : '❌';
       const statusText = event.success ? 'Success' : 'Failed';
@@ -1249,9 +1261,22 @@ export default function AgentChat() {
       setMessages((prev) => prev.filter(
         (m) => !(m.role === 'system' && m.content.startsWith('Still thinking'))
       ));
-      // Skip empty responses — say_to_user already delivered the content via WebSocket
+      // Skip empty responses and responses already delivered via say_to_user WebSocket event
       if (response.response.trim()) {
-        addMessage('assistant', response.response);
+        // Check if say_to_user already delivered this content via real-time event
+        setMessages((prev) => {
+          const alreadyDelivered = prev.some(
+            (m) => m.role === 'assistant' && m.content === response.response.trim()
+          );
+          if (alreadyDelivered) return prev;
+          return [...prev, {
+            id: crypto.randomUUID(),
+            role: 'assistant' as MessageRole,
+            content: response.response,
+            timestamp: new Date(),
+            sessionId,
+          }];
+        });
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Failed to send message';
