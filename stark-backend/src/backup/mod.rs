@@ -332,6 +332,7 @@ pub struct X402PaymentLimitEntry {
     pub max_amount: String,
     pub decimals: u8,
     pub display_name: String,
+    pub address: Option<String>,
 }
 
 /// Kanban board item entry in backup

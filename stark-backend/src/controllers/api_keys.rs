@@ -1070,6 +1070,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                     max_amount: l.max_amount.clone(),
                     decimals: l.decimals,
                     display_name: l.display_name.clone(),
+                    address: l.address.clone(),
                 })
                 .collect();
         }
@@ -1970,9 +1971,9 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
     // Restore x402 payment limits
     let mut restored_x402_limits = 0;
     for limit in &backup_data.x402_payment_limits {
-        match state.db.set_x402_payment_limit(&limit.asset, &limit.max_amount, limit.decimals, &limit.display_name) {
+        match state.db.set_x402_payment_limit(&limit.asset, &limit.max_amount, limit.decimals, &limit.display_name, limit.address.as_deref()) {
             Ok(_) => {
-                crate::x402::payment_limits::set_limit(&limit.asset, &limit.max_amount, limit.decimals, &limit.display_name);
+                crate::x402::payment_limits::set_limit(&limit.asset, &limit.max_amount, limit.decimals, &limit.display_name, limit.address.as_deref());
                 restored_x402_limits += 1;
             }
             Err(e) => log::warn!("Failed to restore x402 payment limit for {}: {}", limit.asset, e),

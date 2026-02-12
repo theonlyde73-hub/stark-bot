@@ -891,11 +891,18 @@ impl Database {
                 max_amount TEXT NOT NULL,
                 decimals INTEGER NOT NULL DEFAULT 6,
                 display_name TEXT NOT NULL,
+                address TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )",
             [],
         )?;
+
+        // Migration: Add address column to x402_payment_limits if it doesn't exist
+        let _ = conn.execute(
+            "ALTER TABLE x402_payment_limits ADD COLUMN address TEXT",
+            [],
+        );
 
         // Migration: drop old agent_identity table if it has the legacy wallet_address column
         {

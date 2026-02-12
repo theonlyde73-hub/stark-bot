@@ -550,10 +550,10 @@ async fn restore_backup_data(
     // Restore x402 payment limits
     let mut restored_x402_limits = 0;
     for limit in &backup_data.x402_payment_limits {
-        match db.set_x402_payment_limit(&limit.asset, &limit.max_amount, limit.decimals, &limit.display_name) {
+        match db.set_x402_payment_limit(&limit.asset, &limit.max_amount, limit.decimals, &limit.display_name, limit.address.as_deref()) {
             Ok(_) => {
                 // Also update the in-memory global
-                crate::x402::payment_limits::set_limit(&limit.asset, &limit.max_amount, limit.decimals, &limit.display_name);
+                crate::x402::payment_limits::set_limit(&limit.asset, &limit.max_amount, limit.decimals, &limit.display_name, limit.address.as_deref());
                 restored_x402_limits += 1;
             }
             Err(e) => log::warn!("[Keystore] Failed to restore x402 payment limit for {}: {}", limit.asset, e),
@@ -784,7 +784,7 @@ async fn main() -> std::io::Result<()> {
     match db.get_all_x402_payment_limits() {
         Ok(limits) => {
             for l in &limits {
-                x402::payment_limits::set_limit(&l.asset, &l.max_amount, l.decimals, &l.display_name);
+                x402::payment_limits::set_limit(&l.asset, &l.max_amount, l.decimals, &l.display_name, l.address.as_deref());
             }
             if !limits.is_empty() {
                 log::info!("Loaded {} x402 payment limits from database", limits.len());

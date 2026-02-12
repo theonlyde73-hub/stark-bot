@@ -10,6 +10,7 @@ pub struct X402PaymentLimitRow {
     pub max_amount: String,
     pub decimals: u8,
     pub display_name: String,
+    pub address: Option<String>,
 }
 
 impl Database {
@@ -17,7 +18,7 @@ impl Database {
     pub fn get_all_x402_payment_limits(&self) -> SqliteResult<Vec<X402PaymentLimitRow>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT asset, max_amount, decimals, display_name FROM x402_payment_limits ORDER BY asset",
+            "SELECT asset, max_amount, decimals, display_name, address FROM x402_payment_limits ORDER BY asset",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(X402PaymentLimitRow {
@@ -25,6 +26,7 @@ impl Database {
                 max_amount: row.get(1)?,
                 decimals: row.get::<_, i32>(2)? as u8,
                 display_name: row.get(3)?,
+                address: row.get(4)?,
             })
         })?;
         rows.collect()
@@ -37,17 +39,19 @@ impl Database {
         max_amount: &str,
         decimals: u8,
         display_name: &str,
+        address: Option<&str>,
     ) -> SqliteResult<()> {
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO x402_payment_limits (asset, max_amount, decimals, display_name, updated_at)
-             VALUES (?1, ?2, ?3, ?4, datetime('now'))
+            "INSERT INTO x402_payment_limits (asset, max_amount, decimals, display_name, address, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
              ON CONFLICT(asset) DO UPDATE SET
                 max_amount = excluded.max_amount,
                 decimals = excluded.decimals,
                 display_name = excluded.display_name,
+                address = excluded.address,
                 updated_at = datetime('now')",
-            rusqlite::params![asset.to_uppercase(), max_amount, decimals as i32, display_name],
+            rusqlite::params![asset.to_uppercase(), max_amount, decimals as i32, display_name, address],
         )?;
         Ok(())
     }

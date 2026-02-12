@@ -55,6 +55,7 @@ pub async fn get_x402_limits(
                 "max_amount": limit.max_amount,
                 "decimals": limit.decimals,
                 "display_name": limit.display_name,
+                "address": limit.address,
             })
         })
         .collect();
@@ -70,6 +71,8 @@ pub struct UpdateLimitRequest {
     pub decimals: u8,
     #[serde(default)]
     pub display_name: Option<String>,
+    #[serde(default)]
+    pub address: Option<String>,
 }
 
 fn default_decimals() -> u8 {
@@ -98,7 +101,7 @@ pub async fn update_x402_limit(
     }
 
     // Persist to DB
-    if let Err(e) = state.db.set_x402_payment_limit(&asset, &r.max_amount, r.decimals, &display_name) {
+    if let Err(e) = state.db.set_x402_payment_limit(&asset, &r.max_amount, r.decimals, &display_name, r.address.as_deref()) {
         log::error!("Failed to save x402 payment limit: {}", e);
         return HttpResponse::InternalServerError().json(serde_json::json!({
             "error": format!("Database error: {}", e)
@@ -106,7 +109,7 @@ pub async fn update_x402_limit(
     }
 
     // Update in-memory global
-    payment_limits::set_limit(&asset, &r.max_amount, r.decimals, &display_name);
+    payment_limits::set_limit(&asset, &r.max_amount, r.decimals, &display_name, r.address.as_deref());
 
     log::info!(
         "[x402_limits] Updated limit: {} max_amount={} decimals={}",
@@ -118,6 +121,7 @@ pub async fn update_x402_limit(
         "max_amount": r.max_amount,
         "decimals": r.decimals,
         "display_name": display_name,
+        "address": r.address,
     }))
 }
 

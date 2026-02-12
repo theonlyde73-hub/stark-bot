@@ -22,6 +22,8 @@ pub struct PaymentLimitEntry {
     pub decimals: u8,
     /// Human-friendly token name
     pub display_name: String,
+    /// Optional contract address (e.g. USDC on Base)
+    pub address: Option<String>,
 }
 
 /// Runtime representation kept in the global.
@@ -30,6 +32,7 @@ pub struct PaymentLimit {
     pub max_amount: String,
     pub decimals: u8,
     pub display_name: String,
+    pub address: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +67,7 @@ pub fn load_defaults(config_dir: &Path) {
                                         max_amount: v.max_amount,
                                         decimals: v.decimals,
                                         display_name: v.display_name,
+                                        address: v.address,
                                     },
                                 )
                             })
@@ -96,16 +100,35 @@ pub fn get_all_limits() -> HashMap<String, PaymentLimit> {
 }
 
 /// Return the limit for a specific asset (case-insensitive).
+/// If `asset` starts with "0x" and no symbol match is found, falls back to
+/// scanning all limits for a matching contract address.
 pub fn get_limit(asset: &str) -> Option<PaymentLimit> {
     let guard = LIMITS.read().unwrap();
-    guard
-        .as_ref()
-        .and_then(|m| m.get(&asset.to_uppercase()).cloned())
+    let map = guard.as_ref()?;
+
+    // Try direct symbol lookup first
+    if let Some(limit) = map.get(&asset.to_uppercase()) {
+        return Some(limit.clone());
+    }
+
+    // Fallback: if asset looks like a contract address, scan for matching address
+    if asset.starts_with("0x") || asset.starts_with("0X") {
+        let asset_lower = asset.to_lowercase();
+        for limit in map.values() {
+            if let Some(ref addr) = limit.address {
+                if addr.to_lowercase() == asset_lower {
+                    return Some(limit.clone());
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Update (or insert) a single limit at runtime.
 /// Called from the API controller and from the DB-restore path.
-pub fn set_limit(asset: &str, max_amount: &str, decimals: u8, display_name: &str) {
+pub fn set_limit(asset: &str, max_amount: &str, decimals: u8, display_name: &str, address: Option<&str>) {
     let mut guard = LIMITS.write().unwrap();
     let map = guard.get_or_insert_with(HashMap::new);
     map.insert(
@@ -114,6 +137,7 @@ pub fn set_limit(asset: &str, max_amount: &str, decimals: u8, display_name: &str
             max_amount: max_amount.to_string(),
             decimals,
             display_name: display_name.to_string(),
+            address: address.map(|s| s.to_string()),
         },
     );
 }
@@ -187,6 +211,7 @@ fn builtin_defaults() -> HashMap<String, PaymentLimit> {
             max_amount: "1000000".to_string(),
             decimals: 6,
             display_name: "USDC".to_string(),
+            address: Some("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string()),
         },
     );
     map.insert(
@@ -195,6 +220,7 @@ fn builtin_defaults() -> HashMap<String, PaymentLimit> {
             max_amount: "100000000000000000000000".to_string(),
             decimals: 18,
             display_name: "STARKBOT".to_string(),
+            address: Some("0x587Cd533F418825521f3A1daa7CCd1E7339a1B07".to_string()),
         },
     );
     map

@@ -1,7 +1,7 @@
 ---
 name: starkhub
 description: "Browse, search, install, and submit skills on StarkHub (hub.starkbot.ai) — the decentralized skills directory for StarkBot agents."
-version: 2.6.0
+version: 2.7.0
 author: starkbot
 homepage: https://hub.starkbot.ai
 metadata: {"clawdbot":{"emoji":"🌐"}}
@@ -40,6 +40,8 @@ All read endpoints are public. Download, submit, update, and set username requir
 4. **During install, do NOT ask the user unnecessary questions.** Just download, install, and report the result. If the installed skill has requirements (API keys, config, binaries), mention them AFTER installation as "next steps" — do NOT block the install by asking about targets, delivery methods, or key configuration.
 5. **NO AUTH TOKENS NEEDED.** Do NOT check for, ask for, or try to create auth tokens (SIWA, session tokens, bearer tokens, etc.). Authentication is handled AUTOMATICALLY by `erc8128_fetch` — it signs requests with the wallet. There is zero setup required.
 6. **EXACT TASK COUNT.** Define EXACTLY the number of tasks shown below for each action. Do NOT add extra tasks for auth, username setup, API key checks, or any other prerequisite unless explicitly listed. The task definitions below are COMPLETE — follow them verbatim.
+7. **`erc8128_fetch` ONLY DOWNLOADS — it does NOT install.** After downloading skill markdown with `erc8128_fetch`, you MUST call `manage_skills` with `action: "install"` to actually save the skill to the database. If you skip this step, the skill will NOT appear on the skills page. NEVER report a skill as "installed" until `manage_skills` returns success.
+8. **Do NOT fabricate tool results.** Only report success/failure based on actual tool call responses. If you did not call `manage_skills install` and receive a success response, the skill is NOT installed.
 
 ## Step 1: Define tasks
 
@@ -58,8 +60,9 @@ Before doing any work, call `define_tasks` based on the requested action.
 
 ```json
 {"tool": "define_tasks", "tasks": [
-  "TASK 1 — Download & install: fetch skill markdown from StarkHub via erc8128_fetch /download endpoint, then install locally via manage_skills. See starkhub skill 'Install'.",
-  "TASK 2 — Confirm: tell the user the skill was installed. Mention any requirements (API keys, config) as next steps."
+  "TASK 1 — Download: fetch skill markdown from StarkHub via erc8128_fetch /download endpoint. Save the FULL response text — you need it for the next step.",
+  "TASK 2 — Install to database: call manage_skills with action 'install' and pass the FULL markdown from Task 1 in the 'markdown' parameter. This saves the skill to the database so it appears on the skills page. Do NOT skip this step. If the skill already exists locally, use action 'update' instead.",
+  "TASK 3 — Confirm: tell the user the skill was installed. Mention any requirements (API keys, config, binaries) as next steps."
 ]}
 ```
 
@@ -168,7 +171,9 @@ Returns: `name`, `description`, `version`, `content`, `raw_markdown`, `tags`, `r
 
 ## Install a Skill from StarkHub
 
-**Step 1:** Download the skill markdown (requires auth — uses `erc8128_fetch`). This also records the install on StarkHub and handles x402 payment for paid skills automatically.
+> **BOTH steps are required.** Step 1 only downloads — Step 2 saves to the database. Skipping Step 2 means the skill will NOT appear on the skills page.
+
+**Step 1 — Download** (requires auth — uses `erc8128_fetch`). This records the install on StarkHub and handles x402 payment for paid skills automatically.
 
 ```json
 {
@@ -178,17 +183,19 @@ Returns: `name`, `description`, `version`, `content`, `raw_markdown`, `tags`, `r
 }
 ```
 
-**Step 2:** Install locally:
+Save the full response — it is the skill markdown needed for Step 2.
+
+**Step 2 — Install to database** (REQUIRED — do NOT skip):
 
 ```json
 {
   "tool": "manage_skills",
   "action": "install",
-  "markdown": "<the raw markdown from step 1>"
+  "markdown": "<the FULL raw markdown from Step 1>"
 }
 ```
 
-If the skill already exists locally, use `"action": "update"` instead.
+This inserts the skill into the database so it appears on the skills page and is available to the agent. If the skill already exists locally, use `"action": "update"` instead. Only report success after this step returns `"success": true`.
 
 ---
 
@@ -327,7 +334,8 @@ Only the original author can update their skill.
 ### "Install @username/slug from StarkHub"
 
 1. Download: `erc8128_fetch GET /api/skills/@{username}/{slug}/download` (chain_id: 8453)
-2. Install locally via `manage_skills` → `install`
+2. **Install to DB** (REQUIRED): `manage_skills` → `install` with the full markdown from step 1. This is what makes it show on the skills page.
+3. Verify: `manage_skills` → `get` with the skill name to confirm it's in the database
 
 ### "Publish my skill to StarkHub"
 
