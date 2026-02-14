@@ -523,21 +523,20 @@ async fn restore_backup_data(
         }
     }
 
-    // Restore soul document if present in backup AND no local copy exists
-    // (preserves agent modifications and user edits across restarts)
+    // Restore soul document from keystore backup — ALWAYS overrides the template.
+    // The keystore soul is the agent's evolved personality (with agent modifications),
+    // while soul_template/SOUL.md is just the initial starting point.
+    // initialize_workspace() may have already copied the template, but the keystore
+    // version is authoritative and must take priority.
     if let Some(soul_content) = &backup_data.soul_document {
         let soul_path = config::soul_document_path();
-        if soul_path.exists() {
-            log::info!("[Keystore] Soul document already exists locally, skipping restore from backup");
-        } else {
-            // Ensure soul directory exists
-            if let Some(parent) = soul_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            match std::fs::write(&soul_path, soul_content) {
-                Ok(_) => log::info!("[Keystore] Restored soul document from backup"),
-                Err(e) => log::warn!("[Keystore] Failed to restore soul document: {}", e),
-            }
+        // Ensure soul directory exists
+        if let Some(parent) = soul_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::write(&soul_path, soul_content) {
+            Ok(_) => log::info!("[Keystore] Restored soul document from backup (overrides template)"),
+            Err(e) => log::warn!("[Keystore] Failed to restore soul document: {}", e),
         }
     }
 
