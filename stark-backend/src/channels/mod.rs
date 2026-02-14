@@ -201,11 +201,13 @@ impl ChannelManager {
                 });
             }
             types::ChannelType::Slack => {
+                let db = self.db.clone();
                 tokio::spawn(async move {
                     let result = slack::start_slack_listener(
                         channel,
                         dispatcher,
                         broadcaster.clone(),
+                        db,
                         shutdown_rx,
                     )
                     .await;

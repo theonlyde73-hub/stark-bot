@@ -760,9 +760,15 @@ async fn spa_fallback() -> actix_web::Result<NamedFile> {
 /// and spawns them in the background. Also starts dynamic module services from
 /// `~/.starkbot/modules/`. stdout/stderr are inherited so logs appear in the
 /// same terminal. Child processes are killed when the parent exits.
-fn start_module_services() {
+fn start_module_services(db: &Database) {
     let self_exe = std::env::current_exe().unwrap_or_default();
     let exe_dir = self_exe.parent().unwrap_or(std::path::Path::new("."));
+
+    // Load API keys from database to pass to child services
+    let mut api_key_envs: Vec<(String, String)> = Vec::new();
+    if let Ok(Some(key)) = db.get_api_key("ALCHEMY_API_KEY") {
+        api_key_envs.push(("ALCHEMY_API_KEY".to_string(), key.api_key));
+    }
 
     // Built-in services (compiled workspace members)
     let builtin_services = [
@@ -785,7 +791,16 @@ fn start_module_services() {
             _ => *default_port,
         };
 
-        start_service_binary(&exe_path, name, port_env);
+        // Pass relevant API keys to child services
+        let envs: Vec<(&str, &str)> = match *name {
+            "wallet-monitor-service" => api_key_envs.iter()
+                .filter(|(k, _)| k == "ALCHEMY_API_KEY")
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        start_service_binary(&exe_path, name, port_env, &envs);
     }
 
     // Dynamic module services from ~/.starkbot/modules/
@@ -804,21 +819,27 @@ fn start_module_services() {
             continue;
         }
 
-        start_service_binary(&svc.binary_path, &svc.name, port);
+        start_service_binary(&svc.binary_path, &svc.name, port, &[]);
     }
 }
 
 /// Start a single service binary if its port is not already in use.
-fn start_service_binary(exe_path: &std::path::Path, name: &str, port: u16) {
+/// Optional `envs` slice injects extra environment variables (e.g. API keys from DB).
+fn start_service_binary(exe_path: &std::path::Path, name: &str, port: u16, envs: &[(&str, &str)]) {
     if std::net::TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok() {
         log::info!("[MODULE] {} already running on port {} — skipping", name, port);
         return;
     }
 
-    match std::process::Command::new(exe_path)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
+    let mut cmd = std::process::Command::new(exe_path);
+    cmd.stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+
+    match cmd.spawn()
     {
         Ok(_child) => {
             log::info!("[MODULE] Started {} (port {})", name, port);
@@ -932,7 +953,7 @@ async fn main() -> std::io::Result<()> {
     if std::env::var("DISABLE_MODULE_SERVICES").map(|v| v == "1" || v == "true").unwrap_or(false) {
         log::info!("[MODULE] Module service auto-start disabled via DISABLE_MODULE_SERVICES");
     } else {
-        start_module_services();
+        start_module_services(&db);
     }
 
     // Auto-migration: if discord_user_profiles table exists but discord_tipping module

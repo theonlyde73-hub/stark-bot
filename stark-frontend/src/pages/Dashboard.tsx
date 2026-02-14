@@ -1,10 +1,22 @@
-import { MessageSquare, Calendar, Wrench, Zap, Sparkles } from 'lucide-react';
+import { useState, useCallback } from 'react';
+import { MessageSquare, Calendar, Wrench, Zap, Sparkles, Wallet, Copy, Check } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import Card, { CardContent } from '@/components/ui/Card';
 import { useApi } from '@/hooks/useApi';
+import { useWallet } from '@/hooks/useWallet';
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { address, isConnected, walletMode } = useWallet();
+  const [copied, setCopied] = useState(false);
+
+  const copyAddress = useCallback(() => {
+    if (address) {
+      navigator.clipboard.writeText(address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }, [address]);
   const { data: sessions } = useApi<Array<unknown>>('/sessions');
   const { data: tools } = useApi<Array<unknown>>('/tools');
   const { data: skills } = useApi<Array<unknown>>('/skills');
@@ -44,9 +56,43 @@ export default function Dashboard() {
 
   return (
     <div className="p-8">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-white mb-2">Dashboard</h1>
-        <p className="text-slate-400">Overview of your StarkBot instance</p>
+      <div className="mb-8 flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-white mb-2">Dashboard</h1>
+          <p className="text-slate-400">Overview of your StarkBot instance</p>
+        </div>
+
+        {isConnected && address && (
+          <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center gap-2 bg-slate-700/50 px-3 py-1.5 rounded-lg">
+              <Wallet className="w-4 h-4 text-slate-400" />
+              <span className="text-sm font-mono text-slate-300">
+                {address}
+              </span>
+              <button
+                onClick={copyAddress}
+                className="text-slate-400 hover:text-slate-200 transition-colors"
+                title="Copy address"
+              >
+                {copied ? (
+                  <Check className="w-4 h-4 text-green-400" />
+                ) : (
+                  <Copy className="w-4 h-4" />
+                )}
+              </button>
+              {walletMode === 'flash' && (
+                <span className="text-xs px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded font-medium ml-1">
+                  Flash
+                </span>
+              )}
+            </div>
+            {walletMode === 'flash' && (
+              <span className="text-xs text-slate-500">
+                Encrypted Privy wallet — private key is not stored in this instance
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="mb-8 p-6 bg-slate-800/50 rounded-lg border border-slate-700">

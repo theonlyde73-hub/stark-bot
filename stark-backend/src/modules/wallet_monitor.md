@@ -43,7 +43,7 @@ The wallet monitor runs as a separate microservice. All tool calls communicate w
 - The wallet monitor runs as a standalone service (wallet-monitor-service)
 - Dashboard available at http://127.0.0.1:9100/
 - Supported chains: "mainnet" (Ethereum) and "base" (Base)
-- Each wallet has its own large_trade_threshold_usd (default $10,000)
+- Each wallet has its own large_trade_threshold_usd (default $1,000)
 - Swap detection: transactions with both outgoing and incoming ERC-20 transfers are classified as swaps
 - USD values are estimated using DexScreener price data (cached 60s)
 - The worker uses block-number cursors for gap-free incremental polling

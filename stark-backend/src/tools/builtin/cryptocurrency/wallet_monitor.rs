@@ -82,8 +82,8 @@ impl WalletWatchlistTool {
             "threshold_usd".to_string(),
             PropertySchema {
                 schema_type: "number".to_string(),
-                description: "Large trade threshold in USD. Default: 10000".to_string(),
-                default: Some(json!(10000.0)),
+                description: "Large trade threshold in USD. Default: 1000".to_string(),
+                default: Some(json!(1000.0)),
                 items: None,
                 enum_values: None,
             },
@@ -177,7 +177,7 @@ impl Tool for WalletWatchlistTool {
                     return ToolResult::error("Invalid Ethereum address. Must be 0x + 40 hex characters.");
                 }
                 let chain = params.chain.as_deref().unwrap_or("mainnet");
-                let threshold = params.threshold_usd.unwrap_or(10000.0);
+                let threshold = params.threshold_usd.unwrap_or(1000.0);
 
                 match self.client.add_wallet(address, params.label.as_deref(), chain, threshold).await {
                     Ok(entry) => ToolResult::success(json!({

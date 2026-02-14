@@ -217,16 +217,17 @@ export default function Skills() {
 
       {filteredSkills.length > 0 ? (
         <div className="grid gap-4">
-          {filteredSkills.map((skill) => (
-            <React.Fragment key={skill.name}>
-            <Card className={selectedSkill?.name === skill.name ? 'border-stark-500/50' : ''}>
+          {filteredSkills.map((skill) => {
+            const isSelected = selectedSkill?.name === skill.name;
+            return (
+            <Card key={skill.name} className={isSelected ? 'border-stark-500/50' : ''}>
               <CardContent>
                 {/* Mobile: stacked layout, Desktop: side by side */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
                   {/* Main content */}
                   <div
                     className="flex items-start sm:items-center gap-2 sm:gap-4 min-w-0 cursor-pointer"
-                    onClick={() => handleOpenDetail(skill.name)}
+                    onClick={() => isSelected ? handleCloseDetail() : handleOpenDetail(skill.name)}
                   >
                     {/* Icon - smaller on mobile */}
                     <div className="p-1.5 sm:p-3 bg-amber-500/20 rounded-lg shrink-0">
@@ -283,7 +284,7 @@ export default function Skills() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => handleOpenDetail(skill.name)}
+                      onClick={() => isSelected ? handleCloseDetail() : handleOpenDetail(skill.name)}
                       className="text-slate-400 hover:text-stark-400 hover:bg-stark-500/20 p-1.5 sm:p-2"
                     >
                       <Code className="w-4 h-4" />
@@ -308,125 +309,80 @@ export default function Skills() {
                     </Button>
                   </div>
                 </div>
-              </CardContent>
-            </Card>
 
-            {/* Inline detail/editor panel - renders right below the clicked skill */}
-            {selectedSkill?.name === skill.name && (
-              <Card className="border-stark-500/30">
-                <CardContent>
-                  {/* Header */}
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-amber-500/20 rounded-lg">
-                        <Code className="w-5 h-5 text-amber-400" />
-                      </div>
-                      <div>
-                        <h3 className="font-semibold text-white">{selectedSkill.name}</h3>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          {selectedSkill.version && (
-                            <span className="text-xs px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded">
-                              v{selectedSkill.version}
-                            </span>
-                          )}
-                          <span className="text-xs text-slate-500">{selectedSkill.source}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {saveMessage && (
-                        <span className="text-xs text-green-400">{saveMessage}</span>
-                      )}
-                      {!isEditing && (
-                        <button
-                          onClick={handleStartEdit}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                          Edit
-                        </button>
-                      )}
-                      {isEditing && (
-                        <>
+                {/* Inline detail/editor - expands inside the same card */}
+                {isSelected && (
+                  <div className="mt-4 pt-4 border-t border-slate-700/50">
+                    {/* Edit/Save/Cancel toolbar */}
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-xs text-slate-500 uppercase tracking-wider">Prompt Template</span>
+                      <div className="flex items-center gap-2">
+                        {saveMessage && (
+                          <span className="text-xs text-green-400">{saveMessage}</span>
+                        )}
+                        {!isEditing ? (
                           <button
-                            onClick={handleCancelEdit}
+                            onClick={handleStartEdit}
                             className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
                           >
-                            <X className="w-4 h-4" />
-                            Cancel
+                            <Edit2 className="w-3.5 h-3.5" />
+                            Edit
                           </button>
-                          <button
-                            onClick={handleSave}
-                            disabled={isSaving}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-stark-400 hover:text-white hover:bg-stark-500/20 rounded-lg transition-colors disabled:opacity-50"
-                          >
-                            <Save className="w-4 h-4" />
-                            {isSaving ? 'Saving...' : 'Save'}
-                          </button>
-                        </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={handleCancelEdit}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                              Cancel
+                            </button>
+                            <button
+                              onClick={handleSave}
+                              disabled={isSaving}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-stark-400 hover:text-white hover:bg-stark-500/20 rounded-lg transition-colors disabled:opacity-50"
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                              {isSaving ? 'Saving...' : 'Save'}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Body Editor/Viewer */}
+                    <div className="border border-slate-700 rounded-lg overflow-hidden bg-slate-900/50">
+                      {isEditing ? (
+                        <textarea
+                          value={editedBody}
+                          onChange={(e) => setEditedBody(e.target.value)}
+                          className="w-full h-80 p-4 bg-transparent text-sm text-slate-300 font-mono resize-none focus:outline-none"
+                          spellCheck={false}
+                        />
+                      ) : (
+                        <pre className="p-4 text-sm text-slate-300 font-mono whitespace-pre-wrap break-words max-h-80 overflow-y-auto">
+                          {selectedSkill.prompt_template}
+                        </pre>
                       )}
-                      <button
-                        onClick={handleCloseDetail}
-                        className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
                     </div>
-                  </div>
 
-                  {/* Metadata */}
-                  {selectedSkill.description && (
-                    <p className="text-sm text-slate-400 mb-3">{selectedSkill.description}</p>
-                  )}
-                  {selectedSkill.tags && selectedSkill.tags.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mb-3">
-                      {selectedSkill.tags.map((tag) => (
-                        <span
-                          key={tag}
-                          className="text-xs px-1.5 py-0.5 bg-stark-500/10 text-stark-400 rounded"
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Body Editor/Viewer */}
-                  <div className="border border-slate-700 rounded-lg overflow-hidden bg-slate-900/50">
-                    <div className="px-3 py-1.5 bg-slate-800/50 border-b border-slate-700 text-xs text-slate-500">
-                      Prompt Template
-                    </div>
-                    {isEditing ? (
-                      <textarea
-                        value={editedBody}
-                        onChange={(e) => setEditedBody(e.target.value)}
-                        className="w-full h-80 p-4 bg-transparent text-sm text-slate-300 font-mono resize-none focus:outline-none"
-                        spellCheck={false}
-                      />
-                    ) : (
-                      <pre className="p-4 text-sm text-slate-300 font-mono whitespace-pre-wrap break-words max-h-80 overflow-y-auto">
-                        {selectedSkill.prompt_template}
-                      </pre>
+                    {/* Scripts info */}
+                    {selectedSkill.scripts && selectedSkill.scripts.length > 0 && (
+                      <div className="mt-3">
+                        <span className="text-xs text-slate-500">Scripts: </span>
+                        {selectedSkill.scripts.map((s) => (
+                          <span key={s.name} className="text-xs px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded mr-1">
+                            {s.name} ({s.language})
+                          </span>
+                        ))}
+                      </div>
                     )}
                   </div>
-
-                  {/* Scripts info */}
-                  {selectedSkill.scripts && selectedSkill.scripts.length > 0 && (
-                    <div className="mt-3">
-                      <span className="text-xs text-slate-500">Scripts: </span>
-                      {selectedSkill.scripts.map((s) => (
-                        <span key={s.name} className="text-xs px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded mr-1">
-                          {s.name} ({s.language})
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            )}
-
-            </React.Fragment>
-          ))}
+                )}
+              </CardContent>
+            </Card>
+            );
+          })}
         </div>
       ) : (
         <Card>

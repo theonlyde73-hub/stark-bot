@@ -22,7 +22,7 @@ pub async fn watchlist_add(
     Json(req): Json<AddWalletRequest>,
 ) -> (StatusCode, Json<RpcResponse<WatchlistEntry>>) {
     let chain = req.chain.as_deref().unwrap_or("mainnet");
-    let threshold = req.threshold_usd.unwrap_or(10000.0);
+    let threshold = req.threshold_usd.unwrap_or(1000.0);
 
     if !is_valid_eth_address(&req.address) {
         return (
@@ -145,6 +145,33 @@ pub async fn status(
     };
 
     (StatusCode::OK, Json(RpcResponse::ok(status)))
+}
+
+// POST /rpc/backup/export
+pub async fn backup_export(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, Json<RpcResponse<Vec<BackupEntry>>>) {
+    match state.db.export_watchlist_for_backup() {
+        Ok(entries) => (StatusCode::OK, Json(RpcResponse::ok(entries))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(RpcResponse::err(format!("Backup export failed: {}", e))),
+        ),
+    }
+}
+
+// POST /rpc/backup/restore
+pub async fn backup_restore(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BackupRestoreRequest>,
+) -> (StatusCode, Json<RpcResponse<usize>>) {
+    match state.db.clear_and_restore_watchlist(&req.wallets) {
+        Ok(count) => (StatusCode::OK, Json(RpcResponse::ok(count))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(RpcResponse::err(format!("Backup restore failed: {}", e))),
+        ),
+    }
 }
 
 fn is_valid_eth_address(addr: &str) -> bool {

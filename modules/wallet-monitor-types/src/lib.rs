@@ -151,6 +151,28 @@ pub struct LargeTradeAlert {
 }
 
 // =====================================================
+// Backup Types
+// =====================================================
+
+/// A watchlist entry for backup (excludes transient fields like last_checked_block)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupEntry {
+    pub address: String,
+    pub label: Option<String>,
+    pub chain: String,
+    pub monitor_enabled: bool,
+    pub large_trade_threshold_usd: f64,
+    pub copy_trade_enabled: bool,
+    pub copy_trade_max_usd: Option<f64>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BackupRestoreRequest {
+    pub wallets: Vec<BackupEntry>,
+}
+
+// =====================================================
 // Service Status
 // =====================================================
 

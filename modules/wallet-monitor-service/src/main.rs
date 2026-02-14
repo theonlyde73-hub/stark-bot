@@ -80,6 +80,8 @@ async fn main() {
         .route("/rpc/activity/query", axum::routing::post(routes::activity_query))
         .route("/rpc/activity/stats", axum::routing::get(routes::activity_stats))
         .route("/rpc/status", axum::routing::get(routes::status))
+        .route("/rpc/backup/export", axum::routing::post(routes::backup_export))
+        .route("/rpc/backup/restore", axum::routing::post(routes::backup_restore))
         .with_state(state)
         .layer(cors);
 

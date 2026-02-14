@@ -114,4 +114,63 @@ impl super::Module for WalletMonitorModule {
             "recent_activity": recent_activity_json,
         }))
     }
+
+    async fn backup_data(&self, _db: &Database) -> Option<Value> {
+        let client = Self::make_client();
+        let entries = client.backup_export().await.ok()?;
+        if entries.is_empty() {
+            return None;
+        }
+        let json_entries: Vec<Value> = entries
+            .iter()
+            .map(|e| {
+                json!({
+                    "address": e.address,
+                    "label": e.label,
+                    "chain": e.chain,
+                    "monitor_enabled": e.monitor_enabled,
+                    "large_trade_threshold_usd": e.large_trade_threshold_usd,
+                    "copy_trade_enabled": e.copy_trade_enabled,
+                    "copy_trade_max_usd": e.copy_trade_max_usd,
+                    "notes": e.notes,
+                })
+            })
+            .collect();
+        Some(Value::Array(json_entries))
+    }
+
+    async fn restore_data(&self, _db: &Database, data: &Value) -> Result<(), String> {
+        let entries = data
+            .as_array()
+            .ok_or("wallet_monitor restore data must be a JSON array")?;
+
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let backup_entries: Vec<wallet_monitor_types::BackupEntry> = entries
+            .iter()
+            .filter_map(|e| {
+                Some(wallet_monitor_types::BackupEntry {
+                    address: e["address"].as_str()?.to_string(),
+                    label: e["label"].as_str().map(|s| s.to_string()),
+                    chain: e["chain"].as_str().unwrap_or("mainnet").to_string(),
+                    monitor_enabled: e["monitor_enabled"].as_bool().unwrap_or(true),
+                    large_trade_threshold_usd: e["large_trade_threshold_usd"].as_f64().unwrap_or(1000.0),
+                    copy_trade_enabled: e["copy_trade_enabled"].as_bool().unwrap_or(false),
+                    copy_trade_max_usd: e["copy_trade_max_usd"].as_f64(),
+                    notes: e["notes"].as_str().map(|s| s.to_string()),
+                })
+            })
+            .collect();
+
+        let client = Self::make_client();
+        let restored = client.backup_restore(backup_entries).await?;
+
+        log::info!(
+            "[wallet_monitor] Restored {} watchlist entries from backup",
+            restored
+        );
+        Ok(())
+    }
 }

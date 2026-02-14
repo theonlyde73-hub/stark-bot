@@ -32,7 +32,7 @@ impl Db {
                 label TEXT,
                 chain TEXT NOT NULL DEFAULT 'mainnet',
                 monitor_enabled INTEGER NOT NULL DEFAULT 1,
-                large_trade_threshold_usd REAL NOT NULL DEFAULT 10000.0,
+                large_trade_threshold_usd REAL NOT NULL DEFAULT 1000.0,
                 copy_trade_enabled INTEGER NOT NULL DEFAULT 0,
                 copy_trade_max_usd REAL,
                 last_checked_block INTEGER,
@@ -351,6 +351,58 @@ impl Db {
             watched_wallets,
             active_wallets,
         })
+    }
+
+    pub fn export_watchlist_for_backup(&self) -> SqliteResult<Vec<BackupEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT address, label, chain, monitor_enabled, large_trade_threshold_usd,
+                    copy_trade_enabled, copy_trade_max_usd, notes
+             FROM wallet_watchlist ORDER BY created_at ASC",
+        )?;
+        let entries = stmt
+            .query_map([], |row| {
+                Ok(BackupEntry {
+                    address: row.get(0)?,
+                    label: row.get(1)?,
+                    chain: row.get(2)?,
+                    monitor_enabled: row.get(3)?,
+                    large_trade_threshold_usd: row.get(4)?,
+                    copy_trade_enabled: row.get(5)?,
+                    copy_trade_max_usd: row.get(6)?,
+                    notes: row.get(7)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(entries)
+    }
+
+    pub fn clear_and_restore_watchlist(&self, entries: &[BackupEntry]) -> Result<usize, String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM wallet_activity", [])
+            .map_err(|e| format!("Failed to clear activity: {}", e))?;
+        conn.execute("DELETE FROM wallet_watchlist", [])
+            .map_err(|e| format!("Failed to clear watchlist: {}", e))?;
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut count = 0;
+        for entry in entries {
+            conn.execute(
+                "INSERT OR IGNORE INTO wallet_watchlist
+                    (address, label, chain, monitor_enabled, large_trade_threshold_usd,
+                     copy_trade_enabled, copy_trade_max_usd, notes, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+                rusqlite::params![
+                    entry.address, entry.label, entry.chain, entry.monitor_enabled,
+                    entry.large_trade_threshold_usd, entry.copy_trade_enabled,
+                    entry.copy_trade_max_usd, entry.notes, now
+                ],
+            )
+            .map_err(|e| format!("Failed to insert watchlist entry: {}", e))?;
+            count += 1;
+        }
+        Ok(count)
     }
 }
 

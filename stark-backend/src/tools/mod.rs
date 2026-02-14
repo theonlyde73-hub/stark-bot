@@ -40,6 +40,8 @@ fn register_all_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(builtin::ManageModulesTool::new()));
     registry.register(Arc::new(builtin::ModifyKanbanTool::new()));
     registry.register(Arc::new(builtin::InstallApiKeyTool::new()));
+    registry.register(Arc::new(builtin::HeartbeatConfigTool::new()));
+    registry.register(Arc::new(builtin::MindmapManageTool::new()));
 
     // Web tools (shared)
     registry.register(Arc::new(builtin::WebFetchTool::new()));

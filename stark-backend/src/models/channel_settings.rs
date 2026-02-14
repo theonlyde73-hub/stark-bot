@@ -78,6 +78,8 @@ pub enum ChannelSettingKey {
     TwitterAdminXAccount,
     /// Telegram: Admin user ID — messages from this user bypass safe mode
     TelegramAdminUserId,
+    /// Slack: Comma-separated list of Slack user IDs with admin access
+    SlackAdminUserIds,
 }
 
 impl ChannelSettingKey {
@@ -97,6 +99,7 @@ impl ChannelSettingKey {
             Self::TwitterMaxMentionsPerHour => "Max Replies Per Hour",
             Self::TwitterAdminXAccount => "Admin X User ID (Optional)",
             Self::TelegramAdminUserId => "Admin User ID (Optional)",
+            Self::SlackAdminUserIds => "Admin User IDs (Optional)",
         }
     }
 
@@ -162,6 +165,12 @@ impl ChannelSettingKey {
                  (backwards-compatible). Find your ID by messaging @userinfobot on Telegram. \
                  WARNING: This account gets full agent access — only set this to a user you control."
             }
+            Self::SlackAdminUserIds => {
+                "Comma-separated Slack user IDs that have full agent access. \
+                 If left empty, all users get full access. \
+                 If any IDs are set, ONLY those users have admin access; all others use safe mode. \
+                 Find user IDs in Slack profile settings or via the Slack API."
+            }
         }
     }
 
@@ -181,6 +190,7 @@ impl ChannelSettingKey {
             Self::TwitterMaxMentionsPerHour => SettingInputType::Number,
             Self::TwitterAdminXAccount => SettingInputType::Text,
             Self::TelegramAdminUserId => SettingInputType::Text,
+            Self::SlackAdminUserIds => SettingInputType::Text,
         }
     }
 
@@ -200,6 +210,7 @@ impl ChannelSettingKey {
             Self::TwitterMaxMentionsPerHour => "0",
             Self::TwitterAdminXAccount => "1234567890123456789",
             Self::TelegramAdminUserId => "123456789",
+            Self::SlackAdminUserIds => "U12345678,U87654321",
         }
     }
 
@@ -234,6 +245,7 @@ impl ChannelSettingKey {
             Self::TwitterMaxMentionsPerHour => "0",
             Self::TwitterAdminXAccount => "",
             Self::TelegramAdminUserId => "",
+            Self::SlackAdminUserIds => "",
         }
     }
 
@@ -359,6 +371,7 @@ pub fn get_settings_for_channel_type(channel_type: ChannelType) -> Vec<ChannelSe
         ChannelType::Slack => vec![
             ChannelSettingKey::SlackBotToken.into(),
             ChannelSettingKey::SlackAppToken.into(),
+            ChannelSettingKey::SlackAdminUserIds.into(),
         ],
         ChannelType::Twitter => vec![
             ChannelSettingKey::TwitterBotHandle.into(),
@@ -407,11 +420,12 @@ mod tests {
     #[test]
     fn test_slack_settings() {
         let settings = get_settings_for_channel_type(ChannelType::Slack);
-        // 1 common + 2 Slack-specific (bot_token, app_token)
-        assert_eq!(settings.len(), 3);
+        // 1 common + 3 Slack-specific (bot_token, app_token, admin_user_ids)
+        assert_eq!(settings.len(), 4);
         assert_eq!(settings[0].key, "auto_start_on_boot");
         assert_eq!(settings[1].key, "slack_bot_token");
         assert_eq!(settings[2].key, "slack_app_token");
+        assert_eq!(settings[3].key, "slack_admin_user_ids");
     }
 
     #[test]

@@ -170,7 +170,7 @@ Without sufficient USDC on Base, AI requests will fail with a **402 Payment Requ
 
 ## Mindmap
 
-The **Mindmap** is a knowledge graph where I organize my thoughts, ideas, and areas of focus. It lives in the **Mindmap** page in the UI.
+The **Mindmap** is a knowledge graph where I organize my thoughts, ideas, and areas of focus. It lives in the **Mindmap** page in the UI, and I can manage it directly using the `mindmap_manage` tool.
 
 - The graph has a root node called the **trunk** — it always exists and cannot be deleted.
 - From the trunk, you create **child nodes** representing topics, projects, goals, or any concept worth tracking.
@@ -180,9 +180,20 @@ The **Mindmap** is a knowledge graph where I organize my thoughts, ideas, and ar
 
 The mindmap is not just a passive diagram. It is the **structure the Heartbeat system uses** to give my automated reflections context and direction.
 
+### Managing the Mindmap (via `mindmap_manage` tool)
+
+I can directly manage mind map nodes and connections:
+- **List** all nodes and connections: `action: "list"`
+- **Get** a node with its neighbors: `action: "get", node_id: <id>`
+- **Create** a new node: `action: "create", body: "...", parent_id: <optional parent>`
+- **Update** a node's content: `action: "update", node_id: <id>, body: "..."`
+- **Delete** a node: `action: "delete", node_id: <id>` (trunk cannot be deleted)
+- **Connect** two nodes: `action: "connect", parent_id: <id>, child_id: <id>`
+- **Disconnect** two nodes: `action: "disconnect", parent_id: <id>, child_id: <id>`
+
 ## Heartbeat
 
-The **Heartbeat** is an automation system that lets me periodically wake up and reflect — even when no user is talking to me. Configure it from the **Heartbeat** page in the UI.
+The **Heartbeat** is an automation system that lets me periodically wake up and reflect — even when no user is talking to me. Configure it from the **Heartbeat** page in the UI, or I can manage it directly using the `heartbeat_config` tool.
 
 ### How It Works
 
@@ -192,6 +203,15 @@ The **Heartbeat** is an automation system that lets me periodically wake up and 
 4. If nothing needs attention, I respond with `HEARTBEAT_OK` and the output is suppressed (no noise).
 5. If something does need attention, I take action — updating the node, creating new nodes, or executing tasks.
 
+### Managing Heartbeat (via `heartbeat_config` tool)
+
+I can directly control heartbeat settings:
+- **List** all configs: `action: "list"`
+- **Get** a config: `action: "get"` (global) or `action: "get", channel_id: <id>` (per-channel)
+- **Enable**: `action: "enable"` or `action: "enable", config_id: <id>`
+- **Disable**: `action: "disable"` or `action: "disable", config_id: <id>`
+- **Update** settings: `action: "update", config_id: <id>, interval_minutes: 60, active_hours_start: "09:00", active_hours_end: "17:00", active_days: "mon,tue,wed,thu,fri"`
+
 ### Configuration
 
 | Setting | Description |
@@ -200,6 +220,7 @@ The **Heartbeat** is an automation system that lets me periodically wake up and 
 | **Interval** | How often it runs (e.g., every 30 minutes) |
 | **Active hours** | Time window when heartbeats can fire (e.g., 09:00–17:00) |
 | **Active days** | Days of the week to run (e.g., Mon–Fri) |
+| **Target** | 'last' to continue last session, or a specific session key |
 
 ### Using Heartbeat + Mindmap Together
 

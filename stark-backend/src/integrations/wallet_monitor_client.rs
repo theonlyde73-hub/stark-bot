@@ -107,6 +107,17 @@ impl WalletMonitorClient {
         resp.data.ok_or_else(|| resp.error.unwrap_or_else(|| "Unknown error".to_string()))
     }
 
+    pub async fn backup_export(&self) -> Result<Vec<BackupEntry>, String> {
+        let resp: RpcResponse<Vec<BackupEntry>> = self.post_empty("/rpc/backup/export").await?;
+        resp.data.ok_or_else(|| resp.error.unwrap_or_else(|| "Unknown error".to_string()))
+    }
+
+    pub async fn backup_restore(&self, wallets: Vec<BackupEntry>) -> Result<usize, String> {
+        let req = BackupRestoreRequest { wallets };
+        let resp: RpcResponse<usize> = self.post("/rpc/backup/restore", &req).await?;
+        resp.data.ok_or_else(|| resp.error.unwrap_or_else(|| "Unknown error".to_string()))
+    }
+
     async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
         let url = format!("{}{}", self.base_url, path);
         self.client
@@ -128,6 +139,18 @@ impl WalletMonitorClient {
         self.client
             .post(&url)
             .json(body)
+            .send()
+            .await
+            .map_err(|e| format!("Wallet monitor service unavailable: {}", e))?
+            .json::<T>()
+            .await
+            .map_err(|e| format!("Invalid response from wallet monitor service: {}", e))
+    }
+
+    async fn post_empty<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
+        let url = format!("{}{}", self.base_url, path);
+        self.client
+            .post(&url)
             .send()
             .await
             .map_err(|e| format!("Wallet monitor service unavailable: {}", e))?
