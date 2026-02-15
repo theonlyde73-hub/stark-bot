@@ -186,4 +186,7 @@ pub struct ServiceStatus {
     pub large_trades: i64,
     pub last_tick_at: Option<String>,
     pub poll_interval_secs: u64,
+    /// Whether the background polling worker is enabled (requires ALCHEMY_API_KEY)
+    #[serde(default)]
+    pub worker_enabled: bool,
 }

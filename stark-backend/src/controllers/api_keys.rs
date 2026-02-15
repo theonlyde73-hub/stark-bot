@@ -146,6 +146,17 @@ pub struct ServiceConfig {
 pub fn get_service_configs() -> Vec<ServiceConfig> {
     vec![
         ServiceConfig {
+            group: "alchemy",
+            label: "Alchemy",
+            description: "Blockchain RPC provider for wallet monitoring. Create a free app to get an API key.",
+            url: "https://dashboard.alchemy.com/apps",
+            keys: vec![KeyConfig {
+                name: "ALCHEMY_API_KEY",
+                label: "API Key",
+                secret: true,
+            }],
+        },
+        ServiceConfig {
             group: "github",
             label: "GitHub",
             description: "Create a Personal Access Token with repo scope",

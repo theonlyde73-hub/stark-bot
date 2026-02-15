@@ -46,9 +46,10 @@ export default function Modules() {
     try {
       // Cache-bust to avoid stale browser-cached responses
       const data = await apiFetch<ModuleInfo[]>(`/modules?_t=${Date.now()}`);
-      setModules(data);
-      // Check health of each service
-      checkServiceHealth(data);
+      const list = Array.isArray(data) ? data : [];
+      setModules(list);
+      // Check health of each service (fire-and-forget, never crashes)
+      checkServiceHealth(list).catch(() => {});
     } catch (err) {
       setMessage({ type: 'error', text: 'Failed to load modules' });
     } finally {
@@ -58,14 +59,16 @@ export default function Modules() {
 
   const checkServiceHealth = async (mods: ModuleInfo[]) => {
     const health: Record<string, boolean> = {};
-    for (const m of mods) {
-      try {
-        await apiFetch(`/modules/${encodeURIComponent(m.name)}/status`);
-        health[m.name] = true;
-      } catch {
-        health[m.name] = false;
-      }
-    }
+    await Promise.all(
+      mods.map(async (m) => {
+        try {
+          await apiFetch(`/modules/${encodeURIComponent(m.name)}/status`);
+          health[m.name] = true;
+        } catch {
+          health[m.name] = false;
+        }
+      })
+    );
     setServiceHealth(health);
   };
 
@@ -184,8 +187,6 @@ export default function Modules() {
           [...modules].sort((a, b) => a.name.localeCompare(b.name)).map((module) => {
             const isHealthy = serviceHealth[module.name] === true;
             const healthChecked = module.name in serviceHealth;
-            // Use health check as source of truth when available; fall back to config
-            const isActive = healthChecked ? isHealthy : module.enabled;
 
             return (
               <Card key={module.name} variant="elevated">
@@ -201,7 +202,7 @@ export default function Modules() {
                         <span className="text-xs text-slate-500 bg-slate-700 px-2 py-0.5 rounded">
                           v{module.version}
                         </span>
-                        {isActive ? (
+                        {module.enabled ? (
                           <span className="text-xs text-green-400 bg-green-500/20 px-2 py-0.5 rounded flex items-center gap-1">
                             <Check className="w-3 h-3" /> Active
                           </span>
@@ -283,7 +284,7 @@ export default function Modules() {
                           </span>
                         )
                       )}
-                      {isActive ? (
+                      {module.enabled ? (
                         <Button
                           size="sm"
                           variant="secondary"

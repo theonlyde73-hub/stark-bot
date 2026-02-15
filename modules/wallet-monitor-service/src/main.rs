@@ -43,15 +43,18 @@ async fn main() {
 
     let last_tick_at: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
+    let worker_enabled = !api_key.is_empty();
+
     let state = Arc::new(AppState {
         db: database.clone(),
         start_time: Instant::now(),
         last_tick_at: last_tick_at.clone(),
         poll_interval_secs,
+        worker_enabled,
     });
 
     // Spawn background worker if API key is configured
-    if !api_key.is_empty() {
+    if worker_enabled {
         let worker_db = database.clone();
         let worker_last_tick = last_tick_at.clone();
         tokio::spawn(async move {

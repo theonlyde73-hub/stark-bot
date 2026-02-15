@@ -150,15 +150,16 @@ impl Tool for LocalRpcTool {
             _ => client.get(&params.url),
         };
 
+        // Default to JSON content type for all requests
+        request = request.header("Content-Type", "application/json");
+
         // Attach JSON body for write methods
         if let Some(ref body) = params.body {
             if matches!(method.as_str(), "POST" | "PUT" | "PATCH") {
-                request = request
-                    .header("Content-Type", "application/json")
-                    .body(
-                        serde_json::to_string(body)
-                            .unwrap_or_else(|_| body.to_string()),
-                    );
+                request = request.body(
+                    serde_json::to_string(body)
+                        .unwrap_or_else(|_| body.to_string()),
+                );
             }
         }
 

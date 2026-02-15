@@ -79,6 +79,19 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     let last_tick_str = last_tick.as_deref().unwrap_or("not yet");
     let uptime_str = format_uptime(uptime);
 
+    let warning_banner = if !state.worker_enabled {
+        r#"<div style="background:#5a2d00;border:1px solid #b35c00;border-radius:8px;padding:12px 16px;margin-bottom:20px;display:flex;align-items:center;gap:10px;">
+            <span style="font-size:1.3em;">&#9888;</span>
+            <div>
+                <strong style="color:#ffb347;">Background worker disabled</strong>
+                <span style="color:#ccc;"> &mdash; <code style="background:#3d2200;padding:2px 6px;border-radius:4px;font-size:0.9em;">ALCHEMY_API_KEY</code> is not set. Wallet polling will not run until an Alchemy API key is configured in the environment.</span>
+            </div>
+        </div>"#
+            .to_string()
+    } else {
+        String::new()
+    };
+
     let html = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -112,6 +125,8 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse 
   <h1>Wallet Monitor</h1>
   <p class="meta">Uptime: {uptime_str} &middot; Last tick: {last_tick_str} &middot; Poll interval: {poll_interval}s</p>
 
+  {warning_banner}
+
   {stats_html}
 
   <div class="section">
@@ -139,6 +154,7 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         uptime_str = uptime_str,
         last_tick_str = last_tick_str,
         poll_interval = state.poll_interval_secs,
+        warning_banner = warning_banner,
         stats_html = stats_html,
         watchlist_rows = watchlist_rows,
         activity_rows = activity_rows,

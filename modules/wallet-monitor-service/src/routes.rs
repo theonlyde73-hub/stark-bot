@@ -14,6 +14,7 @@ pub struct AppState {
     pub start_time: Instant,
     pub last_tick_at: Arc<Mutex<Option<String>>>,
     pub poll_interval_secs: u64,
+    pub worker_enabled: bool,
 }
 
 // POST /rpc/watchlist/add
@@ -142,6 +143,7 @@ pub async fn status(
         large_trades: stats.as_ref().map(|s| s.large_trades).unwrap_or(0),
         last_tick_at: last_tick,
         poll_interval_secs: state.poll_interval_secs,
+        worker_enabled: state.worker_enabled,
     };
 
     (StatusCode::OK, Json(RpcResponse::ok(status)))

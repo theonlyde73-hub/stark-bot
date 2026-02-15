@@ -1304,6 +1304,8 @@ impl Database {
         // Migration: add new columns to existing installed_modules tables
         // (safe to run repeatedly — SQLite ALTER TABLE ADD COLUMN is idempotent with IF NOT EXISTS-like behavior)
         for col in &[
+            "has_tools INTEGER NOT NULL DEFAULT 0",
+            "has_dashboard INTEGER NOT NULL DEFAULT 0",
             "source TEXT NOT NULL DEFAULT 'builtin'",
             "manifest_path TEXT",
             "binary_path TEXT",
