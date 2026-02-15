@@ -44,6 +44,13 @@ async fn main() {
     let last_tick_at: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     let worker_enabled = !api_key.is_empty();
+    let alchemy_key_preview = if api_key.len() > 8 {
+        Some(format!("{}...{}", &api_key[..4], &api_key[api_key.len()-4..]))
+    } else if !api_key.is_empty() {
+        Some("*".repeat(api_key.len()))
+    } else {
+        None
+    };
 
     let state = Arc::new(AppState {
         db: database.clone(),
@@ -51,6 +58,7 @@ async fn main() {
         last_tick_at: last_tick_at.clone(),
         poll_interval_secs,
         worker_enabled,
+        alchemy_key_preview,
     });
 
     // Spawn background worker if API key is configured

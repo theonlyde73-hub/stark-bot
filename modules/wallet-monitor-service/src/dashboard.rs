@@ -84,12 +84,31 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse 
             <span style="font-size:1.3em;">&#9888;</span>
             <div>
                 <strong style="color:#ffb347;">Background worker disabled</strong>
-                <span style="color:#ccc;"> &mdash; <code style="background:#3d2200;padding:2px 6px;border-radius:4px;font-size:0.9em;">ALCHEMY_API_KEY</code> is not set. Wallet polling will not run until an Alchemy API key is configured in the environment.</span>
+                <span style="color:#ccc;"> &mdash; <code style="background:#3d2200;padding:2px 6px;border-radius:4px;font-size:0.9em;">ALCHEMY_API_KEY</code> is not set. Wallet polling will not run until an Alchemy API key is configured in Settings &gt; API Keys.</span>
             </div>
         </div>"#
             .to_string()
     } else {
         String::new()
+    };
+
+    let api_keys_html = {
+        let alchemy_status = match &state.alchemy_key_preview {
+            Some(preview) => format!(
+                r#"<span style="color:#3fb950;">&#10003;</span> <code style="background:#1a1a2e;padding:2px 6px;border-radius:4px;font-size:0.9em;">{}</code>"#,
+                preview
+            ),
+            None => r#"<span style="color:#f85149;">&#10007; Not configured</span>"#.to_string(),
+        };
+        format!(
+            r#"<div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 16px;margin-bottom:20px;">
+                <h2 style="margin-bottom:8px;">API Keys</h2>
+                <div style="display:flex;align-items:center;gap:8px;font-size:0.9em;">
+                    <span style="color:#8b949e;">ALCHEMY_API_KEY:</span> {}
+                </div>
+            </div>"#,
+            alchemy_status
+        )
     };
 
     let html = format!(
@@ -127,6 +146,8 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 
   {warning_banner}
 
+  {api_keys_html}
+
   {stats_html}
 
   <div class="section">
@@ -155,6 +176,7 @@ pub async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         last_tick_str = last_tick_str,
         poll_interval = state.poll_interval_secs,
         warning_banner = warning_banner,
+        api_keys_html = api_keys_html,
         stats_html = stats_html,
         watchlist_rows = watchlist_rows,
         activity_rows = activity_rows,

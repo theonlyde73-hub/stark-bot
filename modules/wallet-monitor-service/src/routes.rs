@@ -15,6 +15,8 @@ pub struct AppState {
     pub last_tick_at: Arc<Mutex<Option<String>>>,
     pub poll_interval_secs: u64,
     pub worker_enabled: bool,
+    /// Masked API key for display (e.g. "abc...xyz"), None if not configured
+    pub alchemy_key_preview: Option<String>,
 }
 
 // POST /rpc/watchlist/add

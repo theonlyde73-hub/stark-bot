@@ -8,6 +8,27 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use serde::{Deserialize, Serialize};
 use crate::AppState;
 
+/// Kill the service process listening on a given port (if any).
+fn kill_service_on_port(port: u16) {
+    // Use lsof to find the PID listening on the port, then kill it
+    let output = std::process::Command::new("lsof")
+        .args(["-ti", &format!("tcp:{}", port)])
+        .output();
+    if let Ok(out) = output {
+        let pids = String::from_utf8_lossy(&out.stdout);
+        for pid_str in pids.split_whitespace() {
+            if let Ok(pid) = pid_str.trim().parse::<i32>() {
+                // Don't kill ourselves
+                let my_pid = std::process::id() as i32;
+                if pid != my_pid {
+                    log::info!("[MODULE] Killing service process PID {} on port {}", pid, port);
+                    unsafe { libc::kill(pid, libc::SIGTERM); }
+                }
+            }
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct ModuleInfo {
     name: String,

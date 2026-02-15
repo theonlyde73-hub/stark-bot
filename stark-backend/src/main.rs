@@ -764,10 +764,16 @@ fn start_module_services(db: &Database) {
     let self_exe = std::env::current_exe().unwrap_or_default();
     let exe_dir = self_exe.parent().unwrap_or(std::path::Path::new("."));
 
-    // Load API keys from database to pass to child services
+    // Load API keys from database (with env fallback) to pass to child services
     let mut api_key_envs: Vec<(String, String)> = Vec::new();
-    if let Ok(Some(key)) = db.get_api_key("ALCHEMY_API_KEY") {
-        api_key_envs.push(("ALCHEMY_API_KEY".to_string(), key.api_key));
+    let alchemy_key = db.get_api_key("ALCHEMY_API_KEY").ok().flatten()
+        .map(|k| k.api_key)
+        .or_else(|| std::env::var("ALCHEMY_API_KEY").ok().filter(|v| !v.is_empty()));
+    if let Some(key) = alchemy_key {
+        log::info!("[MODULE] ALCHEMY_API_KEY found — will pass to module services");
+        api_key_envs.push(("ALCHEMY_API_KEY".to_string(), key));
+    } else {
+        log::warn!("[MODULE] ALCHEMY_API_KEY not found in database or environment — wallet monitor worker will be disabled");
     }
 
     // Built-in services (compiled workspace members)
