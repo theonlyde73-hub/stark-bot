@@ -76,10 +76,16 @@ pub async fn get_asset_transfers(
         .map(|b| format!("0x{:x}", b))
         .unwrap_or_else(|| "0x0".to_string());
 
+    // "internal" category is only supported on ETH and MATIC, not Base/L2s
+    let categories = match chain {
+        "base" => serde_json::json!(["external", "erc20"]),
+        _ => serde_json::json!(["external", "internal", "erc20"]),
+    };
+
     let mut params = serde_json::json!({
         "fromBlock": from_block_hex,
         "toBlock": "latest",
-        "category": ["external", "internal", "erc20"],
+        "category": categories,
         "withMetadata": true,
         "maxCount": "0x3e8",
     });
