@@ -96,8 +96,6 @@ export default function Tools() {
                       key={tool.name}
                       className="p-3 sm:p-4 rounded-lg bg-slate-700/50"
                     >
-                      {/* Mobile: icon + title + status in one row, description below */}
-                      {/* Desktop: original side-by-side layout */}
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
                           <div className="p-1.5 sm:p-2 bg-slate-600 rounded-lg shrink-0">
@@ -116,10 +114,6 @@ export default function Tools() {
                               ReadOnly
                             </span>
                           )}
-                          {/* Description inline on desktop */}
-                          {tool.description && (
-                            <p className="hidden sm:block text-sm text-slate-400 truncate">{tool.description}</p>
-                          )}
                         </div>
                         <div
                           className={`p-1.5 sm:p-2 rounded-lg shrink-0 ${
@@ -135,9 +129,8 @@ export default function Tools() {
                           )}
                         </div>
                       </div>
-                      {/* Description on separate line for mobile */}
                       {tool.description && (
-                        <p className="sm:hidden text-xs text-slate-400 mt-2 pl-8">{tool.description}</p>
+                        <p className="text-xs sm:text-sm text-slate-400 mt-2 pl-9 sm:pl-11">{tool.description}</p>
                       )}
                     </div>
                   ))}

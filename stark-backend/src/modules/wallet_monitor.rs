@@ -6,10 +6,6 @@
 use async_trait::async_trait;
 use crate::db::Database;
 use crate::integrations::wallet_monitor_client::WalletMonitorClient;
-use crate::tools::builtin::cryptocurrency::wallet_monitor::{
-    WalletActivityTool, WalletMonitorControlTool, WalletWatchlistTool,
-};
-use crate::tools::registry::Tool;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -38,7 +34,7 @@ impl super::Module for WalletMonitorModule {
     }
 
     fn version(&self) -> &'static str {
-        "1.1.0"
+        "2.1.0"
     }
 
     fn default_port(&self) -> u16 {
@@ -50,20 +46,15 @@ impl super::Module for WalletMonitorModule {
     }
 
     fn has_tools(&self) -> bool {
-        true
+        false
     }
 
     fn has_dashboard(&self) -> bool {
         true
     }
 
-    fn create_tools(&self) -> Vec<Arc<dyn Tool>> {
-        let client = Self::make_client();
-        vec![
-            Arc::new(WalletWatchlistTool::new(client.clone())),
-            Arc::new(WalletActivityTool::new(client.clone())),
-            Arc::new(WalletMonitorControlTool::new(client)),
-        ]
+    fn create_tools(&self) -> Vec<Arc<dyn crate::tools::registry::Tool>> {
+        vec![]
     }
 
     fn skill_content(&self) -> Option<&'static str> {

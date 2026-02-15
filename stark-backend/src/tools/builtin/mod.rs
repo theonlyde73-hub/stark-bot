@@ -15,6 +15,7 @@ pub mod cryptocurrency;
 pub mod social_media;
 
 // Individual tools (remaining uncategorized)
+mod local_rpc;
 mod process_status;
 mod qmd_memory_read;
 mod qmd_memory_search;
@@ -36,13 +37,13 @@ pub use cryptocurrency::{
     load_networks, load_tokens, BridgeUsdcTool, BroadcastWeb3TxTool, DecodeCalldataTool,
     DexScreenerTool, Erc8128FetchTool, GeckoTerminalTool, ListQueuedWeb3TxTool, PolymarketTradeTool,
     SelectWeb3NetworkTool, SendEthTool, SetAddressTool, SiwaAuthTool, ToRawAmountTool, TokenLookupTool,
-    VerifyTxBroadcastTool, WalletActivityTool, WalletMonitorControlTool, WalletWatchlistTool,
-    Web3PresetFunctionCallTool, X402AgentInvokeTool, X402FetchTool,
+    VerifyTxBroadcastTool, Web3PresetFunctionCallTool, X402AgentInvokeTool, X402FetchTool,
     X402PostTool, X402RpcTool,
 };
 pub use social_media::{DiscordLookupTool, DiscordReadTool, DiscordWriteTool, GithubUserTool, TelegramReadTool, TwitterPostTool};
 
 // Re-exports from individual tools
+pub use local_rpc::LocalRpcTool;
 pub use process_status::ProcessStatusTool;
 pub use qmd_memory_read::QmdMemoryReadTool;
 pub use qmd_memory_search::QmdMemorySearchTool;

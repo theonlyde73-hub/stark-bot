@@ -181,9 +181,11 @@ export default function Modules() {
             </CardContent>
           </Card>
         ) : (
-          modules.map((module) => {
+          [...modules].sort((a, b) => a.name.localeCompare(b.name)).map((module) => {
             const isHealthy = serviceHealth[module.name] === true;
             const healthChecked = module.name in serviceHealth;
+            // Use health check as source of truth when available; fall back to config
+            const isActive = healthChecked ? isHealthy : module.enabled;
 
             return (
               <Card key={module.name} variant="elevated">
@@ -199,7 +201,7 @@ export default function Modules() {
                         <span className="text-xs text-slate-500 bg-slate-700 px-2 py-0.5 rounded">
                           v{module.version}
                         </span>
-                        {module.installed && module.enabled ? (
+                        {isActive ? (
                           <span className="text-xs text-green-400 bg-green-500/20 px-2 py-0.5 rounded flex items-center gap-1">
                             <Check className="w-3 h-3" /> Active
                           </span>
@@ -281,7 +283,7 @@ export default function Modules() {
                           </span>
                         )
                       )}
-                      {module.enabled ? (
+                      {isActive ? (
                         <Button
                           size="sm"
                           variant="secondary"

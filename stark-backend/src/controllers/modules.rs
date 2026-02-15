@@ -178,17 +178,17 @@ async fn module_action(
         }
 
         "enable" => {
+            let registry = crate::modules::ModuleRegistry::new();
+            let module = match registry.get(&name) {
+                Some(m) => m,
+                None => return HttpResponse::NotFound().json(serde_json::json!({
+                    "error": format!("Unknown module: '{}'", name)
+                })),
+            };
+
             // Auto-install if not already installed
             let already_installed = data.db.is_module_installed(&name).unwrap_or(false);
             if !already_installed {
-                let registry = crate::modules::ModuleRegistry::new();
-                let module = match registry.get(&name) {
-                    Some(m) => m,
-                    None => return HttpResponse::NotFound().json(serde_json::json!({
-                        "error": format!("Unknown module: '{}'", name)
-                    })),
-                };
-
                 if let Err(e) = data.db.install_module(
                     &name,
                     module.description(),
@@ -200,10 +200,15 @@ async fn module_action(
                         "error": format!("Install failed: {}", e)
                     }));
                 }
+            }
 
-                // Install skill if provided
-                if let Some(skill_md) = module.skill_content() {
-                    let _ = data.skill_registry.create_skill_from_markdown(skill_md);
+            // Ensure the module's skill is created and enabled
+            if let Some(skill_md) = module.skill_content() {
+                // Create if it doesn't exist yet (idempotent — create_skill skips duplicates)
+                let _ = data.skill_registry.create_skill_from_markdown(skill_md);
+                // Always mark it enabled in case it was previously disabled
+                if let Ok((metadata, _)) = crate::skills::zip_parser::parse_skill_md(skill_md) {
+                    data.skill_registry.set_enabled(&metadata.name, true);
                 }
             }
 
@@ -353,21 +358,35 @@ async fn reload_modules(data: web::Data<AppState>) -> HttpResponse {
         }
     }
 
-    // 2. Read DB for installed + enabled modules, activate each
+    // 2. Read DB for installed + enabled modules, activate tools and sync skills
     let installed = data.db.list_installed_modules().unwrap_or_default();
     for entry in &installed {
-        if entry.enabled {
-            if let Some(module) = module_registry.get(&entry.module_name) {
+        if let Some(module) = module_registry.get(&entry.module_name) {
+            if entry.enabled {
+                // Re-register tools
                 if module.has_tools() {
                     for tool in module.create_tools() {
                         log::info!("[MODULE] Reload: registered tool '{}' (from {})", tool.name(), entry.module_name);
                         data.tool_registry.register(tool);
                     }
                 }
+                // Ensure skill is created and enabled
+                if let Some(skill_md) = module.skill_content() {
+                    let _ = data.skill_registry.create_skill_from_markdown(skill_md);
+                    if let Ok((metadata, _)) = crate::skills::zip_parser::parse_skill_md(skill_md) {
+                        data.skill_registry.set_enabled(&metadata.name, true);
+                    }
+                }
                 activated.push(entry.module_name.clone());
+            } else {
+                // Ensure skill is disabled for disabled modules
+                if let Some(skill_md) = module.skill_content() {
+                    if let Ok((metadata, _)) = crate::skills::zip_parser::parse_skill_md(skill_md) {
+                        data.skill_registry.set_enabled(&metadata.name, false);
+                    }
+                }
+                deactivated.push(entry.module_name.clone());
             }
-        } else {
-            deactivated.push(entry.module_name.clone());
         }
     }
 

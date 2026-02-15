@@ -45,6 +45,8 @@ fn register_all_tools(registry: &mut ToolRegistry) {
 
     // Web tools (shared)
     registry.register(Arc::new(builtin::WebFetchTool::new()));
+    // Local RPC — localhost-only HTTP for microservice APIs
+    registry.register(Arc::new(builtin::LocalRpcTool::new()));
 
     // Finance tools (crypto/DeFi operations)
     registry.register(Arc::new(builtin::X402RpcTool::new()));

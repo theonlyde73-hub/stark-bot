@@ -25,7 +25,7 @@ mod siwa_auth;
 mod x402_agent_invoke;
 mod x402_fetch;
 mod x402_post;
-pub mod wallet_monitor;
+mod wallet_monitor;
 mod x402_rpc;
 
 pub use erc8128_fetch::Erc8128FetchTool;
@@ -48,5 +48,4 @@ pub use web3_tx::SendEthTool;
 pub use x402_agent_invoke::X402AgentInvokeTool;
 pub use x402_fetch::X402FetchTool;
 pub use x402_post::X402PostTool;
-pub use wallet_monitor::{WalletActivityTool, WalletMonitorControlTool, WalletWatchlistTool};
 pub use x402_rpc::X402RpcTool;

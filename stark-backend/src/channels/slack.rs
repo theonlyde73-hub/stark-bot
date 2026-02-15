@@ -384,13 +384,15 @@ async fn process_slack_message(
     state: SlackAppState,
     slack_channel: SlackChannelId,
     user_id: String,
-    user_name: String,
     raw_text: String,
     message_ts: SlackTs,
     thread_ts: Option<SlackTs>,
 ) {
     let channel_id = state.channel_id;
     let bot_user_id = state.bot_user_id.clone();
+
+    // Resolve display name (non-blocking, falls back to user_id)
+    let user_name = resolve_user_name(&client, &state.bot_token, &user_id).await;
 
     // Strip bot mention from text
     let clean_text = strip_slack_mention(&raw_text, &bot_user_id);
@@ -794,7 +796,6 @@ fn handle_push_event(
                 }
 
                 let user_id = mention.user.to_string();
-                let user_name = resolve_user_name(&client, &state.bot_token, &user_id).await;
                 let slack_channel = mention.channel;
                 let message_ts = mention.origin.ts;
                 let thread_ts = mention.origin.thread_ts;
@@ -815,7 +816,6 @@ fn handle_push_event(
                     state,
                     slack_channel,
                     user_id,
-                    user_name,
                     text,
                     message_ts,
                     thread_ts,
@@ -870,7 +870,6 @@ fn handle_push_event(
                 };
                 let message_ts = msg_event.origin.ts;
                 let thread_ts = msg_event.origin.thread_ts;
-                let user_name = resolve_user_name(&client, &state.bot_token, &sender_id).await;
 
                 log::info!(
                     "Slack: DM from {} in {}: {}",
@@ -888,7 +887,6 @@ fn handle_push_event(
                     state,
                     slack_channel,
                     sender_id,
-                    user_name,
                     text,
                     message_ts,
                     thread_ts,
