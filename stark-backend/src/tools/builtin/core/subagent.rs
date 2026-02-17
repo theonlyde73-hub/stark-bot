@@ -4,6 +4,7 @@
 //! - `spawn_subagents`: Spawn multiple sub-agents in parallel and wait for all results
 //! - `subagent_status`: Check the status of sub-agents or cancel them
 
+use crate::ai::archetypes::minimax::strip_think_blocks;
 use crate::ai::multi_agent::{SubAgentContext, SubAgentManager, SubAgentStatus};
 use crate::gateway::protocol::GatewayEvent;
 use crate::tools::registry::Tool;
@@ -390,10 +391,11 @@ impl SpawnSubagentsTool {
                     }
 
                     if let Some(ref result) = status.result {
-                        let truncated = if result.len() > 2000 {
-                            format!("{}...\n[truncated, {} chars total]", &result[..2000], result.len())
+                        let cleaned = strip_think_blocks(result);
+                        let truncated = if cleaned.len() > 2000 {
+                            format!("{}...\n[truncated, {} chars total]", &cleaned[..2000], cleaned.len())
                         } else {
-                            result.clone()
+                            cleaned
                         };
                         report.push_str(&format!("\n{}\n\n", truncated));
                     }
@@ -441,42 +443,20 @@ impl SpawnSubagentsTool {
             }
         }
 
-        // When all subagents succeed, signal task_fully_completed to the parent loop.
-        // This prevents the parent from making a redundant AI iteration just to call
-        // say_to_user/task_fully_completed again (the subagent already communicated results).
-        let mut metadata = json!({
+        // Do NOT set task_fully_completed here — let the parent AI get one more turn
+        // to read the subagent results and format a proper user-facing response.
+        let metadata = json!({
             "count": ids.len(),
             "all_succeeded": all_succeeded,
             "elapsed_secs": elapsed.as_secs_f64(),
             "results": results_metadata,
         });
 
-        if all_succeeded {
-            // Build a concise summary from subagent results
-            let summary_parts: Vec<String> = ids.iter().zip(labels.iter()).filter_map(|(id, label)| {
-                if id.starts_with("FAILED_TO_SPAWN_") {
-                    return None;
-                }
-                manager.get_status(id).ok().flatten().and_then(|s| {
-                    s.result.map(|r| {
-                        let truncated = if r.len() > 200 { format!("{}...", &r[..200]) } else { r };
-                        format!("{}: {}", label, truncated)
-                    })
-                })
-            }).collect();
-            let summary = if summary_parts.is_empty() {
-                "All subagents completed successfully.".to_string()
-            } else {
-                summary_parts.join("\n")
-            };
-            metadata["task_fully_completed"] = json!(true);
-            metadata["summary"] = json!(summary);
-            ToolResult::success(report).with_metadata(metadata)
-        } else {
+        if !all_succeeded {
             // Still return success (not error) — we have partial results
             // The report clearly indicates which agents failed
-            ToolResult::success(report).with_metadata(metadata)
         }
+        ToolResult::success(report).with_metadata(metadata)
     }
 }
 

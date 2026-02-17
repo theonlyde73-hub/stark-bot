@@ -6,6 +6,7 @@
 //! - Isolated session creation for sub-agents
 //! - Real-time event broadcasting for sub-agent lifecycle
 
+use crate::ai::archetypes::minimax::strip_think_blocks;
 use crate::ai::multi_agent::types::{SubAgentConfig, SubAgentContext, SubAgentStatus};
 use crate::ai::{AiClient, Message, MessageRole, ToolHistoryEntry};
 use crate::db::Database;
@@ -263,12 +264,13 @@ impl SubAgentManager {
             let mut final_context = context;
             match result {
                 Ok(response) => {
-                    final_context.mark_completed(response.clone());
+                    let cleaned_response = strip_think_blocks(&response);
+                    final_context.mark_completed(cleaned_response.clone());
                     broadcaster.broadcast(GatewayEvent::subagent_completed(
                         final_context.parent_channel_id,
                         &final_context.id,
                         &final_context.label,
-                        &response,
+                        &cleaned_response,
                         final_context.parent_subagent_id.as_deref(),
                         final_context.depth,
                         final_context.parent_session_id,
@@ -640,11 +642,12 @@ impl SubAgentManager {
                     .execute(&tool_call.name, tool_call.arguments.clone(), &tool_context, Some(&tool_config))
                     .await;
 
-                // Broadcast tool_result event
-                let content_preview = if result.content.len() > 500 {
-                    format!("{}...", &result.content[..500])
+                // Broadcast tool_result event (strip <think> blocks from preview)
+                let cleaned_content = strip_think_blocks(&result.content);
+                let content_preview = if cleaned_content.len() > 500 {
+                    format!("{}...", &cleaned_content[..500])
                 } else {
-                    result.content.clone()
+                    cleaned_content
                 };
                 broadcaster.broadcast(GatewayEvent::subagent_tool_result(
                     context.parent_channel_id,

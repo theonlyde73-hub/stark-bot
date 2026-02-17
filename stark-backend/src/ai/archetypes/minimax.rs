@@ -22,7 +22,7 @@ impl Default for MiniMaxArchetype {
 }
 
 /// Strip <think>...</think> blocks from content
-fn strip_think_blocks(content: &str) -> String {
+pub fn strip_think_blocks(content: &str) -> String {
     let mut result = String::with_capacity(content.len());
     let mut remaining = content;
 
