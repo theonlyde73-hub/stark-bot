@@ -539,6 +539,7 @@ impl SubAgentManager {
         let max_iterations = 90; // Matches default subtype config
         let mut tool_history: Vec<ToolHistoryEntry> = Vec::new();
         let mut final_response = String::new();
+        let mut last_say_to_user_content = String::new();
         let mut client_error_retries = 0;
         const MAX_CLIENT_ERROR_RETRIES: u32 = 2;
 
@@ -678,11 +679,22 @@ impl SubAgentManager {
                     None,
                 );
 
+                // Track say_to_user content so it can be preferred over task_fully_completed summary
+                if tool_call.name == "say_to_user" && result.success {
+                    log::info!("[SUBAGENT] {} say_to_user captured ({} chars)", context.id, result.content.len());
+                    last_say_to_user_content = result.content.clone();
+                }
+
                 // Check if task_fully_completed was called - stop the loop
                 if let Some(ref metadata) = result.metadata {
                     if metadata.get("task_fully_completed").and_then(|v| v.as_bool()).unwrap_or(false) {
                         log::info!("[SUBAGENT] {} task_fully_completed called, stopping loop", context.id);
-                        if let Some(summary) = metadata.get("summary").and_then(|v| v.as_str()) {
+                        // Prefer say_to_user content (has the actual user-facing message, e.g. image URLs)
+                        // over the task_fully_completed summary (which is internal-only)
+                        if !last_say_to_user_content.is_empty() {
+                            log::info!("[SUBAGENT] {} using last_say_to_user_content as final response ({} chars)", context.id, last_say_to_user_content.len());
+                            final_response = last_say_to_user_content.clone();
+                        } else if let Some(summary) = metadata.get("summary").and_then(|v| v.as_str()) {
                             final_response = summary.to_string();
                         } else if !result.content.is_empty() {
                             final_response = result.content.clone();
@@ -713,6 +725,13 @@ impl SubAgentManager {
             if !response.content.is_empty() {
                 final_response = response.content;
             }
+        }
+
+        // Prefer say_to_user content over any other final response (e.g. plain AI text)
+        // This ensures image URLs and user-facing messages from say_to_user bubble up
+        if !last_say_to_user_content.is_empty() && final_response != last_say_to_user_content {
+            log::info!("[SUBAGENT] {} overriding final_response with last_say_to_user_content ({} chars)", context.id, last_say_to_user_content.len());
+            final_response = last_say_to_user_content;
         }
 
         if final_response.is_empty() {
