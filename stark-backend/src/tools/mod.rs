@@ -23,6 +23,7 @@ fn register_all_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(builtin::SpawnSubagentsTool::new()));
     registry.register(Arc::new(builtin::SubagentStatusTool::new()));
     registry.register(Arc::new(builtin::SetAgentSubtypeTool::new()));
+    registry.register(Arc::new(builtin::UseSkillTool::new()));
     registry.register(Arc::new(builtin::AskUserTool::new()));
     registry.register(Arc::new(builtin::SayToUserTool::new()));
     // QMD Memory tools (file-based markdown memory system)

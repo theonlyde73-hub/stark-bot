@@ -1664,8 +1664,12 @@ impl MessageDispatcher {
         }
     }
 
-    /// Build the `use_skill` pseudo-tool definition from the skills available
-    /// in the current context (subtype + tool config).
+    /// Build a context-aware `use_skill` tool definition with dynamic enum_values
+    /// and description based on the skills available in the current context
+    /// (subtype tags + special-role grants + safe-mode filtering).
+    ///
+    /// Returns `None` if no skills are available (the registered tool will be
+    /// stripped from the tool list in that case).
     fn create_skill_tool_definition_for_subtype(
         &self,
         subtype_key: &str,
@@ -1769,13 +1773,24 @@ impl MessageDispatcher {
                 .get_tool_definitions_for_subtype(tool_config, subtype_key)
         };
 
-        // Inject use_skill if subtype has skill_tags OR if enriched via special role
+        // Patch use_skill: replace the static registered definition with a
+        // context-aware one (dynamic enum_values + description), or remove it
+        // entirely if no skills are available for this context.
         let has_skill_tags = !agent_types::allowed_skill_tags_for_key(subtype_key).is_empty();
         let use_skill_allowed = tool_config.allow_list.iter().any(|t| t == "use_skill");
         if has_skill_tags || use_skill_allowed {
-            if let Some(skill_tool) = self.create_skill_tool_definition_for_subtype(subtype_key, tool_config) {
-                tools.push(skill_tool);
+            if let Some(patched_def) = self.create_skill_tool_definition_for_subtype(subtype_key, tool_config) {
+                // Replace the static definition with the context-aware one
+                if let Some(existing) = tools.iter_mut().find(|t| t.name == "use_skill") {
+                    *existing = patched_def;
+                }
+            } else {
+                // No skills available — remove use_skill entirely
+                tools.retain(|t| t.name != "use_skill");
             }
+        } else {
+            // Subtype has no skill tags and no special role grant — remove use_skill
+            tools.retain(|t| t.name != "use_skill");
         }
 
         tools.extend(orchestrator.get_mode_tools());
@@ -2069,96 +2084,88 @@ impl MessageDispatcher {
             tool_arguments,
         ));
 
-        let result = if tool_name == "use_skill" {
-            // Guard: only allow use_skill if it was actually in the tool list for this subtype
-            let use_skill_in_tools = current_tools.iter().any(|t| t.name == "use_skill");
-            if !use_skill_in_tools {
+        // Pre-checks for use_skill: guard against disallowed skills and redundant reloads
+        let skill_pre_check_result = if tool_name == "use_skill" {
+            let requested_skill = tool_arguments.get("skill_name").and_then(|v| v.as_str()).unwrap_or("");
+
+            // Guard: use_skill must be in the current tool list for this context
+            let use_skill_def = current_tools.iter().find(|t| t.name == "use_skill");
+            if use_skill_def.is_none() {
                 log::warn!(
                     "[SKILL] Blocked use_skill call — not available for current subtype '{}'",
                     orchestrator.current_subtype_key()
                 );
-                crate::tools::ToolResult::error(
+                Some(crate::tools::ToolResult::error(
                     "use_skill is not available in the current toolbox. Switch to the appropriate subtype first with set_agent_subtype."
-                )
-            } else {
-            // Check if the same skill is already active — avoid redundant reloads
-            let requested_skill = tool_arguments.get("skill_name").and_then(|v| v.as_str()).unwrap_or("");
-            let already_active = orchestrator.context().active_skill
-                .as_ref()
-                .map(|s| s.name == requested_skill)
-                .unwrap_or(false);
-
-            if already_active {
-                let input = tool_arguments.get("input").and_then(|v| v.as_str()).unwrap_or("");
-                log::info!(
-                    "[SKILL] Skill '{}' already active, skipping redundant reload",
-                    requested_skill
-                );
-
-                // Ensure subtype is set even if skill was pre-activated without it
-                if orchestrator.current_subtype().is_none() {
-                    if let Ok(Some(skill)) = self.db.get_enabled_skill_by_name(requested_skill) {
-                        if let Some(new_key) = self.apply_skill_subtype(&skill, orchestrator, original_message.channel_id) {
-                            // Refresh tools for the newly-set subtype
-                            *tools = self.build_tool_list(tool_config, &new_key, orchestrator);
-                            log::info!(
-                                "[SKILL] Late subtype fix: refreshed toolset to {} with {} tools",
-                                agent_types::subtype_label(&new_key),
-                                tools.len()
-                            );
-                        }
-                    }
-                }
-
-                crate::tools::ToolResult::success(&format!(
-                    "Skill '{}' is already loaded. Follow the instructions already provided and call the actual tools directly. Do NOT call use_skill again.\n\nUser query: {}",
-                    requested_skill, input
                 ))
             } else {
-                // Execute skill and set active skill on orchestrator
-                let skill_result = self.execute_skill_tool(tool_arguments, Some(session_id)).await;
+                // Guard: requested skill must be in the allowed enum_values
+                let allowed_skills = use_skill_def
+                    .and_then(|d| d.input_schema.properties.get("skill_name"))
+                    .and_then(|p| p.enum_values.as_ref());
+                let skill_allowed = allowed_skills
+                    .map(|names| names.iter().any(|n| n == requested_skill))
+                    .unwrap_or(false);
+                if !skill_allowed {
+                    log::warn!(
+                        "[SKILL] Blocked skill '{}' — not in allowed list for subtype '{}' (safe_mode={}, profile={:?})",
+                        requested_skill,
+                        orchestrator.current_subtype_key(),
+                        is_safe_mode,
+                        tool_config.profile,
+                    );
+                    let allowed_list = allowed_skills
+                        .map(|names| names.join(", "))
+                        .unwrap_or_else(|| "none".to_string());
+                    Some(crate::tools::ToolResult::error(format!(
+                        "Skill '{}' is not available in the current context. Available skills: {}",
+                        requested_skill, allowed_list
+                    )))
+                } else {
+                    // Check if already active — avoid redundant reloads
+                    let already_active = orchestrator.context().active_skill
+                        .as_ref()
+                        .map(|s| s.name == requested_skill)
+                        .unwrap_or(false);
 
-                // Also set active skill directly on orchestrator (in-memory)
-                if skill_result.success {
-                    if let Some(skill_name_val) = tool_arguments.get("skill_name").and_then(|v| v.as_str()) {
-                        if let Ok(Some(skill)) = self.db.get_enabled_skill_by_name(skill_name_val) {
-                            let skills_dir = crate::config::skills_dir();
-                            let skill_base_dir = format!("{}/{}", skills_dir, skill.name);
-                            let instructions = skill.body.replace("{baseDir}", &skill_base_dir);
+                    if already_active {
+                        let input = tool_arguments.get("input").and_then(|v| v.as_str()).unwrap_or("");
+                        log::info!(
+                            "[SKILL] Skill '{}' already active, skipping redundant reload",
+                            requested_skill
+                        );
 
-                            let requires_tools = skill.requires_tools.clone();
-                            log::info!(
-                                "[SKILL] Activating skill '{}' with requires_tools: {:?}",
-                                skill.name,
-                                requires_tools
-                            );
-
-                            // Auto-set subtype if skill specifies one (before tool refresh)
-                            self.apply_skill_subtype(&skill, orchestrator, original_message.channel_id);
-
-                            orchestrator.context_mut().active_skill = Some(crate::ai::multi_agent::types::ActiveSkill {
-                                name: skill.name,
-                                instructions,
-                                activated_at: chrono::Utc::now().to_rfc3339(),
-                                tool_calls_made: 0,
-                                requires_tools: requires_tools.clone(),
-                            });
-
-                            // Refresh tools to include skill-required tools
-                            let sk = orchestrator.current_subtype_key().to_string();
-                            *tools = self.build_tool_list(tool_config, &sk, orchestrator);
-                            log::info!(
-                                "[SKILL] Refreshed toolset with {} tools (skill requires {:?})",
-                                tools.len(),
-                                requires_tools
-                            );
+                        // Ensure subtype is set even if skill was pre-activated without it
+                        if orchestrator.current_subtype().is_none() {
+                            if let Ok(Some(skill)) = self.db.get_enabled_skill_by_name(requested_skill) {
+                                if let Some(new_key) = self.apply_skill_subtype(&skill, orchestrator, original_message.channel_id) {
+                                    *tools = self.build_tool_list(tool_config, &new_key, orchestrator);
+                                    log::info!(
+                                        "[SKILL] Late subtype fix: refreshed toolset to {} with {} tools",
+                                        agent_types::subtype_label(&new_key),
+                                        tools.len()
+                                    );
+                                }
+                            }
                         }
+
+                        Some(crate::tools::ToolResult::success(&format!(
+                            "Skill '{}' is already loaded. Follow the instructions already provided and call the actual tools directly. Do NOT call use_skill again.\n\nUser query: {}",
+                            requested_skill, input
+                        )))
+                    } else {
+                        None // Allowed and not already active — proceed to normal execution
                     }
                 }
-                skill_result
             }
-            } // close use_skill_in_tools else
         } else {
+            None
+        };
+
+        let result = if let Some(result) = skill_pre_check_result {
+            result
+        } else {
+            // Normal execution path for all tools (including use_skill)
             // Check if subtype is None - allow System tools and skill-required tools,
             // but block everything else until a subtype is selected
             let is_system_tool = current_tools.iter().any(|t| t.name == tool_name && t.group == crate::tools::types::ToolGroup::System);
@@ -2290,6 +2297,45 @@ impl MessageDispatcher {
                         &orchestrator.current_mode().to_string(),
                         &new_key,
                         tools,
+                    );
+                }
+            }
+        }
+
+        // Handle skill activation: update orchestrator and refresh tools
+        // (mirrors the set_agent_subtype post-execution pattern above)
+        if tool_name == "use_skill" && result.success {
+            if let Some(skill_name_val) = tool_arguments.get("skill_name").and_then(|v| v.as_str()) {
+                if let Ok(Some(skill)) = self.db.get_enabled_skill_by_name(skill_name_val) {
+                    let skills_dir = crate::config::skills_dir();
+                    let skill_base_dir = format!("{}/{}", skills_dir, skill.name);
+                    let instructions = skill.body.replace("{baseDir}", &skill_base_dir);
+
+                    let requires_tools = skill.requires_tools.clone();
+                    log::info!(
+                        "[SKILL] Activating skill '{}' with requires_tools: {:?}",
+                        skill.name,
+                        requires_tools
+                    );
+
+                    // Auto-set subtype if skill specifies one (before tool refresh)
+                    self.apply_skill_subtype(&skill, orchestrator, original_message.channel_id);
+
+                    orchestrator.context_mut().active_skill = Some(crate::ai::multi_agent::types::ActiveSkill {
+                        name: skill.name,
+                        instructions,
+                        activated_at: chrono::Utc::now().to_rfc3339(),
+                        tool_calls_made: 0,
+                        requires_tools: requires_tools.clone(),
+                    });
+
+                    // Refresh tools to include skill-required tools
+                    let sk = orchestrator.current_subtype_key().to_string();
+                    *tools = self.build_tool_list(tool_config, &sk, orchestrator);
+                    log::info!(
+                        "[SKILL] Refreshed toolset with {} tools (skill requires {:?})",
+                        tools.len(),
+                        requires_tools
                     );
                 }
             }
@@ -3920,124 +3966,6 @@ impl MessageDispatcher {
             iterations,
             watchdog,
         )
-    }
-
-    /// Execute the special "use_skill" tool
-    /// If session_id is provided, saves the active skill to the agent context for persistence
-    async fn execute_skill_tool(&self, params: &Value, session_id: Option<i64>) -> crate::tools::ToolResult {
-        use crate::ai::multi_agent::types::ActiveSkill;
-
-        let skill_name = params.get("skill_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let input = params.get("input")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        log::info!("[SKILL] Executing skill '{}' with input: {}", skill_name, input);
-
-        // Look up the specific skill by name (more efficient than loading all skills)
-        let skill = match self.db.get_enabled_skill_by_name(skill_name) {
-            Ok(s) => s,
-            Err(e) => {
-                return crate::tools::ToolResult::error(format!("Failed to load skill: {}", e));
-            }
-        };
-
-        match skill {
-            Some(skill) => {
-                // Pre-flight: check required binaries are installed
-                let missing_bins: Vec<&String> = skill.requires_binaries.iter()
-                    .filter(|bin| which::which(bin).is_err())
-                    .collect();
-                if !missing_bins.is_empty() {
-                    let names: Vec<&str> = missing_bins.iter().map(|s| s.as_str()).collect();
-                    return crate::tools::ToolResult::error(format!(
-                        "Skill '{}' requires binaries not installed on this system: {}\n\n\
-                        Install them and try again.",
-                        skill.name, names.join(", ")
-                    ));
-                }
-
-                // Pre-flight: check required API keys are configured
-                if !skill.requires_api_keys.is_empty() {
-                    let configured_keys: Vec<String> = self.db.list_api_keys()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|k| k.service_name)
-                        .collect();
-                    let missing_keys: Vec<&String> = skill.requires_api_keys.keys()
-                        .filter(|key| !configured_keys.contains(key))
-                        .collect();
-                    if !missing_keys.is_empty() {
-                        let names: Vec<&str> = missing_keys.iter().map(|s| s.as_str()).collect();
-                        return crate::tools::ToolResult::error(format!(
-                            "Skill '{}' requires API keys that are not configured: {}\n\n\
-                            Please go to Settings > API Keys and add these keys first.",
-                            skill.name, names.join(", ")
-                        ));
-                    }
-                }
-
-                // Determine the skills directory path
-                let skills_dir = crate::config::skills_dir();
-                let skill_base_dir = format!("{}/{}", skills_dir, skill.name);
-
-                // Replace {baseDir} placeholder with actual skill directory
-                let instructions = if !skill.body.is_empty() {
-                    skill.body.replace("{baseDir}", &skill_base_dir)
-                } else {
-                    String::new()
-                };
-
-                // Save active skill to agent context for persistence
-                if let Some(sid) = session_id {
-                    if let Ok(Some(mut context)) = self.db.get_agent_context(sid) {
-                        context.active_skill = Some(ActiveSkill {
-                            name: skill.name.clone(),
-                            instructions: instructions.clone(),
-                            activated_at: chrono::Utc::now().to_rfc3339(),
-                            tool_calls_made: 0, // Reset counter - agent must call actual tools
-                            requires_tools: skill.requires_tools.clone(),
-                        });
-                        if let Err(e) = self.db.save_agent_context(sid, &context) {
-                            log::warn!("[SKILL] Failed to save active skill to context: {}", e);
-                        } else {
-                            log::info!(
-                                "[SKILL] Saved active skill '{}' to session {} (tool_calls_made=0, requires_tools={:?})",
-                                skill.name, sid, skill.requires_tools
-                            );
-                        }
-                    }
-                }
-
-                // Return the skill's instructions/body along with context
-                let mut result = format!("## Skill: {}\n\n", skill.name);
-                result.push_str(&format!("Description: {}\n\n", skill.description));
-
-                if !instructions.is_empty() {
-                    result.push_str("### Instructions:\n");
-                    result.push_str(&instructions);
-                    result.push_str("\n\n");
-                }
-
-                result.push_str(&format!("### User Query:\n{}\n\n", input));
-                result.push_str("**IMPORTANT:** Now call the actual tools mentioned in the instructions above. Do NOT call use_skill again.");
-
-                crate::tools::ToolResult::success(&result)
-            }
-            None => {
-                // Fetch available skills for the error message
-                let available = self.db.list_enabled_skills()
-                    .map(|skills| skills.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join(", "))
-                    .unwrap_or_else(|_| "unknown".to_string());
-                crate::tools::ToolResult::error(format!(
-                    "Skill '{}' not found or not enabled. Available skills: {}",
-                    skill_name,
-                    available
-                ))
-            }
-        }
     }
 
     /// Load SOUL.md content if it exists
