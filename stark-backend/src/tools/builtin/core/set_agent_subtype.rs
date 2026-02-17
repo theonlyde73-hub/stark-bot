@@ -78,12 +78,108 @@ impl SetAgentSubtypeTool {
     }
 
     /// Get a description of available tools for a subtype (from registry prompt).
-    fn describe_subtype(key: &str) -> String {
-        if let Some(config) = types::get_subtype_config(key) {
-            return config.prompt;
+    /// Replaces `{available_skills}` with a dynamically generated skill list from the DB,
+    /// and `{subagent_overview}` with a summary of all subtypes and their skills.
+    fn describe_subtype(key: &str, context: &ToolContext) -> String {
+        let config = match types::get_subtype_config(key) {
+            Some(c) => c,
+            None => return "❓ No toolbox selected. Call set_agent_subtype first!".to_string(),
+        };
+
+        let mut prompt = config.prompt.clone();
+
+        // Replace {available_skills} with dynamically generated skill list
+        if prompt.contains("{available_skills}") {
+            let skills_section = Self::generate_skills_section(key, context);
+            prompt = prompt.replace("{available_skills}", &skills_section);
         }
-        // Fallback for None
-        "❓ No toolbox selected. Call set_agent_subtype first!".to_string()
+
+        // Replace {subagent_overview} with overview of all subtypes + their skills
+        if prompt.contains("{subagent_overview}") {
+            let overview = Self::generate_subagent_overview(context);
+            prompt = prompt.replace("{subagent_overview}", &overview);
+        }
+
+        prompt
+    }
+
+    /// Generate a formatted list of available skills for a subtype, filtered by tags.
+    fn generate_skills_section(subtype_key: &str, context: &ToolContext) -> String {
+        let skills = Self::load_skills_for_subtype(subtype_key, context);
+
+        if skills.is_empty() {
+            return "No skills currently installed for this mode.".to_string();
+        }
+
+        skills
+            .iter()
+            .map(|s| {
+                let desc = Self::truncate_description(&s.description, 120);
+                format!("• {} — {}", s.name, desc)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Generate an overview of all subtypes and their available skills (for Director).
+    fn generate_subagent_overview(context: &ToolContext) -> String {
+        let configs = types::all_subtype_configs();
+
+        configs
+            .iter()
+            .filter(|c| c.key != "director" && c.enabled)
+            .map(|c| {
+                let skills = Self::load_skills_for_subtype(&c.key, context);
+                let skill_lines = if skills.is_empty() {
+                    "  (no skills installed)".to_string()
+                } else {
+                    skills
+                        .iter()
+                        .map(|s| {
+                            let desc = Self::truncate_description(&s.description, 100);
+                            format!("  • {} — {}", s.name, desc)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                };
+                format!(
+                    "### {} {} — {}\n{}",
+                    c.emoji, c.label, c.description, skill_lines
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    /// Load enabled skills from DB filtered by a subtype's allowed tags.
+    fn load_skills_for_subtype(
+        subtype_key: &str,
+        context: &ToolContext,
+    ) -> Vec<crate::skills::types::DbSkill> {
+        let allowed_tags = types::allowed_skill_tags_for_key(subtype_key);
+        if allowed_tags.is_empty() {
+            return vec![];
+        }
+
+        context
+            .database
+            .as_ref()
+            .and_then(|db| db.list_enabled_skills().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|skill| skill.tags.iter().any(|tag| allowed_tags.contains(tag)))
+            .collect()
+    }
+
+    /// Truncate a description to max_len chars, appending "..." if truncated.
+    fn truncate_description(desc: &str, max_len: usize) -> String {
+        // Take first line only (some descriptions are multi-line)
+        let first_line = desc.lines().next().unwrap_or(desc);
+        if first_line.len() > max_len {
+            format!("{}...", &first_line[..max_len])
+        } else {
+            first_line.to_string()
+        }
     }
 }
 
@@ -165,7 +261,7 @@ impl Tool for SetAgentSubtypeTool {
         };
 
         // Return success with description of available tools
-        let description = Self::describe_subtype(&config.key);
+        let description = Self::describe_subtype(&config.key, context);
         ToolResult::success(description).with_metadata(json!({
             "subtype": config.key,
             "label": config.label,

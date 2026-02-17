@@ -833,6 +833,9 @@ pub struct SubAgentContext {
     /// Depth in the sub-agent tree (0 for top-level, 1 for child of top-level, etc.)
     #[serde(default)]
     pub depth: u32,
+    /// Agent subtype key (e.g. "superouter", "finance") — determines which tools/skills are available
+    #[serde(default)]
+    pub agent_subtype: Option<String>,
 }
 
 impl SubAgentContext {
@@ -864,6 +867,7 @@ impl SubAgentContext {
             read_only: false,
             parent_subagent_id: None,
             depth: 0,
+            agent_subtype: None,
         }
     }
 
@@ -888,6 +892,12 @@ impl SubAgentContext {
     /// Set read-only mode (restricts to read-only tools for safe research)
     pub fn with_read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
+        self
+    }
+
+    /// Set agent subtype (determines which tools/skills are available)
+    pub fn with_agent_subtype(mut self, subtype: Option<String>) -> Self {
+        self.agent_subtype = subtype;
         self
     }
 

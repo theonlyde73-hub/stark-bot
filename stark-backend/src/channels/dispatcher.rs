@@ -2070,6 +2070,17 @@ impl MessageDispatcher {
         ));
 
         let result = if tool_name == "use_skill" {
+            // Guard: only allow use_skill if it was actually in the tool list for this subtype
+            let use_skill_in_tools = current_tools.iter().any(|t| t.name == "use_skill");
+            if !use_skill_in_tools {
+                log::warn!(
+                    "[SKILL] Blocked use_skill call — not available for current subtype '{}'",
+                    orchestrator.current_subtype_key()
+                );
+                crate::tools::ToolResult::error(
+                    "use_skill is not available in the current toolbox. Switch to the appropriate subtype first with set_agent_subtype."
+                )
+            } else {
             // Check if the same skill is already active — avoid redundant reloads
             let requested_skill = tool_arguments.get("skill_name").and_then(|v| v.as_str()).unwrap_or("");
             let already_active = orchestrator.context().active_skill
@@ -2146,6 +2157,7 @@ impl MessageDispatcher {
                 }
                 skill_result
             }
+            } // close use_skill_in_tools else
         } else {
             // Check if subtype is None - allow System tools and skill-required tools,
             // but block everything else until a subtype is selected
@@ -2833,7 +2845,7 @@ impl MessageDispatcher {
         if let Some(system_msg) = conversation.first_mut() {
             if system_msg.role == MessageRole::System {
                 // Prepend orchestrator context to the existing system prompt
-                let orchestrator_prompt = orchestrator.get_system_prompt_with_resource_manager(&self.resource_manager);
+                let orchestrator_prompt = orchestrator.get_system_prompt_with_resource_manager_and_channel(&self.resource_manager, Some(&original_message.channel_type));
                 system_msg.content = format!(
                     "{}\n\n---\n\n{}",
                     orchestrator_prompt,
@@ -3039,7 +3051,7 @@ impl MessageDispatcher {
                     // Update system prompt for new mode with current task
                     if let Some(system_msg) = conversation.first_mut() {
                         if system_msg.role == MessageRole::System {
-                            let orchestrator_prompt = orchestrator.get_system_prompt_with_resource_manager(&self.resource_manager);
+                            let orchestrator_prompt = orchestrator.get_system_prompt_with_resource_manager_and_channel(&self.resource_manager, Some(&original_message.channel_type));
                             system_msg.content = format!(
                                 "{}\n\n---\n\n{}",
                                 orchestrator_prompt,
@@ -3106,7 +3118,7 @@ impl MessageDispatcher {
                 // Update system prompt for new mode
                 if let Some(system_msg) = conversation.first_mut() {
                     if system_msg.role == MessageRole::System {
-                        let orchestrator_prompt = orchestrator.get_system_prompt_with_resource_manager(&self.resource_manager);
+                        let orchestrator_prompt = orchestrator.get_system_prompt_with_resource_manager_and_channel(&self.resource_manager, Some(&original_message.channel_type));
                         system_msg.content = format!(
                             "{}\n\n---\n\n{}",
                             orchestrator_prompt,
@@ -3120,7 +3132,7 @@ impl MessageDispatcher {
             // mode changes, and any context updates from the orchestrator.
             if let Some(system_msg) = conversation.first_mut() {
                 if system_msg.role == MessageRole::System {
-                    let orchestrator_prompt = orchestrator.get_system_prompt_with_resource_manager(&self.resource_manager);
+                    let orchestrator_prompt = orchestrator.get_system_prompt_with_resource_manager_and_channel(&self.resource_manager, Some(&original_message.channel_type));
                     system_msg.content = format!(
                         "{}\n\n---\n\n{}",
                         orchestrator_prompt,
@@ -3515,7 +3527,7 @@ impl MessageDispatcher {
         let mut conversation = messages.clone();
         if let Some(system_msg) = conversation.first_mut() {
             if system_msg.role == MessageRole::System {
-                let orchestrator_prompt = orchestrator.get_system_prompt_with_resource_manager(&self.resource_manager);
+                let orchestrator_prompt = orchestrator.get_system_prompt_with_resource_manager_and_channel(&self.resource_manager, Some(&original_message.channel_type));
                 system_msg.content = format!(
                     "{}\n\n---\n\n{}",
                     orchestrator_prompt,
@@ -3614,7 +3626,7 @@ impl MessageDispatcher {
                 // Update system prompt
                 if let Some(system_msg) = conversation.first_mut() {
                     if system_msg.role == MessageRole::System {
-                        let orchestrator_prompt = orchestrator.get_system_prompt_with_resource_manager(&self.resource_manager);
+                        let orchestrator_prompt = orchestrator.get_system_prompt_with_resource_manager_and_channel(&self.resource_manager, Some(&original_message.channel_type));
                         system_msg.content = format!(
                             "{}\n\n---\n\n{}",
                             orchestrator_prompt,
@@ -3627,7 +3639,7 @@ impl MessageDispatcher {
             // Update system prompt every iteration so the AI sees the current task
             if let Some(system_msg) = conversation.first_mut() {
                 if system_msg.role == MessageRole::System {
-                    let orchestrator_prompt = orchestrator.get_system_prompt_with_resource_manager(&self.resource_manager);
+                    let orchestrator_prompt = orchestrator.get_system_prompt_with_resource_manager_and_channel(&self.resource_manager, Some(&original_message.channel_type));
                     system_msg.content = format!(
                         "{}\n\n---\n\n{}",
                         orchestrator_prompt,

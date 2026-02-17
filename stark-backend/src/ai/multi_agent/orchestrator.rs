@@ -174,29 +174,64 @@ impl Orchestrator {
         &self,
         resource_manager: &crate::telemetry::ResourceManager,
     ) -> String {
+        self.get_system_prompt_with_resource_manager_and_channel(resource_manager, None)
+    }
+
+    /// Get the system prompt with channel type context (for conditional prompt sections).
+    pub fn get_system_prompt_with_resource_manager_and_channel(
+        &self,
+        resource_manager: &crate::telemetry::ResourceManager,
+        channel_type: Option<&str>,
+    ) -> String {
         if self.context.mode == AgentMode::TaskPlanner && !self.context.planner_completed {
             return self.get_planner_prompt_with_resource_manager(
                 "No skills available.",
                 resource_manager,
             );
         }
-        let base_prompt = resource_manager.resolve_prompt("system_prompt.assistant");
-        self.build_system_prompt(&base_prompt)
+
+        // Pick prompt based on whether the current subtype has skills
+        let has_skills = self.current_subtype_has_skills();
+        let prompt_key = if has_skills {
+            "system_prompt.assistant_skilled"
+        } else {
+            "system_prompt.assistant_director"
+        };
+        let base_prompt = resource_manager.resolve_prompt(prompt_key);
+        self.build_system_prompt_with_channel(&base_prompt, channel_type)
     }
 
-    /// Get the system prompt
+    /// Get the system prompt (fallback without resource manager)
     pub fn get_system_prompt(&self) -> String {
         // If in task planner mode, return the planner prompt
         if self.context.mode == AgentMode::TaskPlanner && !self.context.planner_completed {
             return self.get_planner_prompt();
         }
 
-        let base_prompt = include_str!("prompts/assistant.md").to_string();
+        // Pick prompt based on whether the current subtype has skills
+        let base_prompt = if self.current_subtype_has_skills() {
+            include_str!("prompts/assistant_skilled.md").to_string()
+        } else {
+            include_str!("prompts/assistant_director.md").to_string()
+        };
         self.build_system_prompt(&base_prompt)
+    }
+
+    /// Check if the current subtype has skill_tags configured.
+    fn current_subtype_has_skills(&self) -> bool {
+        self.context.subtype.as_ref()
+            .and_then(|key| types::get_subtype_config(key))
+            .map(|config| !config.skill_tags.is_empty())
+            .unwrap_or(false)
     }
 
     /// Internal method to build the full system prompt from a base prompt.
     fn build_system_prompt(&self, base_prompt: &str) -> String {
+        self.build_system_prompt_with_channel(base_prompt, None)
+    }
+
+    /// Internal method to build the full system prompt, with optional channel-specific sections.
+    fn build_system_prompt_with_channel(&self, base_prompt: &str, channel_type: Option<&str>) -> String {
         let mut prompt = String::new();
 
         // ACTIVE SKILL goes FIRST — when pre-activated, it overrides base prompt instructions
@@ -295,6 +330,14 @@ impl Orchestrator {
         }
 
         prompt.push_str(base_prompt);
+
+        // Append channel-specific prompt sections
+        if let Some(ch) = channel_type {
+            if ch == "twitter" {
+                prompt.push_str("\n\n");
+                prompt.push_str(include_str!("prompts/twitter.md"));
+            }
+        }
 
         prompt.push_str("\n\n---\n\n");
         prompt.push_str(&self.format_context_summary());

@@ -232,8 +232,15 @@ impl ResourceManager {
 
         // Fallback to compiled-in defaults
         match name {
+            "system_prompt.assistant_skilled" => {
+                include_str!("../ai/multi_agent/prompts/assistant_skilled.md").to_string()
+            }
+            "system_prompt.assistant_director" => {
+                include_str!("../ai/multi_agent/prompts/assistant_director.md").to_string()
+            }
+            // Legacy fallback — treat as skilled
             "system_prompt.assistant" => {
-                include_str!("../ai/multi_agent/prompts/assistant.md").to_string()
+                include_str!("../ai/multi_agent/prompts/assistant_skilled.md").to_string()
             }
             "system_prompt.task_planner" => {
                 include_str!("../ai/multi_agent/prompts/task_planner.md").to_string()

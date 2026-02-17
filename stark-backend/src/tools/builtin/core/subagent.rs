@@ -44,6 +44,8 @@ impl SpawnSubagentsTool {
                 description: "Array of sub-agent specifications to spawn in parallel. Each element is an object with: \
                     task (string, required) — the task prompt; \
                     label (string) — short identifier like 'research' or 'analysis'; \
+                    agent_subtype (string) — agent subtype key (e.g. 'superouter', 'finance', 'code_engineer'). \
+                    REQUIRED — determines which tools and skills the sub-agent can use; \
                     model (string) — optional model override; \
                     thinking (string) — thinking level (off/minimal/low/medium/high/xhigh); \
                     timeout (integer) — per-agent timeout in seconds (default 300, max 3600); \
@@ -102,6 +104,8 @@ struct SpawnSubagentsParams {
 struct AgentSpec {
     task: String,
     label: Option<String>,
+    /// Agent subtype key — determines which tools/skills the sub-agent gets
+    agent_subtype: Option<String>,
     model: Option<String>,
     thinking: Option<String>,
     timeout: Option<u64>,
@@ -202,7 +206,8 @@ impl SpawnSubagentsTool {
             .with_model(spec.model.clone())
             .with_context(spec.context.clone())
             .with_thinking(spec.thinking.clone())
-            .with_read_only(read_only);
+            .with_read_only(read_only)
+            .with_agent_subtype(spec.agent_subtype.clone());
 
             // Propagate parent identity for depth tracking
             if let (Some(parent_id), Some(parent_depth)) =

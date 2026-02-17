@@ -328,7 +328,16 @@ impl SubAgentManager {
             task_prompt = format!("{}\n\n## Additional Context:\n{}", task_prompt, additional_context);
         }
 
-        // Build system prompt for sub-agent
+        // Build system prompt for sub-agent — include subtype prompt if set
+        let subtype_prompt = context.agent_subtype.as_ref().and_then(|key| {
+            crate::ai::multi_agent::types::get_subtype_config(key).map(|config| {
+                format!(
+                    "\n\n## Agent Role: {} {}\n{}\n",
+                    config.emoji, config.label, config.prompt
+                )
+            })
+        });
+
         let system_prompt = format!(
             "You are a sub-agent working on a specific task. \
              Complete the following task to the best of your ability. \
@@ -336,7 +345,8 @@ impl SubAgentManager {
              IMPORTANT: Work efficiently. Aim to accomplish your goal in roughly 20-30 tool calls. \
              Do not research too deeply or go down rabbit holes. Stay focused on the specific task \
              and deliver a clear, useful result without exhaustive exploration.\n\n\
-             When you have completed the task, provide a clear summary of what was accomplished."
+             When you have completed the task, provide a clear summary of what was accomplished.{}",
+            subtype_prompt.unwrap_or_default()
         );
 
         // Build messages
@@ -403,7 +413,7 @@ impl SubAgentManager {
             tool_config = crate::tools::ToolConfig::safe_mode();
         }
 
-        // Get available tools — filtered by safety level when in restricted mode
+        // Get available tools — filtered by safety level and agent subtype
         let tools: Vec<ToolDefinition> = if parent_channel_safe_mode {
             tool_registry.get_tool_definitions_at_safety_level(
                 &tool_config,
@@ -418,6 +428,13 @@ impl SubAgentManager {
                 &tool_config,
                 crate::tools::ToolSafetyLevel::ReadOnly,
             )
+        } else if let Some(ref subtype_key) = context.agent_subtype {
+            log::info!(
+                "[SUBAGENT] {} using agent_subtype '{}' — filtering tools by subtype",
+                context.id,
+                subtype_key
+            );
+            tool_registry.get_tool_definitions_for_subtype(&tool_config, subtype_key)
         } else {
             tool_registry.get_tool_definitions(&tool_config)
         };
@@ -736,6 +753,7 @@ impl SubAgentManager {
                     read_only: false,
                     parent_subagent_id: row.get(15)?,
                     depth: row.get::<_, i64>(16).unwrap_or(0) as u32,
+                    agent_subtype: None,
                 })
             },
         );
@@ -790,6 +808,7 @@ impl SubAgentManager {
                     read_only: false,
                     parent_subagent_id: row.get(15)?,
                     depth: row.get::<_, i64>(16).unwrap_or(0) as u32,
+                    agent_subtype: None,
                 })
             })
             .map_err(|e| format!("Failed to execute query: {}", e))?;
