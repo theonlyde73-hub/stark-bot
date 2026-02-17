@@ -70,7 +70,7 @@ RUN curl -fsSL "https://github.com/supabase/cli/releases/download/v2.75.0/supaba
     && chmod +x /usr/local/bin/supabase
 
 # Install gog CLI (Google Workspace — Gmail, Calendar, Drive, Sheets, Docs)
-RUN curl -fsSL "https://github.com/steipete/gogcli/releases/latest/download/gog_Linux_x86_64.tar.gz" \
+RUN curl -fsSL "https://github.com/steipete/gogcli/releases/download/v0.11.0/gogcli_0.11.0_linux_amd64.tar.gz" \
     | tar xz -C /usr/local/bin/ \
     && chmod +x /usr/local/bin/gog
 
