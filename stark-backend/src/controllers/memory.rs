@@ -312,6 +312,19 @@ async fn read_file(
         }
     };
 
+    // Validate path to prevent traversal attacks
+    if let Err(_) = file_ops::validate_relative_path(&query.path) {
+        return HttpResponse::BadRequest().json(ReadFileResponse {
+            success: false,
+            path: query.path.clone(),
+            content: None,
+            file_type: None,
+            date: None,
+            identity_id: None,
+            error: Some("Invalid file path".to_string()),
+        });
+    }
+
     let content = match memory_store.get_file(&query.path) {
         Ok(c) => c,
         Err(e) => {
@@ -437,6 +450,21 @@ async fn get_daily_log(
     };
 
     let identity_id = query.identity_id.as_deref();
+
+    // Validate identity_id if provided
+    if let Some(id) = identity_id {
+        if file_ops::sanitize_identity_id(id).is_err() {
+            return HttpResponse::BadRequest().json(ReadFileResponse {
+                success: false,
+                path: "".to_string(),
+                content: None,
+                file_type: None,
+                date: None,
+                identity_id: query.identity_id.clone(),
+                error: Some("Invalid identity_id".to_string()),
+            });
+        }
+    }
 
     let (content, date_str) = if let Some(date_str) = &query.date {
         // Parse specific date
@@ -932,10 +960,15 @@ async fn get_graph(data: web::Data<AppState>, req: HttpRequest) -> impl Responde
                 id: row.get(0)?,
                 content: {
                     let c: String = row.get(1)?;
-                    if c.len() > 200 { format!("{}...", &c[..200]) } else { c }
+                    if c.chars().count() > 200 {
+                        let truncated: String = c.chars().take(200).collect();
+                        format!("{}...", truncated)
+                    } else {
+                        c
+                    }
                 },
                 memory_type: row.get(2)?,
-                importance: row.get(3)?,
+                importance: row.get::<_, f64>(3)?.round() as i32,
             })
         }) {
             Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
@@ -1217,6 +1250,15 @@ async fn backfill_embeddings(data: web::Data<AppState>, req: HttpRequest) -> imp
             });
         }
     };
+
+    // Check if a backfill is already running
+    if engine.is_backfill_running() {
+        return HttpResponse::Conflict().json(BackfillResponse {
+            success: false,
+            message: None,
+            error: Some("A backfill is already running. Please wait for it to complete.".to_string()),
+        });
+    }
 
     // Run backfill in background
     let engine = engine.clone();

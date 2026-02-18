@@ -70,7 +70,7 @@ impl QmdMemoryReadTool {
         Self {
             definition: ToolDefinition {
                 name: "memory_read".to_string(),
-                description: "Read specific memory files or list available memories. Use \"type\": \"long_term\" to read persistent facts/preferences, \"type\": \"daily\" for today's activity, or \"file\" for a specific path.".to_string(),
+                description: "Read memory files directly. Use `type: \"long_term\"` to review persistent facts and preferences, `type: \"daily\"` for today's activity log, `list: true` to see all available files, or `date: \"YYYY-MM-DD\"` to read a past day's log.".to_string(),
                 input_schema: ToolInputSchema {
                     schema_type: "object".to_string(),
                     properties,

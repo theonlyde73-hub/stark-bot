@@ -92,7 +92,7 @@ impl MemoryGraphTool {
         Self {
             definition: ToolDefinition {
                 name: "memory_graph".to_string(),
-                description: "Traverse the memory knowledge graph. Find connected memories, discover paths between memories, and get graph statistics.".to_string(),
+                description: "Explore how memories are connected. Use `action: \"neighbors\"` with a memory_id to find related memories, `action: \"path\"` to trace connections between two memories, or `action: \"stats\"` for graph overview. Useful for understanding context and finding relevant information you might not find via keyword search.".to_string(),
                 input_schema: ToolInputSchema {
                     schema_type: "object".to_string(),
                     properties,

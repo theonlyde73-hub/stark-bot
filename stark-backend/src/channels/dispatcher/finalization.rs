@@ -20,6 +20,7 @@ pub(super) enum TaskAdvanceResult {
 
 impl MessageDispatcher {
     /// Save a memory entry when a chat session completes successfully.
+    /// Extracts a meaningful summary rather than dumping raw I/O.
     pub(super) fn save_session_completion_memory(
         &self,
         user_input: &str,
@@ -35,10 +36,25 @@ impl MessageDispatcher {
 
         if let Some(ref store) = self.memory_store {
             let identity_id = if is_safe_mode { Some("safemode") } else { None };
+
+            // Build a concise, useful summary instead of raw I/O dump
+            let user_summary: String = user_input.chars().take(200).collect();
+            let response_summary: String = bot_response.chars().take(400).collect();
+
+            // Extract the first line/sentence of the response as a topic indicator
+            let topic = bot_response
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("")
+                .chars()
+                .take(100)
+                .collect::<String>();
+
             let entry = format!(
-                "\n### Session completed\n**User:** {}\n**Response:** {}\n",
-                user_input.chars().take(500).collect::<String>(),
-                bot_response.chars().take(1000).collect::<String>(),
+                "\n### Session: {}\n- **Asked:** {}\n- **Result:** {}\n",
+                topic.trim(),
+                user_summary.trim(),
+                response_summary.trim(),
             );
             if let Err(e) = store.append_daily_log(&entry, identity_id) {
                 log::error!("[SESSION_MEMORY] Failed to append daily log: {}", e);

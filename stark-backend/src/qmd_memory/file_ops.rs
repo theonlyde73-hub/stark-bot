@@ -7,6 +7,40 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+/// Sanitize an identity_id to prevent path traversal attacks.
+/// Only allows alphanumeric characters, hyphens, underscores, and dots.
+/// Rejects any id containing path separators or ".." sequences.
+pub fn sanitize_identity_id(identity_id: &str) -> Result<&str, io::Error> {
+    if identity_id.is_empty() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Empty identity_id"));
+    }
+    if identity_id.contains("..") || identity_id.contains('/') || identity_id.contains('\\') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Invalid identity_id: {}", identity_id),
+        ));
+    }
+    // Only allow safe characters
+    if !identity_id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Invalid characters in identity_id: {}", identity_id),
+        ));
+    }
+    Ok(identity_id)
+}
+
+/// Validate that a relative file path is safe (no traversal).
+pub fn validate_relative_path(path: &str) -> Result<(), io::Error> {
+    if path.contains("..") || path.starts_with('/') || path.starts_with('\\') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Invalid path: {}", path),
+        ));
+    }
+    Ok(())
+}
+
 /// Get the path to a daily log file (YYYY-MM-DD.md)
 pub fn daily_log_path(memory_dir: &Path, date: NaiveDate, identity_id: Option<&str>) -> PathBuf {
     let filename = format!("{}.md", date.format("%Y-%m-%d"));
@@ -28,6 +62,7 @@ pub fn long_term_path(memory_dir: &Path, identity_id: Option<&str>) -> PathBuf {
 pub fn ensure_memory_dirs(memory_dir: &Path, identity_id: Option<&str>) -> io::Result<()> {
     fs::create_dir_all(memory_dir)?;
     if let Some(id) = identity_id {
+        let id = sanitize_identity_id(id)?;
         fs::create_dir_all(memory_dir.join(id))?;
     }
     Ok(())

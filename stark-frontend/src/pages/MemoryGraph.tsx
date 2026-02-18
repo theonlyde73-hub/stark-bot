@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import * as d3 from 'd3';
-import { RefreshCw, Database, Search, X, Circle, ArrowRight } from 'lucide-react';
+import { RefreshCw, Database, Search, X, Circle, ArrowRight, ExternalLink } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import { getMemoryGraph, getHybridSearch, getEmbeddingStats, backfillEmbeddings } from '@/lib/api';
 import type {
@@ -72,7 +73,18 @@ function nodeColor(memoryType: string): string {
 
 function nodeRadius(importance: number): number {
   const clamped = Math.max(0, Math.min(1, importance));
-  return 4 + clamped * 12; // 4px – 16px
+  return 5 + clamped * 14; // 5px – 19px
+}
+
+function nodeFontSize(importance: number): number {
+  const clamped = Math.max(0, Math.min(1, importance));
+  return 9 + clamped * 3; // 9px – 12px
+}
+
+function truncateLabel(content: string, maxLen: number = 30): string {
+  const firstLine = content.split('\n')[0].trim();
+  if (firstLine.length <= maxLen) return firstLine;
+  return firstLine.slice(0, maxLen) + '\u2026';
 }
 
 function edgeColor(associationType: string): string {
@@ -82,9 +94,13 @@ function edgeColor(associationType: string): string {
 // ── Component ──
 
 export default function MemoryGraph() {
+  const navigate = useNavigate();
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
   const simulationRef = useRef<d3.Simulation<D3Node, D3Link> | null>(null);
+  const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const d3NodesRef = useRef<D3Node[]>([]);
 
   // Data state
   const [graphData, setGraphData] = useState<MemoryGraphResponse | null>(null);
@@ -176,6 +192,26 @@ export default function MemoryGraph() {
     }
   }, [searchQuery]);
 
+  // Zoom to a specific node by id
+  const zoomToNode = useCallback((nodeId: number) => {
+    if (!svgRef.current || !zoomRef.current) return;
+    const d3Node = d3NodesRef.current.find((n) => n.id === nodeId);
+    if (!d3Node || d3Node.x == null || d3Node.y == null) return;
+
+    const svg = d3.select(svgRef.current);
+    const container = containerRef.current;
+    if (!container) return;
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+
+    const scale = 1.5;
+    const transform = d3.zoomIdentity
+      .translate(width / 2 - d3Node.x * scale, height / 2 - d3Node.y * scale)
+      .scale(scale);
+
+    svg.transition().duration(500).call(zoomRef.current.transform, transform);
+  }, []);
+
   // Initial load
   useEffect(() => {
     loadGraph();
@@ -211,6 +247,7 @@ export default function MemoryGraph() {
         g.attr('transform', event.transform);
       });
     svg.call(zoom);
+    zoomRef.current = zoom;
 
     // Centre the view
     svg.call(zoom.transform, d3.zoomIdentity.translate(width / 2, height / 2));
@@ -223,6 +260,7 @@ export default function MemoryGraph() {
       importance: n.importance ?? 0.5,
     }));
 
+    d3NodesRef.current = d3Nodes;
     const nodeIdSet = new Set(d3Nodes.map((n) => n.id));
 
     const d3Links: D3Link[] = graphData.edges
@@ -299,22 +337,19 @@ export default function MemoryGraph() {
       })
       .attr('stroke-width', 1.5);
 
-    // Node labels (truncated content)
+    // Node labels (first line, scaled font)
     node
       .append('text')
-      .text((d) => {
-        const maxLen = 14;
-        return d.content.length > maxLen ? d.content.slice(0, maxLen) + '...' : d.content;
-      })
+      .text((d) => truncateLabel(d.content))
       .attr('text-anchor', 'middle')
       .attr('dy', (d) => nodeRadius(d.importance) + 14)
       .attr('fill', '#94a3b8')
-      .attr('font-size', '10px')
+      .attr('font-size', (d) => `${nodeFontSize(d.importance)}px`)
       .style('pointer-events', 'none');
 
-    // Hover effects
+    // Hover effects + tooltip
     node
-      .on('mouseenter', function (_event, d) {
+      .on('mouseenter', function (event, d) {
         d3.select(this)
           .select('circle')
           .transition()
@@ -322,6 +357,30 @@ export default function MemoryGraph() {
           .attr('r', nodeRadius(d.importance) + 3)
           .attr('stroke-width', 3)
           .attr('stroke', '#e2e8f0');
+
+        // Show tooltip
+        const tooltip = tooltipRef.current;
+        if (tooltip) {
+          const preview = d.content.length > 120 ? d.content.slice(0, 120) + '\u2026' : d.content;
+          const typeLabel = MEMORY_TYPE_LABELS[d.memory_type] ?? d.memory_type;
+          tooltip.innerHTML = `<div style="font-weight:600;color:${nodeColor(d.memory_type)};margin-bottom:4px">${typeLabel} #${d.id}</div><div style="color:#cbd5e1;font-size:11px;line-height:1.4">${preview.replace(/</g, '&lt;')}</div><div style="color:#64748b;font-size:10px;margin-top:4px">Importance: ${Math.round(d.importance * 100)}%</div>`;
+          tooltip.style.display = 'block';
+          const rect = containerRef.current?.getBoundingClientRect();
+          if (rect) {
+            tooltip.style.left = `${event.clientX - rect.left + 12}px`;
+            tooltip.style.top = `${event.clientY - rect.top - 10}px`;
+          }
+        }
+      })
+      .on('mousemove', function (event) {
+        const tooltip = tooltipRef.current;
+        if (tooltip) {
+          const rect = containerRef.current?.getBoundingClientRect();
+          if (rect) {
+            tooltip.style.left = `${event.clientX - rect.left + 12}px`;
+            tooltip.style.top = `${event.clientY - rect.top - 10}px`;
+          }
+        }
       })
       .on('mouseleave', function (_event, d) {
         const isHighlighted = highlightedRef.current.has(d.id);
@@ -336,6 +395,10 @@ export default function MemoryGraph() {
             const c = d3.color(nodeColor(d.memory_type));
             return c ? c.darker(0.6).toString() : '#333';
           });
+
+        // Hide tooltip
+        const tooltip = tooltipRef.current;
+        if (tooltip) tooltip.style.display = 'none';
       });
 
     // Click to select
@@ -500,6 +563,24 @@ export default function MemoryGraph() {
             style={{ background: '#0f172a' }}
           />
 
+          {/* Hover tooltip */}
+          <div
+            ref={tooltipRef}
+            style={{
+              display: 'none',
+              position: 'absolute',
+              pointerEvents: 'none',
+              maxWidth: 280,
+              padding: '8px 10px',
+              backgroundColor: '#1e293b',
+              border: '1px solid #334155',
+              borderRadius: 6,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+              zIndex: 50,
+              fontSize: 12,
+            }}
+          />
+
           {/* Empty state */}
           {nodeCount === 0 && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -550,32 +631,41 @@ export default function MemoryGraph() {
           {/* Search results */}
           {searchResults && searchResults.results.length > 0 && (
             <div className="border-b border-slate-700 max-h-48 overflow-y-auto">
-              {searchResults.results.map((r) => (
-                <button
-                  key={r.memory_id}
-                  onClick={() => {
-                    const matchNode = graphData?.nodes.find((n) => n.id === r.memory_id) ?? null;
-                    if (matchNode) setSelectedNode(matchNode);
-                  }}
-                  className="w-full text-left px-3 py-2 hover:bg-slate-700 transition-colors border-b border-slate-700/50 last:border-b-0"
-                >
-                  <div className="flex items-center justify-between mb-0.5">
-                    <span
-                      className="text-xs px-1.5 py-0.5 rounded"
-                      style={{
-                        backgroundColor: nodeColor(r.memory_type) + '20',
-                        color: nodeColor(r.memory_type),
-                      }}
-                    >
-                      {MEMORY_TYPE_LABELS[r.memory_type] ?? r.memory_type}
-                    </span>
-                    <span className="text-xs text-slate-500">
-                      score: {r.rrf_score.toFixed(3)}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-300 truncate">{r.content}</p>
-                </button>
-              ))}
+              {searchResults.results.map((r, idx) => {
+                const maxScore = searchResults.results[0]?.rrf_score ?? 1;
+                const relPct = maxScore > 0 ? (r.rrf_score / maxScore) * 100 : 0;
+                return (
+                  <button
+                    key={r.memory_id}
+                    onClick={() => {
+                      const matchNode = graphData?.nodes.find((n) => n.id === r.memory_id) ?? null;
+                      if (matchNode) setSelectedNode(matchNode);
+                      zoomToNode(r.memory_id);
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-slate-700 transition-colors border-b border-slate-700/50 last:border-b-0"
+                  >
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span
+                        className="text-xs px-1.5 py-0.5 rounded"
+                        style={{
+                          backgroundColor: nodeColor(r.memory_type) + '20',
+                          color: nodeColor(r.memory_type),
+                        }}
+                      >
+                        {MEMORY_TYPE_LABELS[r.memory_type] ?? r.memory_type}
+                      </span>
+                      <span className="text-xs text-slate-500">#{idx + 1}</span>
+                    </div>
+                    <p className="text-xs text-slate-300 line-clamp-2">{r.content}</p>
+                    <div className="mt-1 h-1 bg-slate-700 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-blue-500/60 rounded-full"
+                        style={{ width: `${relPct}%` }}
+                      />
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           )}
 
@@ -584,31 +674,34 @@ export default function MemoryGraph() {
             <div className="p-3 border-b border-slate-700">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-semibold text-slate-200">Node Details</h3>
-                <button
-                  onClick={() => setSelectedNode(null)}
-                  className="text-slate-500 hover:text-slate-300"
-                >
-                  <X size={14} />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => navigate(`/memories?search=${encodeURIComponent(selectedNode.content.slice(0, 50))}`)}
+                    className="text-slate-500 hover:text-blue-400 transition-colors"
+                    title="View in Memory Browser"
+                  >
+                    <ExternalLink size={14} />
+                  </button>
+                  <button
+                    onClick={() => setSelectedNode(null)}
+                    className="text-slate-500 hover:text-slate-300"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
               </div>
               <div className="space-y-2">
-                <div>
-                  <span className="text-xs text-slate-500">ID</span>
-                  <p className="text-sm text-slate-300">{selectedNode.id}</p>
-                </div>
-                <div>
-                  <span className="text-xs text-slate-500">Type</span>
-                  <div className="mt-0.5">
-                    <span
-                      className="text-xs px-1.5 py-0.5 rounded"
-                      style={{
-                        backgroundColor: nodeColor(selectedNode.memory_type) + '20',
-                        color: nodeColor(selectedNode.memory_type),
-                      }}
-                    >
-                      {MEMORY_TYPE_LABELS[selectedNode.memory_type] ?? selectedNode.memory_type}
-                    </span>
-                  </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500">ID: {selectedNode.id}</span>
+                  <span
+                    className="text-xs px-1.5 py-0.5 rounded"
+                    style={{
+                      backgroundColor: nodeColor(selectedNode.memory_type) + '20',
+                      color: nodeColor(selectedNode.memory_type),
+                    }}
+                  >
+                    {MEMORY_TYPE_LABELS[selectedNode.memory_type] ?? selectedNode.memory_type}
+                  </span>
                 </div>
                 <div>
                   <span className="text-xs text-slate-500">Importance</span>
@@ -633,6 +726,12 @@ export default function MemoryGraph() {
                     {selectedNode.content}
                   </p>
                 </div>
+                <button
+                  onClick={() => zoomToNode(selectedNode.id)}
+                  className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                >
+                  Center on graph
+                </button>
               </div>
             </div>
           )}

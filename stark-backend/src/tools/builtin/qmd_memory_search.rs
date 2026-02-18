@@ -58,7 +58,7 @@ impl QmdMemorySearchTool {
         Self {
             definition: ToolDefinition {
                 name: "memory_search".to_string(),
-                description: "Search across all memory files for relevant information. Returns ranked results with file paths and matching snippets. Use this to find past conversations, facts, preferences, or any stored knowledge.".to_string(),
+                description: "Search your memory for relevant information. Use PROACTIVELY when a user asks about past conversations, their preferences, previous decisions, or anything you might have learned before. Returns ranked results with snippets. Use mode='hybrid' for semantic matching when exact keywords are unknown.".to_string(),
                 input_schema: ToolInputSchema {
                     schema_type: "object".to_string(),
                     properties,
@@ -152,8 +152,9 @@ impl Tool for QmdMemorySearchTool {
                                 result.rrf_score,
                                 result.importance,
                                 result.memory_type,
-                                if result.content.len() > 300 {
-                                    format!("{}...", &result.content[..300])
+                                if result.content.chars().count() > 300 {
+                                    let truncated: String = result.content.chars().take(300).collect();
+                                    format!("{}...", truncated)
                                 } else {
                                     result.content.clone()
                                 }

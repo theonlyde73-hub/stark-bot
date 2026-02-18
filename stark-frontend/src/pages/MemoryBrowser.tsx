@@ -181,13 +181,13 @@ function CalendarView({
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
 
-  // Get dates with entries
-  const datesWithEntries = useMemo(() => {
-    const dates = new Set<string>();
+  // Get dates with entries and count per date
+  const dateEntryCounts = useMemo(() => {
+    const counts = new Map<string, number>();
     files.forEach((f) => {
-      if (f.date) dates.add(f.date);
+      if (f.date) counts.set(f.date, (counts.get(f.date) || 0) + 1);
     });
-    return dates;
+    return counts;
   }, [files]);
 
   // Generate calendar days
@@ -200,25 +200,27 @@ function CalendarView({
     const startPadding = firstDay.getDay();
     const totalDays = lastDay.getDate();
 
-    const days: { date: string | null; day: number | null; hasEntry: boolean }[] = [];
+    const days: { date: string | null; day: number | null; hasEntry: boolean; entryCount: number }[] = [];
 
     // Padding for days before the 1st
     for (let i = 0; i < startPadding; i++) {
-      days.push({ date: null, day: null, hasEntry: false });
+      days.push({ date: null, day: null, hasEntry: false, entryCount: 0 });
     }
 
     // Actual days
     for (let d = 1; d <= totalDays; d++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const entryCount = dateEntryCounts.get(dateStr) || 0;
       days.push({
         date: dateStr,
         day: d,
-        hasEntry: datesWithEntries.has(dateStr),
+        hasEntry: entryCount > 0,
+        entryCount,
       });
     }
 
     return days;
-  }, [currentMonth, datesWithEntries]);
+  }, [currentMonth, dateEntryCounts]);
 
   const monthName = currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
 
@@ -261,18 +263,19 @@ function CalendarView({
             key={i}
             disabled={!d.date}
             onClick={() => d.date && onSelectDate(d.date)}
+            title={d.hasEntry ? `${d.entryCount} entr${d.entryCount === 1 ? 'y' : 'ies'}` : undefined}
             className={`
-              aspect-square flex items-center justify-center text-sm rounded transition-colors
+              relative aspect-square flex flex-col items-center justify-center text-sm rounded transition-colors
               ${!d.date ? 'cursor-default' : 'cursor-pointer'}
-              ${d.date === selectedDate ? 'bg-stark-500 text-white' : ''}
-              ${d.date === today && d.date !== selectedDate ? 'ring-1 ring-stark-400' : ''}
+              ${d.date === selectedDate ? 'bg-stark-500 text-white font-bold' : ''}
+              ${d.date === today && d.date !== selectedDate ? 'ring-2 ring-stark-400 font-medium' : ''}
               ${d.hasEntry && d.date !== selectedDate ? 'bg-blue-500/20 text-blue-300 hover:bg-blue-500/30' : ''}
               ${!d.hasEntry && d.date && d.date !== selectedDate ? 'text-slate-500 hover:bg-slate-700' : ''}
             `}
           >
-            {d.day}
-            {d.hasEntry && d.date !== selectedDate && (
-              <span className="absolute bottom-1 w-1 h-1 rounded-full bg-blue-400" />
+            <span>{d.day}</span>
+            {d.hasEntry && d.entryCount > 0 && (
+              <span className="text-[9px] leading-none opacity-70">{d.entryCount}</span>
             )}
           </button>
         ))}
@@ -348,8 +351,11 @@ function SearchView({
       </div>
 
       {error && (
-        <div className="text-red-400 text-sm bg-red-500/10 px-3 py-2 rounded">
-          {error}
+        <div className="text-red-400 text-sm bg-red-500/10 px-3 py-2 rounded flex items-center justify-between">
+          <span>{error}</span>
+          <button onClick={handleSearch} className="text-red-300 underline text-xs ml-2">
+            Retry
+          </button>
         </div>
       )}
 
@@ -366,17 +372,31 @@ function SearchView({
               <div className="flex items-center gap-2 mb-1">
                 <FileText className="w-4 h-4 text-slate-400" />
                 <span className="text-sm text-stark-400 font-mono">{result.file_path}</span>
-                <span className="text-xs text-slate-500 ml-auto">
-                  score: {Math.abs(result.score).toFixed(2)}
+                <span className="text-xs text-slate-500 ml-auto flex items-center gap-1" title={`BM25 score: ${result.score.toFixed(4)}`}>
+                  {/* Show relevance as visual bar */}
+                  <span className="inline-block w-12 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                    <span
+                      className="block h-full bg-stark-400 rounded-full"
+                      style={{ width: `${Math.min(100, Math.abs(result.score) * 8)}%` }}
+                    />
+                  </span>
                 </span>
               </div>
-              <p className="text-sm text-slate-300 line-clamp-2">{formatSnippet(result.snippet)}</p>
+              <p className="text-sm text-slate-300 line-clamp-3">{formatSnippet(result.snippet)}</p>
             </button>
           ))}
         </div>
       ) : query && !isSearching ? (
         <div className="text-center text-slate-500 py-8">
-          No results found for "{query}"
+          <Search className="w-8 h-8 mx-auto mb-2 opacity-40" />
+          <p>No results found for "{query}"</p>
+          <p className="text-xs mt-1">Try different keywords or shorter search terms</p>
+        </div>
+      ) : !query ? (
+        <div className="text-center text-slate-500 py-8">
+          <Search className="w-8 h-8 mx-auto mb-2 opacity-30" />
+          <p className="text-sm">Search across all memories using full-text search</p>
+          <p className="text-xs mt-1 text-slate-600">Press Enter or click Search to find results</p>
         </div>
       ) : null}
     </div>
@@ -384,30 +404,50 @@ function SearchView({
 }
 
 function MarkdownViewer({ content }: { content: string }) {
-  // Simple markdown rendering - just handle headers and basic formatting
   const lines = content.split('\n');
+
+  // Render inline formatting (bold, inline code)
+  const renderInline = (text: string) => {
+    const parts = text.split(/(\*\*.*?\*\*|`.*?`)/g);
+    return parts.map((part, j) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return <strong key={j} className="text-white font-semibold">{part.slice(2, -2)}</strong>;
+      }
+      if (part.startsWith('`') && part.endsWith('`')) {
+        return <code key={j} className="text-stark-400 bg-slate-800 px-1 rounded text-xs">{part.slice(1, -1)}</code>;
+      }
+      return part;
+    });
+  };
 
   return (
     <div className="prose prose-invert prose-sm max-w-none">
       {lines.map((line, i) => {
+        if (line.startsWith('### ')) {
+          return (
+            <h3 key={i} className="text-base font-semibold text-purple-400 mt-3 mb-1">
+              {renderInline(line.slice(4))}
+            </h3>
+          );
+        }
         if (line.startsWith('## ')) {
           return (
             <h2 key={i} className="text-lg font-semibold text-stark-400 mt-4 mb-2">
-              {line.slice(3)}
+              {renderInline(line.slice(3))}
             </h2>
           );
         }
         if (line.startsWith('# ')) {
           return (
             <h1 key={i} className="text-xl font-bold text-white mt-4 mb-2">
-              {line.slice(2)}
+              {renderInline(line.slice(2))}
             </h1>
           );
         }
         if (line.startsWith('- ')) {
           return (
-            <li key={i} className="text-slate-300 ml-4">
-              {line.slice(2)}
+            <li key={i} className="text-slate-300 ml-4 list-disc">
+              {renderInline(line.slice(2))}
             </li>
           );
         }
@@ -416,7 +456,7 @@ function MarkdownViewer({ content }: { content: string }) {
         }
         return (
           <p key={i} className="text-slate-300">
-            {line}
+            {renderInline(line)}
           </p>
         );
       })}
@@ -726,11 +766,16 @@ export default function MemoryBrowser() {
       </div>
 
       {error && (
-        <div className="mb-6 bg-red-500/20 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg">
-          {error}
-          <button onClick={() => setError(null)} className="ml-2 underline">
-            Dismiss
-          </button>
+        <div className="mb-6 bg-red-500/20 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg flex items-center justify-between">
+          <span>{error}</span>
+          <div className="flex items-center gap-3">
+            <button onClick={loadData} className="text-red-300 hover:text-white text-sm font-medium">
+              Retry
+            </button>
+            <button onClick={() => setError(null)} className="text-red-300/60 hover:text-red-300 text-sm">
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 

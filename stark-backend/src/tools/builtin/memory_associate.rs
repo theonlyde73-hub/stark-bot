@@ -114,7 +114,7 @@ impl MemoryAssociateTool {
         Self {
             definition: ToolDefinition {
                 name: "memory_associate".to_string(),
-                description: "Create, list, or delete typed associations between memories. Associations form a knowledge graph connecting related memories.".to_string(),
+                description: "Link related memories together to build a knowledge graph. Use after discovering that two memories are connected — e.g., a user preference relates to a past decision (type: \"related\"), new info replaces old (type: \"supersedes\"), or two facts conflict (type: \"contradicts\"). Strength 0.0-1.0 indicates how strong the connection is.".to_string(),
                 input_schema: ToolInputSchema {
                     schema_type: "object".to_string(),
                     properties,
@@ -182,6 +182,20 @@ impl Tool for MemoryAssociateTool {
                 // Validate strength range
                 if !(0.0..=1.0).contains(&strength) {
                     return ToolResult::error("strength must be between 0.0 and 1.0.");
+                }
+
+                // Prevent duplicate associations
+                match db.association_exists(source, target, &assoc_type) {
+                    Ok(true) => {
+                        return ToolResult::error(format!(
+                            "Association of type \"{}\" already exists between memories {} and {}.",
+                            assoc_type, source, target
+                        ));
+                    }
+                    Err(e) => {
+                        return ToolResult::error(format!("Failed to check for existing association: {}", e));
+                    }
+                    Ok(false) => {}
                 }
 
                 match db.create_memory_association(source, target, &assoc_type, strength, None) {
