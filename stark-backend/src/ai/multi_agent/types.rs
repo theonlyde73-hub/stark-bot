@@ -38,7 +38,7 @@ pub struct AgentSubtypeConfig {
     #[serde(default)]
     pub aliases: Vec<String>,
     /// Hidden subtypes are excluded from the director overview, set_agent_subtype,
-    /// and the UI picker. They can only be activated via `preferred_subtype` on dispatch.
+    /// and the UI picker. They are auto-selected when channel_type matches the subtype key.
     #[serde(default)]
     pub hidden: bool,
 }

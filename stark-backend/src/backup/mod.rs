@@ -398,6 +398,8 @@ pub struct AgentSubtypeEntry {
     pub max_iterations: Option<u32>,
     pub skip_task_planner: Option<bool>,
     pub aliases_json: String,
+    #[serde(default)]
+    pub hidden: Option<bool>,
 }
 
 /// Special role entry in backup (enriched safe mode)
@@ -736,6 +738,7 @@ pub async fn collect_backup_data(
                 max_iterations: Some(s.max_iterations),
                 skip_task_planner: Some(s.skip_task_planner),
                 aliases_json: serde_json::to_string(&s.aliases).unwrap_or_else(|_| "[]".to_string()),
+                hidden: Some(s.hidden),
             })
             .collect();
     }

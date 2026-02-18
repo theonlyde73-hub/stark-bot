@@ -73,7 +73,6 @@ async fn dev_chat(
         session_mode: None,
         selected_network: None,
         force_safe_mode: false,
-        preferred_subtype: None,
     };
 
     let result = state.dispatcher.dispatch_safe(normalized).await;

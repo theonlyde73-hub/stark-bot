@@ -1478,11 +1478,12 @@ impl MessageDispatcher {
             }
         };
 
-        // Honor preferred_subtype from system dispatches (e.g., impulse_evolver)
-        if let Some(ref preferred) = original_message.preferred_subtype {
-            if let Some(resolved) = agent_types::resolve_subtype_key(preferred) {
-                orchestrator.set_subtype(Some(resolved.clone()));
-                log::info!("[MULTI_AGENT] Preferred subtype set to: {}", resolved);
+        // Auto-select hidden subtypes by matching channel_type to subtype key
+        // (e.g., channel_type "impulse_evolver" → hidden subtype "impulse_evolver")
+        if let Some(config) = agent_types::get_subtype_config(&original_message.channel_type) {
+            if config.hidden {
+                orchestrator.set_subtype(Some(config.key.clone()));
+                log::info!("[MULTI_AGENT] Hidden subtype auto-selected: {}", config.key);
             }
         }
 

@@ -284,7 +284,6 @@ impl Scheduler {
             session_mode: Some("isolated".to_string()),
             selected_network: None,
             force_safe_mode: false,
-            preferred_subtype: None,
         };
 
         // Execute with 10-minute timeout (same as cron default)
@@ -443,7 +442,6 @@ impl Scheduler {
             session_mode: Some(job.session_mode.clone()),
             selected_network: None,
             force_safe_mode: false,
-            preferred_subtype: None,
         };
 
         // Execute the job with timeout
@@ -784,7 +782,6 @@ impl Scheduler {
             session_mode: Some("isolated".to_string()), // Isolated to prevent state corruption
             selected_network: None,
             force_safe_mode: false,
-            preferred_subtype: None,
         };
 
         // Execute the heartbeat
@@ -852,7 +849,6 @@ impl Scheduler {
                     session_mode: Some("isolated".to_string()),
                     selected_network: None,
                     force_safe_mode: false,
-                    preferred_subtype: Some("impulse_evolver".to_string()),
                 };
                 let result = timeout(
                     TokioDuration::from_secs(EVOLVER_TIMEOUT_SECS),
@@ -1067,7 +1063,6 @@ async fn execute_heartbeat_isolated(
         session_mode: Some("isolated".to_string()),
         selected_network: None,
         force_safe_mode: false,
-        preferred_subtype: None,
     };
 
     // === DEFERRED AI CALL (fire and forget) ===

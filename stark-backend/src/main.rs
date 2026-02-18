@@ -754,6 +754,7 @@ async fn restore_backup_data(
             max_iterations: entry.max_iterations.unwrap_or(90) as u32,
             skip_task_planner: entry.skip_task_planner.unwrap_or(false),
             aliases,
+            hidden: entry.hidden.unwrap_or(false),
         };
         match db.upsert_agent_subtype(&config) {
             Ok(_) => restored_subtypes += 1,
