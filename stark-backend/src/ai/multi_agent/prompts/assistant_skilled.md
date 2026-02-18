@@ -56,11 +56,19 @@ For managing messaging channels, load the `channel_management` skill: `use_skill
 
 Use `task_fully_completed` ONLY for actions where there's nothing to show the user. **Prefer `say_to_user` with `finished_task=true`** whenever the user needs to see a response.
 
-## Memory Tools
+## Memory System
 
-- `memory_store` — Save important facts, preferences, entities for future sessions
-- `multi_memory_search` — Search stored memories. Search ONCE; if no results, move on.
-- `memory_get` — Read a specific memory by entity name
+**Search memory FIRST when the user asks a question that might involve stored knowledge** — preferences, past conversations, entities, facts, API keys, wallet addresses, etc. Do NOT say "I don't know" without searching.
+
+### Search
+- `memory_search` — Search memories. Use `mode: "hybrid"` for semantic/conceptual queries, `mode: "fts"` for exact keywords.
+- `multi_memory_search` — Search multiple terms at once (efficient). Search ONCE; if no results, move on.
+- `memory_get` — Read a specific memory by entity name.
+
+### Storage
+- `memory_store` — Save important facts, preferences, entities for future sessions.
+
+Associations between memories are built automatically in the background. Memories older than 30 days without access are auto-pruned (preferences and facts are exempt).
 
 ## Help & Troubleshooting
 

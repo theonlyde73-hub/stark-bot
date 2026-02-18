@@ -83,15 +83,6 @@ pub enum EventType {
     TxQueueDenied,                // User denied, tx deleted
     // Context management events
     ContextCompacting,  // Session context is being compacted to reduce token usage
-    // Branch events (worker delegation)
-    BranchStarted,
-    BranchCompleted,
-    BranchFailed,
-    // Coalescing events
-    CoalesceBuffering,
-    CoalesceFlushed,
-    // Worker checkpoint events
-    WorkerCheckpoint,
     // Telemetry events
     SpanEmitted,        // A telemetry span was emitted (for real-time telemetry streaming)
     RolloutStatusChange, // Rollout lifecycle status changed
@@ -159,12 +150,6 @@ impl EventType {
             Self::TxQueueConfirmed => "tx_queue.confirmed",
             Self::TxQueueDenied => "tx_queue.denied",
             Self::ContextCompacting => "context.compacting",
-            Self::BranchStarted => "branch.started",
-            Self::BranchCompleted => "branch.completed",
-            Self::BranchFailed => "branch.failed",
-            Self::CoalesceBuffering => "coalesce.buffering",
-            Self::CoalesceFlushed => "coalesce.flushed",
-            Self::WorkerCheckpoint => "worker.checkpoint",
             Self::SpanEmitted => "telemetry.span_emitted",
             Self::RolloutStatusChange => "telemetry.rollout_status",
         }
@@ -231,12 +216,6 @@ impl EventType {
             "tx_queue.confirmed" => Some(EventType::TxQueueConfirmed),
             "tx_queue.denied" => Some(EventType::TxQueueDenied),
             "context.compacting" => Some(EventType::ContextCompacting),
-            "branch.started" => Some(EventType::BranchStarted),
-            "branch.completed" => Some(EventType::BranchCompleted),
-            "branch.failed" => Some(EventType::BranchFailed),
-            "coalesce.buffering" => Some(EventType::CoalesceBuffering),
-            "coalesce.flushed" => Some(EventType::CoalesceFlushed),
-            "worker.checkpoint" => Some(EventType::WorkerCheckpoint),
             "telemetry.span_emitted" => Some(EventType::SpanEmitted),
             "telemetry.rollout_status" => Some(EventType::RolloutStatusChange),
             _ => None,
@@ -1338,63 +1317,6 @@ impl GatewayEvent {
                 "timestamp": chrono::Utc::now().to_rfc3339()
             }),
         )
-    }
-
-    // =====================================================
-    // Branch / Worker Delegation Events
-    // =====================================================
-
-    /// Branch started event
-    pub fn branch_started(channel_id: i64, branch_id: &str, label: &str, task: &str) -> Self {
-        Self::new(EventType::BranchStarted, serde_json::json!({
-            "channel_id": channel_id,
-            "branch_id": branch_id,
-            "label": label,
-            "task": task,
-        }))
-    }
-
-    /// Branch completed event
-    pub fn branch_completed(channel_id: i64, branch_id: &str, result_summary: &str) -> Self {
-        Self::new(EventType::BranchCompleted, serde_json::json!({
-            "channel_id": channel_id,
-            "branch_id": branch_id,
-            "result_summary": result_summary,
-        }))
-    }
-
-    /// Branch failed event
-    pub fn branch_failed(channel_id: i64, branch_id: &str, error: &str) -> Self {
-        Self::new(EventType::BranchFailed, serde_json::json!({
-            "channel_id": channel_id,
-            "branch_id": branch_id,
-            "error": error,
-        }))
-    }
-
-    /// Coalescing is buffering messages
-    pub fn coalesce_buffering(channel_id: i64, pending_count: usize) -> Self {
-        Self::new(EventType::CoalesceBuffering, serde_json::json!({
-            "channel_id": channel_id,
-            "pending_count": pending_count,
-        }))
-    }
-
-    /// Coalesced batch flushed
-    pub fn coalesce_flushed(channel_id: i64, message_count: usize) -> Self {
-        Self::new(EventType::CoalesceFlushed, serde_json::json!({
-            "channel_id": channel_id,
-            "message_count": message_count,
-        }))
-    }
-
-    /// Worker checkpoint saved
-    pub fn worker_checkpoint(channel_id: i64, subagent_id: &str, iteration: u32) -> Self {
-        Self::new(EventType::WorkerCheckpoint, serde_json::json!({
-            "channel_id": channel_id,
-            "subagent_id": subagent_id,
-            "iteration": iteration,
-        }))
     }
 
     /// A telemetry span was emitted

@@ -43,7 +43,6 @@ fn register_all_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(builtin::ReadSkillTool::new()));
     registry.register(Arc::new(builtin::ManageModulesTool::new()));
     registry.register(Arc::new(builtin::WorkstreamTool::new()));
-    registry.register(Arc::new(builtin::BranchTool::new()));
     registry.register(Arc::new(builtin::InstallApiKeyTool::new()));
     registry.register(Arc::new(builtin::HeartbeatConfigTool::new()));
     registry.register(Arc::new(builtin::MindmapManageTool::new()));

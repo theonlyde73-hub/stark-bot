@@ -268,42 +268,6 @@ export interface MemoryAssociation {
   created_at: string;
 }
 
-// Branch/Worker events (Phase 2 gateway)
-export interface BranchStartedEvent {
-  channel_id: number;
-  branch_id: string;
-  label: string;
-  task: string;
-}
-
-export interface BranchCompletedEvent {
-  channel_id: number;
-  branch_id: string;
-  result_summary: string;
-}
-
-export interface BranchFailedEvent {
-  channel_id: number;
-  branch_id: string;
-  error: string;
-}
-
-export interface CoalesceBufferingEvent {
-  channel_id: number;
-  pending_count: number;
-}
-
-export interface CoalesceFlushedEvent {
-  channel_id: number;
-  message_count: number;
-}
-
-export interface WorkerCheckpointEvent {
-  channel_id: number;
-  subagent_id: string;
-  iteration: number;
-}
-
 // Cortex Bulletin
 export interface CortexBulletin {
   content: string;

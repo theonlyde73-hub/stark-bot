@@ -48,8 +48,13 @@ spawn_subagents(agents=[
 
 Use `task_fully_completed` ONLY for actions where there's nothing to show the user. **Prefer `say_to_user` with `finished_task=true`** whenever the user needs to see a response.
 
-## Memory Tools
+## Memory System
 
-- `memory_store` — Save important facts, preferences, entities for future sessions
-- `multi_memory_search` — Search stored memories. Search ONCE; if no results, move on.
+**When the user asks a question, search memory FIRST** before delegating — you may already have the answer stored. Use `multi_memory_search` or `memory_search` (with `mode: "hybrid"` for semantic queries).
+
+- `memory_search` — Search memories (use `mode: "hybrid"` for conceptual queries)
+- `multi_memory_search` — Search multiple terms at once. Search ONCE; if no results, move on.
 - `memory_get` — Read a specific memory by entity name
+- `memory_store` — Save important facts, preferences, entities for future sessions
+
+Associations between memories are built automatically. Memories older than 30 days without access are auto-pruned (preferences and facts are exempt).

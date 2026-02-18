@@ -29,9 +29,6 @@ export interface BotSettings {
   theme_accent?: string;
   proxy_url?: string;
   kanban_auto_execute: boolean;
-  coalescing_enabled: boolean;
-  coalescing_debounce_ms: number;
-  coalescing_max_wait_ms: number;
   compaction_background_threshold: number;
   compaction_aggressive_threshold: number;
   compaction_emergency_threshold: number;
@@ -54,9 +51,6 @@ export async function updateBotSettings(data: {
   safe_mode_max_queries_per_10min?: number;
   keystore_url?: string;
   chat_session_memory_generation?: boolean;
-  coalescing_enabled?: boolean;
-  coalescing_debounce_ms?: number;
-  coalescing_max_wait_ms?: number;
   compaction_background_threshold?: number;
   compaction_aggressive_threshold?: number;
   compaction_emergency_threshold?: number;

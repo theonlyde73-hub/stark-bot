@@ -1285,24 +1285,6 @@ async fn main() -> std::io::Result<()> {
             store.set_disk_quota(dq.clone());
         }
     }
-    // Wire up message coalescer from bot settings
-    {
-        let bot_settings = db.get_bot_settings().unwrap_or_default();
-        let coalescer_config = channels::coalescing::CoalescerConfig {
-            enabled: bot_settings.coalescing_enabled,
-            debounce_ms: bot_settings.coalescing_debounce_ms,
-            max_wait_ms: bot_settings.coalescing_max_wait_ms,
-        };
-        if coalescer_config.enabled {
-            log::info!(
-                "Message coalescing enabled (debounce={}ms, max_wait={}ms)",
-                coalescer_config.debounce_ms,
-                coalescer_config.max_wait_ms
-            );
-        }
-        let coalescer = channels::coalescing::MessageCoalescer::new(coalescer_config);
-        dispatcher_builder = dispatcher_builder.with_coalescer(coalescer);
-    }
     let dispatcher = Arc::new(dispatcher_builder);
 
     // Get broadcaster and channel_manager for the /ws route

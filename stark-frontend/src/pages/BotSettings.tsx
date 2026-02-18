@@ -1,5 +1,5 @@
 import { useState, useEffect, FormEvent } from 'react';
-import { Save, Bot, Server, Shield, Cloud, AlertTriangle, CheckCircle, Info, XCircle, Copy, Check, Wallet, Brain, Palette, Globe, Layers, Minimize2 } from 'lucide-react';
+import { Save, Bot, Server, Shield, Cloud, AlertTriangle, CheckCircle, Info, XCircle, Copy, Check, Wallet, Brain, Palette, Globe, Minimize2 } from 'lucide-react';
 import Card, { CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
@@ -34,9 +34,6 @@ export default function BotSettings() {
   const [walletMode, setWalletMode] = useState<string>('');
   const [walletCopied, setWalletCopied] = useState(false);
   const [proxyUrl, setProxyUrl] = useState('');
-  const [coalescingEnabled, setCoalescingEnabled] = useState(false);
-  const [coalescingDebounceMs, setCoalescingDebounceMs] = useState(1500);
-  const [coalescingMaxWaitMs, setCoalescingMaxWaitMs] = useState(5000);
   const [compactionBackgroundThreshold, setCompactionBackgroundThreshold] = useState(60);
   const [compactionAggressiveThreshold, setCompactionAggressiveThreshold] = useState(80);
   const [compactionEmergencyThreshold, setCompactionEmergencyThreshold] = useState(95);
@@ -108,9 +105,6 @@ export default function BotSettings() {
       setChatSessionMemoryGeneration(data.chat_session_memory_generation ?? true);
       setGuestDashboardEnabled(data.guest_dashboard_enabled ?? false);
       setProxyUrl(data.proxy_url || '');
-      setCoalescingEnabled(data.coalescing_enabled ?? false);
-      setCoalescingDebounceMs(data.coalescing_debounce_ms ?? 1500);
-      setCoalescingMaxWaitMs(data.coalescing_max_wait_ms ?? 5000);
       setCompactionBackgroundThreshold(data.compaction_background_threshold ?? 60);
       setCompactionAggressiveThreshold(data.compaction_aggressive_threshold ?? 80);
       setCompactionEmergencyThreshold(data.compaction_emergency_threshold ?? 95);
@@ -168,9 +162,6 @@ export default function BotSettings() {
         guest_dashboard_enabled: guestDashboardEnabled,
         theme_accent: themeAccent || '',
         proxy_url: proxyUrl,
-        coalescing_enabled: coalescingEnabled,
-        coalescing_debounce_ms: coalescingDebounceMs,
-        coalescing_max_wait_ms: coalescingMaxWaitMs,
         compaction_background_threshold: compactionBackgroundThreshold,
         compaction_aggressive_threshold: compactionAggressiveThreshold,
         compaction_emergency_threshold: compactionEmergencyThreshold,
@@ -555,55 +546,6 @@ export default function BotSettings() {
             <p className="text-xs text-slate-500 -mt-2">
               Optional HTTP proxy URL for tool requests (e.g. http://proxy:8080).
               Leave empty to connect directly. Does not affect AI model API calls.
-            </p>
-          </CardContent>
-        </Card>
-
-        {/* Message Coalescing Section */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Layers className="w-5 h-5 text-stark-400" />
-              Message Coalescing
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={coalescingEnabled}
-                onChange={(e) => setCoalescingEnabled(e.target.checked)}
-                className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-stark-500 focus:ring-stark-500"
-              />
-              <span className="text-sm text-slate-300">
-                Enable Message Coalescing
-              </span>
-            </label>
-            <p className="text-xs text-slate-500">
-              When enabled, rapidly arriving messages are batched together before processing
-              to reduce redundant AI calls and improve response quality.
-            </p>
-
-            <Input
-              label="Debounce (ms)"
-              type="number"
-              min={0}
-              value={coalescingDebounceMs}
-              onChange={(e) => setCoalescingDebounceMs(parseInt(e.target.value) || 0)}
-            />
-            <p className="text-xs text-slate-500 -mt-2">
-              Time to wait after the last message before processing the batch.
-            </p>
-
-            <Input
-              label="Max Wait (ms)"
-              type="number"
-              min={0}
-              value={coalescingMaxWaitMs}
-              onChange={(e) => setCoalescingMaxWaitMs(parseInt(e.target.value) || 0)}
-            />
-            <p className="text-xs text-slate-500 -mt-2">
-              Maximum time to wait before forcing the batch to process, even if new messages are still arriving.
             </p>
           </CardContent>
         </Card>

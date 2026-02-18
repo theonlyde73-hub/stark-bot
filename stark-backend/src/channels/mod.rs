@@ -6,7 +6,6 @@ pub mod slack;
 pub mod telegram;
 pub mod twitter;
 pub mod types;
-pub mod coalescing;
 pub mod util;
 
 pub use dispatcher::MessageDispatcher;
