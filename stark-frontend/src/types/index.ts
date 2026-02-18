@@ -210,6 +210,71 @@ export interface SessionCompleteEvent {
   timestamp: string;
 }
 
+// Memory Graph types (Phase 3)
+export interface GraphNode {
+  id: number;
+  content: string;
+  memory_type: string;
+  importance: number;
+}
+
+export interface GraphEdge {
+  source: number;
+  target: number;
+  association_type: string;
+  strength: number;
+}
+
+export interface MemoryGraphResponse {
+  success: boolean;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  error?: string;
+}
+
+export interface HybridSearchItem {
+  memory_id: number;
+  content: string;
+  memory_type: string;
+  importance: number;
+  rrf_score: number;
+  fts_rank?: number;
+  vector_similarity?: number;
+  association_count?: number;
+}
+
+export interface HybridSearchResponse {
+  success: boolean;
+  query: string;
+  mode: string;
+  results: HybridSearchItem[];
+  error?: string;
+}
+
+export interface EmbeddingStatsResponse {
+  success: boolean;
+  total_memories: number;
+  memories_with_embeddings: number;
+  memories_without_embeddings: number;
+  coverage_percent: number;
+}
+
+export interface MemoryAssociation {
+  id: number;
+  source_memory_id: number;
+  target_memory_id: number;
+  association_type: string;
+  strength: number;
+  created_at: string;
+}
+
+// Cortex Bulletin
+export interface CortexBulletin {
+  content: string;
+  generated_at: string;
+  topics: string[];
+}
+
 export type MemoryType = 'daily_log' | 'long_term' | 'session_summary' | 'compaction';
 
 export interface Memory {

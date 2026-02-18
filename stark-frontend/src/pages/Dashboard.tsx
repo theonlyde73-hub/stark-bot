@@ -1,10 +1,11 @@
-import { useState, useCallback, useMemo } from 'react';
-import { MessageSquare, Calendar, Wrench, Zap, Sparkles, Wallet, Copy, Check } from 'lucide-react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import { MessageSquare, Calendar, Wrench, Zap, Sparkles, Wallet, Copy, Check, Newspaper } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import Card, { CardContent } from '@/components/ui/Card';
 import { useApi } from '@/hooks/useApi';
 import { useWallet } from '@/hooks/useWallet';
-import { SkillInfo } from '@/lib/api';
+import { getCortexBulletin, SkillInfo } from '@/lib/api';
+import type { CortexBulletin } from '@/types';
 
 interface ServiceCapability {
   id: string;
@@ -40,6 +41,14 @@ export default function Dashboard() {
       setTimeout(() => setCopied(false), 2000);
     }
   }, [address]);
+  const [bulletin, setBulletin] = useState<CortexBulletin | null>(null);
+
+  useEffect(() => {
+    getCortexBulletin()
+      .then(setBulletin)
+      .catch(() => setBulletin(null));
+  }, []);
+
   const { data: sessions } = useApi<Array<unknown>>('/sessions');
   const { data: tools } = useApi<Array<unknown>>('/tools');
   const { data: skills } = useApi<SkillInfo[]>('/skills');
@@ -195,6 +204,41 @@ export default function Dashboard() {
           </Card>
         ))}
       </div>
+
+      {bulletin && (
+        <div className="mt-6">
+          <Card>
+            <CardContent>
+              <div className="flex items-start gap-3">
+                <div className="p-2 rounded-lg bg-indigo-500/20">
+                  <Newspaper className="w-5 h-5 text-indigo-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between mb-2">
+                    <h2 className="text-lg font-semibold text-white">Cortex Bulletin</h2>
+                    <span className="text-xs text-slate-500">
+                      {new Date(bulletin.generated_at).toLocaleDateString()}
+                    </span>
+                  </div>
+                  <p className="text-slate-300 text-sm whitespace-pre-wrap">{bulletin.content}</p>
+                  {bulletin.topics?.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-3">
+                      {bulletin.topics.map((topic) => (
+                        <span
+                          key={topic}
+                          className="px-2 py-0.5 text-xs rounded-full bg-indigo-500/20 text-indigo-300"
+                        >
+                          {topic}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>

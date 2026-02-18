@@ -26,9 +26,12 @@ fn register_all_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(builtin::UseSkillTool::new()));
     registry.register(Arc::new(builtin::AskUserTool::new()));
     registry.register(Arc::new(builtin::SayToUserTool::new()));
-    // QMD Memory tools (file-based markdown memory system)
-    registry.register(Arc::new(builtin::QmdMemorySearchTool::new()));
-    registry.register(Arc::new(builtin::QmdMemoryReadTool::new()));
+    // Memory tools (DB-backed unified memory system)
+    registry.register(Arc::new(builtin::MemorySearchTool::new()));
+    registry.register(Arc::new(builtin::MemoryReadTool::new()));
+    // Memory graph tools (associations + knowledge graph)
+    registry.register(Arc::new(builtin::MemoryAssociateTool::new()));
+    registry.register(Arc::new(builtin::MemoryGraphTool::new()));
     // Notes tool (Obsidian-compatible notes with FTS5)
     registry.register(Arc::new(builtin::NotesTool::new()));
     registry.register(Arc::new(builtin::ModifySoulTool::new()));

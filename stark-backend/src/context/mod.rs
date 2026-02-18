@@ -16,7 +16,6 @@ use crate::config::MemoryConfig;
 use crate::db::Database;
 use crate::models::SessionMessage;
 use crate::models::session_message::MessageRole as DbMessageRole;
-use crate::qmd_memory::MemoryStore;
 use chrono::Utc;
 use std::sync::Arc;
 pub use tokenizer::TokenEstimator;
@@ -57,6 +56,60 @@ impl Default for SlidingWindowConfig {
     }
 }
 
+/// Compaction urgency level based on context fullness
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionLevel {
+    /// No compaction needed
+    None,
+    /// Background compaction — >80% full, compact 30%
+    Background,
+    /// Aggressive compaction — >85% full, compact 50%
+    Aggressive,
+    /// Emergency compaction — >95% full, hard-drop 50% synchronously
+    Emergency,
+}
+
+impl std::fmt::Display for CompactionLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CompactionLevel::None => write!(f, "none"),
+            CompactionLevel::Background => write!(f, "background"),
+            CompactionLevel::Aggressive => write!(f, "aggressive"),
+            CompactionLevel::Emergency => write!(f, "emergency"),
+        }
+    }
+}
+
+/// Configuration for three-tier compaction thresholds
+#[derive(Debug, Clone)]
+pub struct ThreeTierCompactionConfig {
+    /// Trigger background compaction above this percentage (default: 0.80)
+    pub background_threshold: f64,
+    /// Trigger aggressive compaction above this percentage (default: 0.85)
+    pub aggressive_threshold: f64,
+    /// Trigger emergency compaction above this percentage (default: 0.95)
+    pub emergency_threshold: f64,
+    /// Fraction of context to compact in background mode (default: 0.30)
+    pub background_compact_ratio: f64,
+    /// Fraction of context to compact in aggressive mode (default: 0.50)
+    pub aggressive_compact_ratio: f64,
+    /// Fraction of context to hard-drop in emergency mode (default: 0.50)
+    pub emergency_drop_ratio: f64,
+}
+
+impl Default for ThreeTierCompactionConfig {
+    fn default() -> Self {
+        Self {
+            background_threshold: 0.80,
+            aggressive_threshold: 0.85,
+            emergency_threshold: 0.95,
+            background_compact_ratio: 0.30,
+            aggressive_compact_ratio: 0.50,
+            emergency_drop_ratio: 0.50,
+        }
+    }
+}
+
 /// Estimate token count for a string using content-aware estimation
 /// This provides more accurate estimates than simple character counting
 /// by considering content type (JSON, code, prose)
@@ -84,10 +137,10 @@ pub struct ContextManager {
     keep_recent_messages: i32,
     /// Memory configuration
     memory_config: MemoryConfig,
-    /// QMD Memory store for file-based memory
-    memory_store: Option<Arc<MemoryStore>>,
     /// Configuration for sliding window compaction
     sliding_window_config: SlidingWindowConfig,
+    /// Three-tier compaction thresholds (can be overridden from bot settings)
+    compaction_config: ThreeTierCompactionConfig,
 }
 
 impl ContextManager {
@@ -98,9 +151,14 @@ impl ContextManager {
             reserve_tokens: DEFAULT_RESERVE_TOKENS,
             keep_recent_messages: DEFAULT_KEEP_RECENT_MESSAGES,
             memory_config: MemoryConfig::from_env(),
-            memory_store: None,
             sliding_window_config: SlidingWindowConfig::default(),
+            compaction_config: ThreeTierCompactionConfig::default(),
         }
+    }
+
+    pub fn with_compaction_config(mut self, config: ThreeTierCompactionConfig) -> Self {
+        self.compaction_config = config;
+        self
     }
 
     pub fn with_max_context(mut self, tokens: i32) -> Self {
@@ -120,11 +178,6 @@ impl ContextManager {
 
     pub fn with_memory_config(mut self, config: MemoryConfig) -> Self {
         self.memory_config = config;
-        self
-    }
-
-    pub fn with_memory_store(mut self, store: Arc<MemoryStore>) -> Self {
-        self.memory_store = Some(store);
         self
     }
 
@@ -375,7 +428,7 @@ impl ContextManager {
     /// Phase 1: Flush memories before compaction
     /// Gives the AI a "silent turn" to extract important memories from the conversation
     /// that would otherwise be lost during summarization.
-    /// Now writes to QMD markdown files instead of database.
+    /// Writes extracted memories to the DB memories table.
     pub async fn flush_memories_before_compaction(
         &self,
         session_id: i64,
@@ -387,20 +440,11 @@ impl ContextManager {
             return Ok(0);
         }
 
-        // Check if we have a memory store
-        let memory_store = match &self.memory_store {
-            Some(store) => store,
-            None => {
-                log::warn!("[PRE_FLUSH] No memory store available, skipping memory flush");
-                return Ok(0);
-            }
-        };
-
         log::info!("[PRE_FLUSH] Starting memory flush for session {} ({} messages)",
             session_id, messages_to_compact.len());
 
         // Filter out messages from memory-excluded tools (e.g. install_api_key)
-        // so secrets never leak into memory markdown files
+        // so secrets never leak into memory
         let messages_filtered: Vec<&SessionMessage> = messages_to_compact.iter()
             .filter(|m| {
                 if m.role == DbMessageRole::ToolCall || m.role == DbMessageRole::ToolResult {
@@ -461,7 +505,7 @@ impl ContextManager {
             return Ok(0);
         }
 
-        // Parse and write to markdown files
+        let today = Utc::now().format("%Y-%m-%d").to_string();
         let mut count = 0;
 
         // Extract long-term section
@@ -473,7 +517,12 @@ impl ContextManager {
             let long_term_content = &response[long_term_start..section_end];
 
             if !long_term_content.trim().is_empty() {
-                if let Err(e) = memory_store.append_long_term(long_term_content, identity_id) {
+                if let Err(e) = self.db.insert_memory(
+                    "long_term",
+                    long_term_content.trim(),
+                    None, None, 5, identity_id, None, None, None,
+                    Some("pre_compaction_flush"), None,
+                ) {
                     log::error!("[PRE_FLUSH] Failed to write long-term memory: {}", e);
                 } else {
                     count += 1;
@@ -491,7 +540,12 @@ impl ContextManager {
             let daily_content = &response[daily_start..section_end];
 
             if !daily_content.trim().is_empty() {
-                if let Err(e) = memory_store.append_daily_log(daily_content, identity_id) {
+                if let Err(e) = self.db.insert_memory(
+                    "daily_log",
+                    daily_content.trim(),
+                    None, None, 5, identity_id, None, None, None,
+                    Some("pre_compaction_flush"), Some(&today),
+                ) {
                     log::error!("[PRE_FLUSH] Failed to write daily log: {}", e);
                 } else {
                     count += 1;
@@ -589,10 +643,16 @@ impl ContextManager {
 
         log::info!("[COMPACTION] Generated summary ({} chars) for session {}", summary.len(), session_id);
 
-        // Write the compaction summary to the daily log as a session summary
-        if let Some(ref memory_store) = self.memory_store {
+        // Write the compaction summary to DB as a daily_log memory
+        {
             let summary_entry = format!("### Session Summary\n{}", summary);
-            if let Err(e) = memory_store.append_daily_log(&summary_entry, identity_id) {
+            let today = Utc::now().format("%Y-%m-%d").to_string();
+            if let Err(e) = self.db.insert_memory(
+                "daily_log",
+                &summary_entry,
+                None, None, 5, identity_id, Some(session_id), None, None,
+                Some("compaction_summary"), Some(&today),
+            ) {
                 log::error!("[COMPACTION] Failed to write session summary to daily log: {}", e);
             }
         }
@@ -641,8 +701,6 @@ impl ContextManager {
             return None;
         }
 
-        let memory_store = self.memory_store.as_ref()?;
-
         // Build search query from last 3 user messages
         let query_terms: Vec<String> = recent_messages
             .iter()
@@ -667,17 +725,25 @@ impl ContextManager {
         log::debug!("[MEMORY_RETRIEVAL] Searching with query: {}", &query);
 
         let limit = self.memory_config.cross_session_memory_limit;
-        match memory_store.search(&query, limit) {
+        match self.db.search_memories_fts(&query, identity_id, limit) {
             Ok(results) if !results.is_empty() => {
                 log::info!(
                     "[MEMORY_RETRIEVAL] Found {} relevant memories for identity {:?}",
                     results.len(), identity_id
                 );
 
-                // Format as bullet points, using snippets
+                // Format as bullet points with content snippets
                 let formatted = results
                     .iter()
-                    .map(|r| format!("- {}", r.snippet.replace(">>>", "**").replace("<<<", "**")))
+                    .map(|(mem, _rank)| {
+                        let snippet: String = if mem.content.chars().count() > 200 {
+                            let truncated: String = mem.content.chars().take(200).collect();
+                            format!("{}...", truncated)
+                        } else {
+                            mem.content.clone()
+                        };
+                        format!("- {}", snippet)
+                    })
                     .collect::<Vec<_>>()
                     .join("\n");
 
@@ -722,17 +788,107 @@ impl ContextManager {
 
         (messages, combined)
     }
+
+    /// Check the compaction urgency level based on current token usage
+    pub fn check_compaction_level(&self, session_id: i64) -> CompactionLevel {
+        let config = &self.compaction_config;
+
+        let session = self.db.get_chat_session(session_id).ok().flatten();
+        let max_tokens = session.as_ref()
+            .map(|s| s.max_context_tokens)
+            .unwrap_or(self.max_context_tokens);
+        let available = max_tokens - self.reserve_tokens;
+        if available <= 0 {
+            return CompactionLevel::Emergency;
+        }
+
+        let current = session
+            .map(|s| s.context_tokens)
+            .unwrap_or(0);
+        let ratio = current as f64 / available as f64;
+
+        if ratio >= config.emergency_threshold {
+            CompactionLevel::Emergency
+        } else if ratio >= config.aggressive_threshold {
+            CompactionLevel::Aggressive
+        } else if ratio >= config.background_threshold {
+            CompactionLevel::Background
+        } else {
+            CompactionLevel::None
+        }
+    }
+
+    /// Emergency compaction: synchronously hard-drop oldest 50% of messages
+    pub fn compact_emergency(&self, session_id: i64) -> Result<usize, String> {
+        let messages = self.db.get_session_messages(session_id)
+            .map_err(|e| format!("Failed to get session messages: {}", e))?;
+
+        if messages.len() <= MIN_KEEP_RECENT_MESSAGES as usize {
+            return Ok(0);
+        }
+
+        let drop_count = ((messages.len() as f64 * self.compaction_config.emergency_drop_ratio) as usize)
+            .min(messages.len().saturating_sub(MIN_KEEP_RECENT_MESSAGES as usize));
+
+        if drop_count == 0 {
+            return Ok(0);
+        }
+
+        // Delete the oldest messages in one batch
+        let deleted = self.db.delete_oldest_messages(session_id, drop_count as i32)
+            .map_err(|e| format!("Failed to delete oldest messages: {}", e))?;
+
+        // Recalculate context_tokens from remaining messages
+        let remaining = self.db.get_session_messages(session_id)
+            .map_err(|e| format!("Failed to get remaining messages: {}", e))?;
+        let new_token_count = estimate_messages_tokens(&remaining);
+        let _ = self.db.update_session_context_tokens(session_id, new_token_count);
+
+        log::info!(
+            "[COMPACTION] Emergency: dropped {} of {} messages for session {} (tokens now {})",
+            deleted, messages.len(), session_id, new_token_count
+        );
+
+        Ok(deleted as usize)
+    }
+
+    /// Tiered compaction: determine level and apply appropriate strategy
+    pub async fn compact_tiered(
+        &self,
+        session_id: i64,
+        client: &crate::ai::AiClient,
+        identity_id: Option<&str>,
+    ) -> Result<CompactionLevel, String> {
+        let level = self.check_compaction_level(session_id);
+
+        match level {
+            CompactionLevel::None => Ok(CompactionLevel::None),
+            CompactionLevel::Emergency => {
+                self.compact_emergency(session_id)?;
+                Ok(CompactionLevel::Emergency)
+            }
+            CompactionLevel::Aggressive | CompactionLevel::Background => {
+                // Use existing compaction methods for non-emergency levels
+                if let Err(e) = self.compact_session(session_id, client, identity_id).await {
+                    log::error!("[COMPACTION] {} compaction failed: {}, trying emergency", level, e);
+                    self.compact_emergency(session_id)?;
+                    Ok(CompactionLevel::Emergency)
+                } else {
+                    Ok(level)
+                }
+            }
+        }
+    }
 }
 
 /// Save session summary before reset (session memory hook)
-/// Now writes to QMD markdown files instead of database.
+/// Writes extracted summary to DB memories table.
 pub async fn save_session_memory(
     db: &Arc<Database>,
     client: &AiClient,
     session_id: i64,
     identity_id: Option<&str>,
     message_limit: i32,
-    memory_store: Option<&Arc<MemoryStore>>,
 ) -> Result<(), String> {
     // Get recent messages from the session
     let messages = db.get_recent_session_messages(session_id, message_limit)
@@ -788,15 +944,16 @@ pub async fn save_session_memory(
     // Parse title and summary from response
     let (title, summary) = parse_title_summary(&response);
 
-    // Write to daily log in QMD memory store
-    if let Some(store) = memory_store {
-        let content = format!("### {}\n{}", title, summary);
-        store.append_daily_log(&content, identity_id)
-            .map_err(|e| format!("Failed to write session summary: {}", e))?;
-        log::info!("[SESSION_MEMORY] Saved session summary to daily log: {}", title);
-    } else {
-        log::warn!("[SESSION_MEMORY] No memory store available, session summary not saved");
-    }
+    // Write to DB memories table
+    let content = format!("### {}\n{}", title, summary);
+    let today = Utc::now().format("%Y-%m-%d").to_string();
+    db.insert_memory(
+        "daily_log",
+        &content,
+        None, None, 5, identity_id, Some(session_id), None, None,
+        Some("session_reset"), Some(&today),
+    ).map_err(|e| format!("Failed to write session summary: {}", e))?;
+    log::info!("[SESSION_MEMORY] Saved session summary to daily log: {}", title);
 
     Ok(())
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, FormEvent } from 'react';
-import { Save, Bot, Server, Shield, Cloud, AlertTriangle, CheckCircle, Info, XCircle, Copy, Check, Wallet, Brain, Palette, Globe } from 'lucide-react';
+import { Save, Bot, Server, Shield, Cloud, AlertTriangle, CheckCircle, Info, XCircle, Copy, Check, Wallet, Brain, Palette, Globe, Minimize2 } from 'lucide-react';
 import Card, { CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
@@ -34,6 +34,9 @@ export default function BotSettings() {
   const [walletMode, setWalletMode] = useState<string>('');
   const [walletCopied, setWalletCopied] = useState(false);
   const [proxyUrl, setProxyUrl] = useState('');
+  const [compactionBackgroundThreshold, setCompactionBackgroundThreshold] = useState(60);
+  const [compactionAggressiveThreshold, setCompactionAggressiveThreshold] = useState(80);
+  const [compactionEmergencyThreshold, setCompactionEmergencyThreshold] = useState(95);
   const [themeAccent, setThemeAccent] = useState(() => localStorage.getItem('theme-accent') || '');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -102,6 +105,9 @@ export default function BotSettings() {
       setChatSessionMemoryGeneration(data.chat_session_memory_generation ?? true);
       setGuestDashboardEnabled(data.guest_dashboard_enabled ?? false);
       setProxyUrl(data.proxy_url || '');
+      setCompactionBackgroundThreshold(data.compaction_background_threshold ?? 60);
+      setCompactionAggressiveThreshold(data.compaction_aggressive_threshold ?? 80);
+      setCompactionEmergencyThreshold(data.compaction_emergency_threshold ?? 95);
       // Sync theme from backend (backend is source of truth, update localStorage to match)
       const serverTheme = data.theme_accent || '';
       setThemeAccent(serverTheme);
@@ -156,6 +162,9 @@ export default function BotSettings() {
         guest_dashboard_enabled: guestDashboardEnabled,
         theme_accent: themeAccent || '',
         proxy_url: proxyUrl,
+        compaction_background_threshold: compactionBackgroundThreshold,
+        compaction_aggressive_threshold: compactionAggressiveThreshold,
+        compaction_emergency_threshold: compactionEmergencyThreshold,
       });
       setSettings(updated);
       setMessage({ type: 'success', text: 'Settings saved successfully' });
@@ -537,6 +546,53 @@ export default function BotSettings() {
             <p className="text-xs text-slate-500 -mt-2">
               Optional HTTP proxy URL for tool requests (e.g. http://proxy:8080).
               Leave empty to connect directly. Does not affect AI model API calls.
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Context Compaction Section */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Minimize2 className="w-5 h-5 text-stark-400" />
+              Context Compaction
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Input
+              label="Background Threshold (%)"
+              type="number"
+              min={0}
+              max={100}
+              value={compactionBackgroundThreshold}
+              onChange={(e) => setCompactionBackgroundThreshold(parseInt(e.target.value) || 60)}
+            />
+            <p className="text-xs text-slate-500 -mt-2">
+              Context usage percentage at which background compaction begins to summarize older messages.
+            </p>
+
+            <Input
+              label="Aggressive Threshold (%)"
+              type="number"
+              min={0}
+              max={100}
+              value={compactionAggressiveThreshold}
+              onChange={(e) => setCompactionAggressiveThreshold(parseInt(e.target.value) || 80)}
+            />
+            <p className="text-xs text-slate-500 -mt-2">
+              Context usage percentage at which aggressive compaction kicks in to free up space more aggressively.
+            </p>
+
+            <Input
+              label="Emergency Threshold (%)"
+              type="number"
+              min={0}
+              max={100}
+              value={compactionEmergencyThreshold}
+              onChange={(e) => setCompactionEmergencyThreshold(parseInt(e.target.value) || 95)}
+            />
+            <p className="text-xs text-slate-500 -mt-2">
+              Context usage percentage at which emergency compaction drops non-essential context to prevent overflow.
             </p>
           </CardContent>
         </Card>

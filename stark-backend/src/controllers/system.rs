@@ -7,7 +7,6 @@ use walkdir::WalkDir;
 
 use crate::config;
 use crate::controllers::health::VERSION;
-use crate::qmd_memory::file_ops;
 use crate::AppState;
 
 /// Validate session token from request (same pattern as memory controller)
@@ -178,7 +177,7 @@ async fn system_info(data: web::Data<AppState>, req: HttpRequest) -> impl Respon
 
 /// POST /api/system/cleanup/memories
 ///
-/// Delete daily log `.md` files older than N days.
+/// Delete daily_log memories older than N days from the DB.
 async fn cleanup_memories(
     data: web::Data<AppState>,
     req: HttpRequest,
@@ -188,55 +187,29 @@ async fn cleanup_memories(
         return resp;
     }
 
-    let memory_dir = config::memory_config().memory_dir;
-    let memory_path = std::path::Path::new(&memory_dir);
-    if !memory_path.exists() {
-        return HttpResponse::Ok().json(CleanupResponse {
-            success: true,
-            deleted_count: 0,
-            freed_bytes: 0,
-            error: None,
-        });
-    }
-
     let cutoff = chrono::Local::now().date_naive()
         - chrono::Duration::days(body.older_than_days as i64);
+    let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
 
-    let mut deleted_count = 0usize;
-    let mut freed_bytes = 0u64;
-
-    // Walk the memory directory
-    let entries: Vec<_> = WalkDir::new(memory_path)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .collect();
-
-    for entry in entries {
-        let name = entry.file_name().to_string_lossy().to_string();
-
-        // Only delete daily log files (date-named .md files), never MEMORY.md
-        if let Some(file_date) = file_ops::parse_date_from_filename(&name) {
-            if file_date < cutoff {
-                if let Ok(meta) = entry.metadata() {
-                    let size = meta.len();
-                    if std::fs::remove_file(entry.path()).is_ok() {
-                        deleted_count += 1;
-                        freed_bytes += size;
-                    }
-                }
-            }
+    let conn = data.db.conn();
+    let deleted_count = match conn.execute(
+        "DELETE FROM memories WHERE memory_type = 'daily_log' AND log_date IS NOT NULL AND log_date < ?1",
+        rusqlite::params![cutoff_str],
+    ) {
+        Ok(n) => n,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(CleanupResponse {
+                success: false,
+                deleted_count: 0,
+                freed_bytes: 0,
+                error: Some(format!("Failed to cleanup memories: {}", e)),
+            });
         }
-    }
+    };
 
     // Refresh disk quota
     if let Some(ref dq) = data.disk_quota {
         dq.refresh();
-    }
-
-    // Reindex memory store
-    if let Some(store) = data.dispatcher.memory_store() {
-        let _ = store.reindex();
     }
 
     // Reindex notes store
@@ -247,7 +220,7 @@ async fn cleanup_memories(
     HttpResponse::Ok().json(CleanupResponse {
         success: true,
         deleted_count,
-        freed_bytes,
+        freed_bytes: 0, // DB rows don't have a meaningful byte size
         error: None,
     })
 }

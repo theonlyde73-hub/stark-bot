@@ -103,6 +103,10 @@ wallet-monitor-types = { path = "../modules/wallet-monitor-types" }
 discord-tipping-types = { path = "../modules/discord-tipping-types" }
 social-monitor-types = { path = "../modules/social-monitor-types" }
 
+# Polymarket CLOB client (rs-clob-client)
+# Full-featured SDK for trading on Polymarket prediction markets
+polymarket-client-sdk = { version = "0.4", features = ["clob", "ws", "data", "gamma", "heartbeats"] }
+stop-words = "0.9.0"
 
 [[bin]]
 name = "agent_test"

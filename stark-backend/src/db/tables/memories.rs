@@ -1,0 +1,352 @@
+//! Database operations for the `memories` table
+//! Core CRUD for the structured memory system (SQL-backed).
+
+use crate::db::Database;
+
+/// Standard SELECT columns for memory queries
+const MEMORY_SELECT_COLS: &str =
+    "id, memory_type, content, category, tags, importance,
+     identity_id, session_id, entity_type, entity_name,
+     source_type, log_date, created_at, updated_at, last_accessed";
+
+/// A row from the `memories` table
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MemoryRow {
+    pub id: i64,
+    pub memory_type: String,
+    pub content: String,
+    pub category: Option<String>,
+    pub tags: Option<String>,
+    pub importance: i64,
+    pub identity_id: Option<String>,
+    pub session_id: Option<i64>,
+    pub entity_type: Option<String>,
+    pub entity_name: Option<String>,
+    pub source_type: Option<String>,
+    pub log_date: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_accessed: Option<String>,
+}
+
+/// Parse a MemoryRow from a rusqlite::Row using the standard column order.
+fn row_to_memory(row: &rusqlite::Row) -> rusqlite::Result<MemoryRow> {
+    Ok(MemoryRow {
+        id: row.get(0)?,
+        memory_type: row.get(1)?,
+        content: row.get(2)?,
+        category: row.get(3)?,
+        tags: row.get(4)?,
+        importance: row.get::<_, Option<f64>>(5)?.map(|v| v.round() as i64).unwrap_or(5),
+        identity_id: row.get(6)?,
+        session_id: row.get(7)?,
+        entity_type: row.get(8)?,
+        entity_name: row.get(9)?,
+        source_type: row.get(10)?,
+        log_date: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+        last_accessed: row.get(14)?,
+    })
+}
+
+impl Database {
+    /// Insert a new memory and return its ID.
+    /// FTS index is updated automatically via database triggers.
+    pub fn insert_memory(
+        &self,
+        memory_type: &str,
+        content: &str,
+        category: Option<&str>,
+        tags: Option<&str>,
+        importance: i64,
+        identity_id: Option<&str>,
+        session_id: Option<i64>,
+        entity_type: Option<&str>,
+        entity_name: Option<&str>,
+        source_type: Option<&str>,
+        log_date: Option<&str>,
+    ) -> Result<i64, rusqlite::Error> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO memories (
+                memory_type, content, category, tags, importance,
+                identity_id, session_id, entity_type, entity_name,
+                source_type, log_date, created_at, updated_at, last_accessed
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5,
+                ?6, ?7, ?8, ?9,
+                ?10, ?11, datetime('now'), datetime('now'), datetime('now')
+            )",
+            rusqlite::params![
+                memory_type, content, category, tags, importance,
+                identity_id, session_id, entity_type, entity_name,
+                source_type, log_date,
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// List all memories (for backup export).
+    /// Returns lightweight rows without embeddings or associations.
+    pub fn list_all_memories(&self) -> Result<Vec<MemoryRow>, rusqlite::Error> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            &format!("SELECT {} FROM memories ORDER BY id", MEMORY_SELECT_COLS)
+        )?;
+        let rows = stmt.query_map([], |row| row_to_memory(row))?;
+        rows.collect()
+    }
+
+    /// Count total memories in the table.
+    pub fn count_memories(&self) -> Result<i64, rusqlite::Error> {
+        let conn = self.conn();
+        conn.query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+    }
+
+    /// Touch a memory's last_accessed timestamp (for decay tracking).
+    pub fn touch_memory(&self, memory_id: i64) -> Result<(), rusqlite::Error> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE memories SET last_accessed = datetime('now') WHERE id = ?1",
+            rusqlite::params![memory_id],
+        )?;
+        Ok(())
+    }
+
+    /// Get a single memory by ID.
+    pub fn get_memory(&self, memory_id: i64) -> Result<Option<MemoryRow>, rusqlite::Error> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            &format!("SELECT {} FROM memories WHERE id = ?1", MEMORY_SELECT_COLS)
+        )?;
+        let result = stmt.query_row(rusqlite::params![memory_id], |row| row_to_memory(row));
+        match result {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    // ====================================================================
+    // Query helpers for the unified memory system
+    // ====================================================================
+
+    /// Fetch recent long_term memories (non-superseded), ordered by created_at DESC.
+    /// If identity_id is Some, filters to that identity; if None, returns all identities.
+    pub fn get_long_term_memories(
+        &self,
+        identity_id: Option<&str>,
+        limit: i32,
+    ) -> Result<Vec<MemoryRow>, rusqlite::Error> {
+        let conn = self.conn();
+        let (sql, params) = match identity_id {
+            Some(id) => (
+                format!(
+                    "SELECT {} FROM memories
+                     WHERE memory_type = 'long_term' AND superseded_by IS NULL AND identity_id = ?1
+                     ORDER BY created_at DESC LIMIT ?2",
+                    MEMORY_SELECT_COLS
+                ),
+                vec![
+                    Box::new(id.to_string()) as Box<dyn rusqlite::types::ToSql>,
+                    Box::new(limit),
+                ],
+            ),
+            None => (
+                format!(
+                    "SELECT {} FROM memories
+                     WHERE memory_type = 'long_term' AND superseded_by IS NULL
+                     ORDER BY created_at DESC LIMIT ?1",
+                    MEMORY_SELECT_COLS
+                ),
+                vec![Box::new(limit) as Box<dyn rusqlite::types::ToSql>],
+            ),
+        };
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(param_refs.as_slice(), |row| row_to_memory(row))?;
+        rows.collect()
+    }
+
+    /// Fetch daily_log entries for a specific date (YYYY-MM-DD).
+    pub fn get_daily_log_memories(
+        &self,
+        date: &str,
+        identity_id: Option<&str>,
+        limit: i32,
+    ) -> Result<Vec<MemoryRow>, rusqlite::Error> {
+        let conn = self.conn();
+        let (sql, params) = match identity_id {
+            Some(id) => (
+                format!(
+                    "SELECT {} FROM memories
+                     WHERE memory_type = 'daily_log' AND log_date = ?1 AND identity_id = ?2
+                     ORDER BY created_at ASC LIMIT ?3",
+                    MEMORY_SELECT_COLS
+                ),
+                vec![
+                    Box::new(date.to_string()) as Box<dyn rusqlite::types::ToSql>,
+                    Box::new(id.to_string()),
+                    Box::new(limit),
+                ],
+            ),
+            None => (
+                format!(
+                    "SELECT {} FROM memories
+                     WHERE memory_type = 'daily_log' AND log_date = ?1
+                     ORDER BY created_at ASC LIMIT ?2",
+                    MEMORY_SELECT_COLS
+                ),
+                vec![
+                    Box::new(date.to_string()) as Box<dyn rusqlite::types::ToSql>,
+                    Box::new(limit),
+                ],
+            ),
+        };
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(param_refs.as_slice(), |row| row_to_memory(row))?;
+        rows.collect()
+    }
+
+    /// Convenience: fetch today's daily log entries.
+    pub fn get_today_daily_log(
+        &self,
+        identity_id: Option<&str>,
+        limit: i32,
+    ) -> Result<Vec<MemoryRow>, rusqlite::Error> {
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        self.get_daily_log_memories(&today, identity_id, limit)
+    }
+
+    /// FTS5 full-text search against the existing `memories_fts` virtual table.
+    /// Returns matching memories with BM25 rank score (lower = better match).
+    pub fn search_memories_fts(
+        &self,
+        query: &str,
+        identity_id: Option<&str>,
+        limit: i32,
+    ) -> Result<Vec<(MemoryRow, f64)>, rusqlite::Error> {
+        let conn = self.conn();
+        let (sql, params) = match identity_id {
+            Some(id) => (
+                format!(
+                    "SELECT {cols}, bm25(memories_fts) as rank
+                     FROM memories
+                     JOIN memories_fts ON memories.id = memories_fts.rowid
+                     WHERE memories_fts MATCH ?1 AND memories.identity_id = ?2
+                     ORDER BY rank
+                     LIMIT ?3",
+                    cols = MEMORY_SELECT_COLS
+                ),
+                vec![
+                    Box::new(query.to_string()) as Box<dyn rusqlite::types::ToSql>,
+                    Box::new(id.to_string()),
+                    Box::new(limit),
+                ],
+            ),
+            None => (
+                format!(
+                    "SELECT {cols}, bm25(memories_fts) as rank
+                     FROM memories
+                     JOIN memories_fts ON memories.id = memories_fts.rowid
+                     WHERE memories_fts MATCH ?1
+                     ORDER BY rank
+                     LIMIT ?2",
+                    cols = MEMORY_SELECT_COLS
+                ),
+                vec![
+                    Box::new(query.to_string()) as Box<dyn rusqlite::types::ToSql>,
+                    Box::new(limit),
+                ],
+            ),
+        };
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(param_refs.as_slice(), |row| {
+            let memory = row_to_memory(row)?;
+            let rank: f64 = row.get(15)?; // rank is after the 15 standard columns
+            Ok((memory, rank))
+        })?;
+        rows.collect()
+    }
+
+    /// List distinct dates that have daily_log entries (for calendar display).
+    pub fn list_memory_dates(
+        &self,
+        identity_id: Option<&str>,
+    ) -> Result<Vec<String>, rusqlite::Error> {
+        let conn = self.conn();
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match identity_id {
+            Some(id) => (
+                "SELECT DISTINCT log_date FROM memories
+                 WHERE memory_type = 'daily_log' AND log_date IS NOT NULL AND identity_id = ?1
+                 ORDER BY log_date DESC".to_string(),
+                vec![Box::new(id.to_string())],
+            ),
+            None => (
+                "SELECT DISTINCT log_date FROM memories
+                 WHERE memory_type = 'daily_log' AND log_date IS NOT NULL
+                 ORDER BY log_date DESC".to_string(),
+                vec![],
+            ),
+        };
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(param_refs.as_slice(), |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    /// List distinct identity_ids in memories (for filter dropdowns).
+    pub fn list_memory_identities(&self) -> Result<Vec<String>, rusqlite::Error> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT identity_id FROM memories WHERE identity_id IS NOT NULL ORDER BY identity_id"
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    /// Get memory statistics aggregated from the DB.
+    pub fn get_memory_stats(
+        &self,
+    ) -> Result<MemoryStats, rusqlite::Error> {
+        let conn = self.conn();
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))?;
+        let daily_log_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM memories WHERE memory_type = 'daily_log'", [], |r| r.get(0)
+        )?;
+        let long_term_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM memories WHERE memory_type = 'long_term'", [], |r| r.get(0)
+        )?;
+        let identities = self.list_memory_identities().unwrap_or_default();
+        let date_range = conn.query_row(
+            "SELECT MIN(log_date), MAX(log_date) FROM memories WHERE log_date IS NOT NULL",
+            [],
+            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+        ).unwrap_or((None, None));
+
+        Ok(MemoryStats {
+            total_memories: total,
+            daily_log_count,
+            long_term_count,
+            identity_count: identities.len() as i64,
+            identities,
+            earliest_date: date_range.0,
+            latest_date: date_range.1,
+        })
+    }
+}
+
+/// Aggregated memory statistics
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MemoryStats {
+    pub total_memories: i64,
+    pub daily_log_count: i64,
+    pub long_term_count: i64,
+    pub identity_count: i64,
+    pub identities: Vec<String>,
+    pub earliest_date: Option<String>,
+    pub latest_date: Option<String>,
+}

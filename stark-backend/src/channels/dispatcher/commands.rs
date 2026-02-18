@@ -358,7 +358,6 @@ impl MessageDispatcher {
                                 session.id,
                                 identity_id.as_deref(),
                                 15, // Save last 15 messages
-                                self.memory_store.as_ref(),
                             ).await {
                                 Ok(()) => {
                                     log::info!("[SESSION_MEMORY] Saved session memory before reset");

@@ -15,7 +15,7 @@ use crate::gateway::protocol::GatewayEvent;
 use crate::models::{AgentSettings, MessageRole as DbMessageRole, SessionScope};
 use crate::tools::{ToolContext, ToolDefinition, ToolRegistry};
 use crate::skills::SkillRegistry;
-use crate::qmd_memory::MemoryStore;
+
 use dashmap::DashMap;
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,6 +23,19 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::{oneshot, Semaphore};
 use tokio::time::{timeout, Duration};
+
+/// Truncate a string to at most `max_bytes` bytes at a valid UTF-8 boundary.
+fn truncate_str(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    // Find the largest char boundary <= max_bytes
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
 
 /// Counter for generating unique sub-agent IDs
 static SUBAGENT_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -60,8 +73,6 @@ pub struct SubAgentManager {
     wallet_provider: Option<Arc<dyn crate::wallet::WalletProvider>>,
     /// Skill registry for sub-agent tool context
     skill_registry: OnceLock<Arc<SkillRegistry>>,
-    /// QMD memory store for sub-agent tool context
-    memory_store: OnceLock<Arc<MemoryStore>>,
     /// Transaction queue manager for web3 tx tools
     tx_queue: OnceLock<Arc<crate::tx_queue::TxQueueManager>>,
     /// Process manager for bash execution tracking
@@ -101,7 +112,6 @@ impl SubAgentManager {
             config,
             wallet_provider,
             skill_registry: OnceLock::new(),
-            memory_store: OnceLock::new(),
             tx_queue: OnceLock::new(),
             process_manager: OnceLock::new(),
             disk_quota: OnceLock::new(),
@@ -111,11 +121,6 @@ impl SubAgentManager {
     /// Set the skill registry for sub-agent tool contexts (can be called after Arc wrapping)
     pub fn set_skill_registry(&self, registry: Arc<SkillRegistry>) {
         let _ = self.skill_registry.set(registry);
-    }
-
-    /// Set the memory store for sub-agent tool contexts (can be called after Arc wrapping)
-    pub fn set_memory_store(&self, store: Arc<MemoryStore>) {
-        let _ = self.memory_store.set(store);
     }
 
     /// Set the tx queue manager for sub-agent tool contexts (can be called after Arc wrapping)
@@ -202,7 +207,6 @@ impl SubAgentManager {
         let channel_sem = self.get_channel_semaphore(context.parent_channel_id);
         let wallet_provider = self.wallet_provider.clone();
         let skill_registry = self.skill_registry.get().cloned();
-        let memory_store = self.memory_store.get().cloned();
         let tx_queue = self.tx_queue.get().cloned();
         let process_manager = self.process_manager.get().cloned();
         let disk_quota = self.disk_quota.get().cloned();
@@ -236,7 +240,6 @@ impl SubAgentManager {
                 context.clone(),
                 wallet_provider,
                 skill_registry,
-                memory_store,
                 tx_queue,
                 process_manager,
                 disk_quota,
@@ -328,7 +331,6 @@ impl SubAgentManager {
         mut context: SubAgentContext,
         wallet_provider: Option<Arc<dyn crate::wallet::WalletProvider>>,
         skill_registry: Option<Arc<SkillRegistry>>,
-        memory_store: Option<Arc<MemoryStore>>,
         tx_queue: Option<Arc<crate::tx_queue::TxQueueManager>>,
         process_manager: Option<Arc<crate::execution::ProcessManager>>,
         disk_quota: Option<Arc<crate::disk_quota::DiskQuotaManager>>,
@@ -453,9 +455,6 @@ impl SubAgentManager {
         if let Some(registry) = skill_registry.clone() {
             tool_context = tool_context.with_skill_registry(registry);
         }
-        if let Some(store) = memory_store.clone() {
-            tool_context = tool_context.with_memory_store(store);
-        }
         if let Some(wp) = wallet_provider.clone() {
             tool_context = tool_context.with_wallet_provider(wp);
         }
@@ -544,6 +543,26 @@ impl SubAgentManager {
         const MAX_CLIENT_ERROR_RETRIES: u32 = 2;
 
         for iteration in 0..max_iterations {
+            // Save checkpoint every 25 turns for overflow recovery
+            if iteration > 0 && iteration % 25 == 0 {
+                let checkpoint = crate::ai::multi_agent::types::WorkerCheckpoint {
+                    iteration: iteration as u32,
+                    context_snapshot: format!(
+                        "Checkpoint at iteration {}: {} messages, {} tool calls",
+                        iteration,
+                        messages.len(),
+                        tool_history.len()
+                    ),
+                    timestamp: chrono::Utc::now(),
+                };
+                context.checkpoints.push(checkpoint);
+                if let Err(e) = Self::save_subagent_direct(&db, &context) {
+                    log::warn!("[SUBAGENT] {} failed to save checkpoint: {}", context.id, e);
+                } else {
+                    log::info!("[SUBAGENT] {} saved checkpoint at iteration {}", context.id, iteration);
+                }
+            }
+
             log::debug!(
                 "[SUBAGENT] {} iteration {} starting",
                 context.id,
@@ -613,7 +632,7 @@ impl SubAgentManager {
                 // Broadcast tool_call event
                 let params_preview = {
                     let s = tool_call.arguments.to_string();
-                    if s.len() > 500 { format!("{}...", &s[..500]) } else { s }
+                    if s.len() > 500 { format!("{}...", truncate_str(&s, 500)) } else { s }
                 };
                 broadcaster.broadcast(GatewayEvent::subagent_tool_call(
                     context.parent_channel_id,
@@ -646,7 +665,7 @@ impl SubAgentManager {
                 // Broadcast tool_result event (strip <think> blocks from preview)
                 let cleaned_content = strip_think_blocks(&result.content);
                 let content_preview = if cleaned_content.len() > 500 {
-                    format!("{}...", &cleaned_content[..500])
+                    format!("{}...", truncate_str(&cleaned_content, 500))
                 } else {
                     cleaned_content
                 };
@@ -770,6 +789,13 @@ impl SubAgentManager {
             )
             .unwrap_or(false);
 
+        // Serialize checkpoints to JSON
+        let checkpoints_json = if context.checkpoints.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&context.checkpoints).ok()
+        };
+
         if exists {
             // Update existing record
             conn.execute(
@@ -778,14 +804,20 @@ impl SubAgentManager {
                     status = ?2,
                     result = ?3,
                     error = ?4,
-                    completed_at = ?5
-                 WHERE subagent_id = ?6",
+                    completed_at = ?5,
+                    mode = ?6,
+                    parent_context_snapshot = ?7,
+                    checkpoints = ?8
+                 WHERE subagent_id = ?9",
                 rusqlite::params![
                     context.session_id,
                     context.status.to_string(),
                     context.result,
                     context.error,
                     context.completed_at.map(|t| t.to_rfc3339()),
+                    context.mode.to_string(),
+                    context.parent_context_snapshot,
+                    checkpoints_json,
                     context.id,
                 ],
             )
@@ -797,8 +829,8 @@ impl SubAgentManager {
                     subagent_id, parent_session_id, parent_channel_id, session_id,
                     label, task, status, model_override, thinking_level, timeout_secs,
                     context, result, error, started_at, completed_at,
-                    parent_subagent_id, depth
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                    parent_subagent_id, depth, mode, parent_context_snapshot, checkpoints
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
                 rusqlite::params![
                     context.id,
                     context.parent_session_id,
@@ -817,6 +849,9 @@ impl SubAgentManager {
                     context.completed_at.map(|t| t.to_rfc3339()),
                     context.parent_subagent_id,
                     context.depth,
+                    context.mode.to_string(),
+                    context.parent_context_snapshot,
+                    checkpoints_json,
                 ],
             )
             .map_err(|e| format!("Failed to insert sub-agent: {}", e))?;
@@ -834,10 +869,12 @@ impl SubAgentManager {
                 subagent_id, parent_session_id, parent_channel_id, session_id,
                 label, task, status, model_override, thinking_level, timeout_secs,
                 context, result, error, started_at, completed_at,
-                parent_subagent_id, depth
+                parent_subagent_id, depth, mode, parent_context_snapshot, checkpoints
              FROM sub_agents WHERE subagent_id = ?1",
             [subagent_id],
             |row| {
+                let mode_str: String = row.get::<_, String>(17).unwrap_or_else(|_| "standard".to_string());
+                let checkpoints_json: Option<String> = row.get(19).ok();
                 Ok(SubAgentContext {
                     id: row.get(0)?,
                     parent_session_id: row.get(1)?,
@@ -863,6 +900,11 @@ impl SubAgentManager {
                     parent_subagent_id: row.get(15)?,
                     depth: row.get::<_, i64>(16).unwrap_or(0) as u32,
                     agent_subtype: None,
+                    mode: mode_str.parse::<crate::ai::multi_agent::types::SubAgentMode>().unwrap_or_default(),
+                    parent_context_snapshot: row.get(18).ok(),
+                    checkpoints: checkpoints_json
+                        .and_then(|j| serde_json::from_str(&j).ok())
+                        .unwrap_or_default(),
                 })
             },
         );
@@ -884,7 +926,7 @@ impl SubAgentManager {
                     subagent_id, parent_session_id, parent_channel_id, session_id,
                     label, task, status, model_override, thinking_level, timeout_secs,
                     context, result, error, started_at, completed_at,
-                    parent_subagent_id, depth
+                    parent_subagent_id, depth, mode, parent_context_snapshot, checkpoints
                  FROM sub_agents
                  WHERE parent_channel_id = ?1
                  ORDER BY started_at DESC",
@@ -893,6 +935,8 @@ impl SubAgentManager {
 
         let rows = stmt
             .query_map([channel_id], |row| {
+                let mode_str: String = row.get::<_, String>(17).unwrap_or_else(|_| "standard".to_string());
+                let checkpoints_json: Option<String> = row.get(19).ok();
                 Ok(SubAgentContext {
                     id: row.get(0)?,
                     parent_session_id: row.get(1)?,
@@ -918,6 +962,11 @@ impl SubAgentManager {
                     parent_subagent_id: row.get(15)?,
                     depth: row.get::<_, i64>(16).unwrap_or(0) as u32,
                     agent_subtype: None,
+                    mode: mode_str.parse::<crate::ai::multi_agent::types::SubAgentMode>().unwrap_or_default(),
+                    parent_context_snapshot: row.get(18).ok(),
+                    checkpoints: checkpoints_json
+                        .and_then(|j| serde_json::from_str(&j).ok())
+                        .unwrap_or_default(),
                 })
             })
             .map_err(|e| format!("Failed to execute query: {}", e))?;
@@ -1039,7 +1088,7 @@ impl GatewayEvent {
                 "channel_id": channel_id,
                 "subagent_id": subagent_id,
                 "label": label,
-                "task": if task.len() > 200 { format!("{}...", &task[..200]) } else { task.to_string() },
+                "task": if task.len() > 200 { format!("{}...", truncate_str(task, 200)) } else { task.to_string() },
                 "parent_subagent_id": parent_subagent_id,
                 "depth": depth,
                 "session_id": session_id,
@@ -1065,7 +1114,7 @@ impl GatewayEvent {
                 "channel_id": channel_id,
                 "subagent_id": subagent_id,
                 "label": label,
-                "result": if result.len() > 500 { format!("{}...", &result[..500]) } else { result.to_string() },
+                "result": if result.len() > 500 { format!("{}...", truncate_str(result, 500)) } else { result.to_string() },
                 "parent_subagent_id": parent_subagent_id,
                 "depth": depth,
                 "session_id": session_id,

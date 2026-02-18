@@ -1,57 +1,70 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import {
-  FileText,
   Search,
   Calendar,
   Brain,
-  Clock,
   User,
   FolderOpen,
-  RefreshCw,
   ChevronLeft,
   ChevronRight,
   BarChart3,
   Plus,
   X,
+  Share2,
+  Hash,
 } from 'lucide-react';
 import Card, { CardContent } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import { apiFetch } from '@/lib/api';
 
+// Lazy-load the graph visualization (heavy D3 dependency)
+const MemoryGraph = lazy(() => import('./MemoryGraph'));
+
 // ============================================================================
-// API Types (matching backend)
+// API Types (matching new DB-backed backend)
 // ============================================================================
 
-interface MemoryFile {
+interface MemoryEntry {
   path: string;
-  name: string;
-  file_type: 'daily_log' | 'long_term' | 'unknown';
+  memory_type: 'daily_log' | 'long_term';
   date: string | null;
   identity_id: string | null;
-  size: number;
-  modified: string | null;
+  entry_count: number;
 }
 
 interface ListFilesResponse {
   success: boolean;
-  files: MemoryFile[];
+  files: MemoryEntry[];
   error?: string;
 }
 
-interface ReadFileResponse {
+interface MemoryItem {
+  id: number;
+  content: string;
+  memory_type: string;
+  importance: number;
+  identity_id?: string | null;
+  log_date?: string | null;
+  source_type?: string | null;
+  created_at: string;
+}
+
+interface ReadMemoriesResponse {
   success: boolean;
-  path: string;
-  content?: string;
-  file_type?: string;
-  date?: string;
-  identity_id?: string;
+  memory_type: string;
+  date?: string | null;
+  identity_id?: string | null;
+  memories: MemoryItem[];
   error?: string;
 }
 
 interface SearchResult {
-  file_path: string;
-  snippet: string;
+  memory_id: number;
+  content: string;
+  memory_type: string;
+  importance: number;
   score: number;
+  log_date?: string | null;
 }
 
 interface SearchResponse {
@@ -61,23 +74,15 @@ interface SearchResponse {
   error?: string;
 }
 
-interface DateRange {
-  oldest: string;
-  newest: string;
-}
-
-interface MemoryStats {
-  total_files: number;
+interface MemoryStatsResponse {
+  success: boolean;
+  total_memories: number;
   daily_log_count: number;
   long_term_count: number;
   identity_count: number;
   identities: string[];
-  date_range: DateRange | null;
-}
-
-interface StatsResponse {
-  success: boolean;
-  stats: MemoryStats;
+  earliest_date?: string | null;
+  latest_date?: string | null;
   error?: string;
 }
 
@@ -85,16 +90,13 @@ interface StatsResponse {
 // Helpers
 // ============================================================================
 
-/** Render a human-readable label for a memory identity */
-function identityLabel(id: string | null): string {
+function identityLabel(id: string | null | undefined): string {
   if (!id) return 'Standard';
   if (id === 'safemode') return 'Safe Mode';
-  // UUID identity — truncate
   return id.length > 12 ? id.slice(0, 8) + '...' : id;
 }
 
-/** Mode badge component for file list items */
-function ModeBadge({ identityId }: { identityId: string | null }) {
+function ModeBadge({ identityId }: { identityId: string | null | undefined }) {
   if (identityId === 'safemode') {
     return (
       <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-medium">
@@ -105,27 +107,29 @@ function ModeBadge({ identityId }: { identityId: string | null }) {
   return null;
 }
 
+function importanceBadge(importance: number) {
+  const color = importance >= 8 ? 'text-red-400' : importance >= 5 ? 'text-yellow-400' : 'text-slate-500';
+  return <span className={`text-[10px] ${color}`} title={`Importance: ${importance}`}>{'*'.repeat(Math.min(importance, 10))}</span>;
+}
+
 // ============================================================================
 // API Functions
 // ============================================================================
 
-async function getMemoryFiles(): Promise<ListFilesResponse> {
-  return apiFetch('/memory/files');
-}
-
-async function readMemoryFile(path: string): Promise<ReadFileResponse> {
-  return apiFetch(`/memory/file?path=${encodeURIComponent(path)}`);
+async function getMemoryEntries(identityId?: string): Promise<ListFilesResponse> {
+  const params = identityId ? `?identity_id=${encodeURIComponent(identityId)}` : '';
+  return apiFetch(`/memory/files${params}`);
 }
 
 async function searchMemory(query: string, limit = 20): Promise<SearchResponse> {
   return apiFetch(`/memory/search?query=${encodeURIComponent(query)}&limit=${limit}`);
 }
 
-async function getMemoryStats(): Promise<StatsResponse> {
+async function getMemoryStats(): Promise<MemoryStatsResponse> {
   return apiFetch('/memory/stats');
 }
 
-async function getDailyLog(date?: string, identityId?: string): Promise<ReadFileResponse> {
+async function getDailyLog(date?: string, identityId?: string): Promise<ReadMemoriesResponse> {
   const params = new URLSearchParams();
   if (date) params.set('date', date);
   if (identityId) params.set('identity_id', identityId);
@@ -133,8 +137,9 @@ async function getDailyLog(date?: string, identityId?: string): Promise<ReadFile
   return apiFetch(`/memory/daily${query ? `?${query}` : ''}`);
 }
 
-async function reindexMemory(): Promise<{ success: boolean; message?: string; error?: string }> {
-  return apiFetch('/memory/reindex', { method: 'POST' });
+async function getLongTermMemories(identityId?: string): Promise<ReadMemoriesResponse> {
+  const params = identityId ? `?identity_id=${encodeURIComponent(identityId)}` : '';
+  return apiFetch(`/memory/long-term${params}`);
 }
 
 async function appendToDailyLog(content: string, identityId?: string): Promise<{ success: boolean; error?: string }> {
@@ -155,24 +160,20 @@ async function appendToLongTerm(content: string, identityId?: string): Promise<{
 // Components
 // ============================================================================
 
-type ViewMode = 'files' | 'calendar' | 'search';
+type ViewMode = 'browse' | 'calendar' | 'search' | 'graph' | 'stats';
 
 function FileTypeIcon({ type }: { type: string }) {
-  if (type === 'long_term') {
-    return <Brain className="w-4 h-4 text-purple-400" />;
-  }
-  if (type === 'daily_log') {
-    return <Calendar className="w-4 h-4 text-blue-400" />;
-  }
-  return <FileText className="w-4 h-4 text-slate-400" />;
+  if (type === 'long_term') return <Brain className="w-4 h-4 text-purple-400" />;
+  if (type === 'daily_log') return <Calendar className="w-4 h-4 text-blue-400" />;
+  return <Hash className="w-4 h-4 text-slate-400" />;
 }
 
 function CalendarView({
-  files,
+  entries,
   selectedDate,
   onSelectDate,
 }: {
-  files: MemoryFile[];
+  entries: MemoryEntry[];
   selectedDate: string | null;
   onSelectDate: (date: string) => void;
 }) {
@@ -181,98 +182,72 @@ function CalendarView({
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
 
-  // Get dates with entries
-  const datesWithEntries = useMemo(() => {
-    const dates = new Set<string>();
-    files.forEach((f) => {
-      if (f.date) dates.add(f.date);
+  const dateEntryCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    entries.forEach((e) => {
+      if (e.date) counts.set(e.date, (counts.get(e.date) || 0) + e.entry_count);
     });
-    return dates;
-  }, [files]);
+    return counts;
+  }, [entries]);
 
-  // Generate calendar days
   const calendarDays = useMemo(() => {
     const year = currentMonth.getFullYear();
     const month = currentMonth.getMonth();
-
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
     const startPadding = firstDay.getDay();
     const totalDays = lastDay.getDate();
 
-    const days: { date: string | null; day: number | null; hasEntry: boolean }[] = [];
-
-    // Padding for days before the 1st
+    const days: { date: string | null; day: number | null; hasEntry: boolean; entryCount: number }[] = [];
     for (let i = 0; i < startPadding; i++) {
-      days.push({ date: null, day: null, hasEntry: false });
+      days.push({ date: null, day: null, hasEntry: false, entryCount: 0 });
     }
-
-    // Actual days
     for (let d = 1; d <= totalDays; d++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      days.push({
-        date: dateStr,
-        day: d,
-        hasEntry: datesWithEntries.has(dateStr),
-      });
+      const entryCount = dateEntryCounts.get(dateStr) || 0;
+      days.push({ date: dateStr, day: d, hasEntry: entryCount > 0, entryCount });
     }
-
     return days;
-  }, [currentMonth, datesWithEntries]);
+  }, [currentMonth, dateEntryCounts]);
 
   const monthName = currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
-
-  const prevMonth = () => {
-    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1));
-  };
-
-  const nextMonth = () => {
-    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1));
-  };
-
   const today = new Date().toISOString().split('T')[0];
 
   return (
     <div className="bg-slate-800/50 rounded-lg p-4">
-      {/* Month navigation */}
       <div className="flex items-center justify-between mb-4">
-        <Button variant="ghost" size="sm" onClick={prevMonth}>
+        <Button variant="ghost" size="sm" onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}>
           <ChevronLeft className="w-4 h-4" />
         </Button>
         <span className="text-white font-medium">{monthName}</span>
-        <Button variant="ghost" size="sm" onClick={nextMonth}>
+        <Button variant="ghost" size="sm" onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}>
           <ChevronRight className="w-4 h-4" />
         </Button>
       </div>
-
-      {/* Day headers */}
       <div className="grid grid-cols-7 gap-1 mb-2">
         {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
-          <div key={day} className="text-center text-xs text-slate-500 py-1">
-            {day}
-          </div>
+          <div key={day} className="text-center text-xs text-slate-500 py-1">{day}</div>
         ))}
       </div>
-
-      {/* Calendar grid */}
       <div className="grid grid-cols-7 gap-1">
         {calendarDays.map((d, i) => (
           <button
             key={i}
             disabled={!d.date}
             onClick={() => d.date && onSelectDate(d.date)}
+            title={d.hasEntry ? `${d.entryCount} entr${d.entryCount === 1 ? 'y' : 'ies'}` : undefined}
             className={`
-              aspect-square flex items-center justify-center text-sm rounded transition-colors
+              relative aspect-square flex flex-col items-center justify-center text-sm rounded transition-colors
               ${!d.date ? 'cursor-default' : 'cursor-pointer'}
-              ${d.date === selectedDate ? 'bg-stark-500 text-white' : ''}
-              ${d.date === today && d.date !== selectedDate ? 'ring-1 ring-stark-400' : ''}
+              ${d.date === selectedDate ? 'bg-stark-500 text-white font-bold' : ''}
+              ${d.date === today && d.date !== selectedDate ? 'ring-2 ring-stark-400 font-medium' : ''}
               ${d.hasEntry && d.date !== selectedDate ? 'bg-blue-500/20 text-blue-300 hover:bg-blue-500/30' : ''}
               ${!d.hasEntry && d.date && d.date !== selectedDate ? 'text-slate-500 hover:bg-slate-700' : ''}
             `}
           >
-            {d.day}
-            {d.hasEntry && d.date !== selectedDate && (
-              <span className="absolute bottom-1 w-1 h-1 rounded-full bg-blue-400" />
+            <span>{d.day}</span>
+            {d.hasEntry && d.entryCount > 0 && (
+              <span className="text-[9px] leading-none opacity-70">{d.entryCount}</span>
             )}
           </button>
         ))}
@@ -281,11 +256,7 @@ function CalendarView({
   );
 }
 
-function SearchView({
-  onSelectFile,
-}: {
-  onSelectFile: (path: string) => void;
-}) {
+function SearchView({ onSelectMemory }: { onSelectMemory: (id: number) => void }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -293,10 +264,8 @@ function SearchView({
 
   const handleSearch = async () => {
     if (!query.trim()) return;
-
     setIsSearching(true);
     setError(null);
-
     try {
       const response = await searchMemory(query, 30);
       if (response.success) {
@@ -304,32 +273,15 @@ function SearchView({
       } else {
         setError(response.error || 'Search failed');
       }
-    } catch (err) {
+    } catch {
       setError('Search request failed');
     } finally {
       setIsSearching(false);
     }
   };
 
-  // Format snippet with highlights
-  const formatSnippet = (snippet: string) => {
-    // The backend wraps matches in >>> and <<<
-    const parts = snippet.split(/(>>>.*?<<<)/g);
-    return parts.map((part, i) => {
-      if (part.startsWith('>>>') && part.endsWith('<<<')) {
-        return (
-          <mark key={i} className="bg-yellow-500/30 text-yellow-200 px-0.5 rounded">
-            {part.slice(3, -3)}
-          </mark>
-        );
-      }
-      return part;
-    });
-  };
-
   return (
     <div className="space-y-4">
-      {/* Search input */}
       <div className="flex gap-2">
         <div className="flex-1 relative">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -348,78 +300,127 @@ function SearchView({
       </div>
 
       {error && (
-        <div className="text-red-400 text-sm bg-red-500/10 px-3 py-2 rounded">
-          {error}
+        <div className="text-red-400 text-sm bg-red-500/10 px-3 py-2 rounded flex items-center justify-between">
+          <span>{error}</span>
+          <button onClick={handleSearch} className="text-red-300 underline text-xs ml-2">Retry</button>
         </div>
       )}
 
-      {/* Results */}
       {results.length > 0 ? (
         <div className="space-y-2">
           <div className="text-sm text-slate-400">{results.length} results found</div>
-          {results.map((result, i) => (
+          {results.map((result) => (
             <button
-              key={i}
-              onClick={() => onSelectFile(result.file_path)}
+              key={result.memory_id}
+              onClick={() => onSelectMemory(result.memory_id)}
               className="w-full text-left p-3 bg-slate-800/50 hover:bg-slate-700/50 rounded-lg transition-colors"
             >
               <div className="flex items-center gap-2 mb-1">
-                <FileText className="w-4 h-4 text-slate-400" />
-                <span className="text-sm text-stark-400 font-mono">{result.file_path}</span>
-                <span className="text-xs text-slate-500 ml-auto">
-                  score: {Math.abs(result.score).toFixed(2)}
+                <FileTypeIcon type={result.memory_type} />
+                <span className="text-xs text-slate-500">#{result.memory_id}</span>
+                <span className="text-xs text-slate-500">{result.memory_type}</span>
+                {result.log_date && <span className="text-xs text-slate-500">{result.log_date}</span>}
+                {importanceBadge(result.importance)}
+                <span className="text-xs text-slate-500 ml-auto flex items-center gap-1" title={`BM25 score: ${result.score.toFixed(4)}`}>
+                  <span className="inline-block w-12 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                    <span className="block h-full bg-stark-400 rounded-full" style={{ width: `${Math.min(100, result.score * 8)}%` }} />
+                  </span>
                 </span>
               </div>
-              <p className="text-sm text-slate-300 line-clamp-2">{formatSnippet(result.snippet)}</p>
+              <p className="text-sm text-slate-300 line-clamp-3">{result.content}</p>
             </button>
           ))}
         </div>
       ) : query && !isSearching ? (
         <div className="text-center text-slate-500 py-8">
-          No results found for "{query}"
+          <Search className="w-8 h-8 mx-auto mb-2 opacity-40" />
+          <p>No results found for "{query}"</p>
+          <p className="text-xs mt-1">Try different keywords or shorter search terms</p>
+        </div>
+      ) : !query ? (
+        <div className="text-center text-slate-500 py-8">
+          <Search className="w-8 h-8 mx-auto mb-2 opacity-30" />
+          <p className="text-sm">Search across all memories using full-text search</p>
+          <p className="text-xs mt-1 text-slate-600">Press Enter or click Search to find results</p>
         </div>
       ) : null}
     </div>
   );
 }
 
-function MarkdownViewer({ content }: { content: string }) {
-  // Simple markdown rendering - just handle headers and basic formatting
-  const lines = content.split('\n');
+function MemoryItemView({ item }: { item: MemoryItem }) {
+  return (
+    <div className="px-3 py-2 border-l-2 border-slate-600 hover:border-stark-500 transition-colors">
+      <div className="flex items-center gap-2 mb-1">
+        <FileTypeIcon type={item.memory_type} />
+        <span className="text-xs text-slate-500">#{item.id}</span>
+        {importanceBadge(item.importance)}
+        {item.source_type && <span className="text-[10px] px-1 py-0.5 rounded bg-slate-700 text-slate-400">{item.source_type}</span>}
+        <ModeBadge identityId={item.identity_id} />
+        <span className="text-xs text-slate-600 ml-auto">{item.created_at.split('.')[0]}</span>
+      </div>
+      <div className="text-sm text-slate-300 whitespace-pre-wrap">{item.content}</div>
+    </div>
+  );
+}
+
+function StatsView({ stats }: { stats: MemoryStatsResponse | null }) {
+  if (!stats) return <div className="text-slate-500 text-center py-8">Loading stats...</div>;
 
   return (
-    <div className="prose prose-invert prose-sm max-w-none">
-      {lines.map((line, i) => {
-        if (line.startsWith('## ')) {
-          return (
-            <h2 key={i} className="text-lg font-semibold text-stark-400 mt-4 mb-2">
-              {line.slice(3)}
-            </h2>
-          );
-        }
-        if (line.startsWith('# ')) {
-          return (
-            <h1 key={i} className="text-xl font-bold text-white mt-4 mb-2">
-              {line.slice(2)}
-            </h1>
-          );
-        }
-        if (line.startsWith('- ')) {
-          return (
-            <li key={i} className="text-slate-300 ml-4">
-              {line.slice(2)}
-            </li>
-          );
-        }
-        if (line.trim() === '') {
-          return <div key={i} className="h-2" />;
-        }
-        return (
-          <p key={i} className="text-slate-300">
-            {line}
-          </p>
-        );
-      })}
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <Card>
+          <CardContent className="py-3 text-center">
+            <div className="text-2xl font-bold text-white">{stats.total_memories}</div>
+            <div className="text-xs text-slate-400">Total Memories</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="py-3 text-center">
+            <div className="text-2xl font-bold text-blue-400">{stats.daily_log_count}</div>
+            <div className="text-xs text-slate-400">Daily Logs</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="py-3 text-center">
+            <div className="text-2xl font-bold text-purple-400">{stats.long_term_count}</div>
+            <div className="text-xs text-slate-400">Long-term</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="py-3 text-center">
+            <div className="text-2xl font-bold text-white">{stats.identity_count}</div>
+            <div className="text-xs text-slate-400">Identities</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {(stats.earliest_date || stats.latest_date) && (
+        <Card>
+          <CardContent className="py-3">
+            <div className="text-sm text-slate-400 mb-2">Date Range</div>
+            <div className="text-white text-sm">
+              {stats.earliest_date} to {stats.latest_date}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {stats.identities.length > 0 && (
+        <Card>
+          <CardContent className="py-3">
+            <div className="text-sm text-slate-400 mb-2">Identities</div>
+            <div className="flex flex-wrap gap-2">
+              {stats.identities.map((id) => (
+                <span key={id} className="text-xs px-2 py-1 rounded bg-slate-700 text-slate-300">
+                  {identityLabel(id)}
+                </span>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
@@ -441,15 +442,12 @@ function AddEntryModal({
 
   const handleSubmit = async () => {
     if (!content.trim()) return;
-
     setIsSubmitting(true);
     setError(null);
-
     try {
       const response = type === 'daily'
         ? await appendToDailyLog(content, identityId || undefined)
         : await appendToLongTerm(content, identityId || undefined);
-
       if (response.success) {
         onSuccess();
         onClose();
@@ -474,28 +472,20 @@ function AddEntryModal({
             <X className="w-5 h-5" />
           </button>
         </div>
-
         {identityId && (
           <div className="text-sm text-slate-400 mb-3">
             Identity: <span className="text-stark-400">{identityId}</span>
           </div>
         )}
-
         <textarea
           value={content}
           onChange={(e) => setContent(e.target.value)}
           placeholder={type === 'daily' ? 'What happened today?' : 'Add a fact, preference, or important information...'}
           className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm resize-none h-32 mb-4"
         />
-
-        {error && (
-          <div className="text-red-400 text-sm mb-4">{error}</div>
-        )}
-
+        {error && <div className="text-red-400 text-sm mb-4">{error}</div>}
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button onClick={handleSubmit} disabled={isSubmitting || !content.trim()}>
             {isSubmitting ? 'Adding...' : 'Add Entry'}
           </Button>
@@ -510,127 +500,164 @@ function AddEntryModal({
 // ============================================================================
 
 export default function MemoryBrowser() {
-  const [files, setFiles] = useState<MemoryFile[]>([]);
-  const [stats, setStats] = useState<MemoryStats | null>(null);
+  const [entries, setEntries] = useState<MemoryEntry[]>([]);
+  const [stats, setStats] = useState<MemoryStatsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // View state
-  const [viewMode, setViewMode] = useState<ViewMode>('files');
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [fileContent, setFileContent] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('browse');
+  const [selectedMemories, setSelectedMemories] = useState<MemoryItem[]>([]);
+  const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
   const [loadingContent, setLoadingContent] = useState(false);
 
-  // Filter state: "all" | "standard" | "safemode"
+  // Filter state
   const [modeFilter, setModeFilter] = useState<string>('all');
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   // Add entry modal
   const [addEntryType, setAddEntryType] = useState<'daily' | 'long_term' | null>(null);
 
-  // Load files and stats
+  const identityFilter = modeFilter === 'safemode' ? 'safemode' : undefined;
+
+  // Load entries and stats
   const loadData = async () => {
     setIsLoading(true);
     setError(null);
-
     try {
-      const [filesRes, statsRes] = await Promise.all([getMemoryFiles(), getMemoryStats()]);
-
-      if (filesRes.success) {
-        setFiles(filesRes.files);
-      } else {
-        setError(filesRes.error || 'Failed to load files');
-      }
-
-      if (statsRes.success) {
-        setStats(statsRes.stats);
-      }
-    } catch (err) {
+      const [entriesRes, statsRes] = await Promise.all([
+        getMemoryEntries(identityFilter),
+        getMemoryStats(),
+      ]);
+      if (entriesRes.success) setEntries(entriesRes.files);
+      else setError(entriesRes.error || 'Failed to load entries');
+      if (statsRes.success) setStats(statsRes);
+    } catch {
       setError('Failed to load memory data');
     } finally {
       setIsLoading(false);
     }
   };
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  useEffect(() => { loadData(); }, [modeFilter]);
 
-  // Load file content when selected
-  const loadFileContent = async (path: string) => {
-    setLoadingContent(true);
-    try {
-      const response = await readMemoryFile(path);
-      if (response.success && response.content !== undefined) {
-        setFileContent(response.content);
-        setSelectedFile(path);
-      } else {
-        setError(response.error || 'Failed to read file');
-      }
-    } catch {
-      setError('Failed to load file');
-    } finally {
-      setLoadingContent(false);
-    }
-  };
-
-  // Load daily log by date
+  // Load memories for a specific date
   const loadDailyLogByDate = async (date: string) => {
     setLoadingContent(true);
     setSelectedDate(date);
     try {
-      const response = await getDailyLog(date, modeFilter === 'safemode' ? 'safemode' : undefined);
+      const response = await getDailyLog(date, identityFilter);
       if (response.success) {
-        setFileContent(response.content || '');
-        setSelectedFile(response.path);
+        setSelectedMemories(response.memories);
+        setSelectedLabel(`Daily Log: ${date}`);
       } else {
-        setFileContent('');
-        setSelectedFile(`${date}.md`);
+        setSelectedMemories([]);
+        setSelectedLabel(`Daily Log: ${date}`);
       }
     } catch {
-      setFileContent('');
-      setSelectedFile(`${date}.md`);
+      setSelectedMemories([]);
+      setSelectedLabel(`Daily Log: ${date}`);
     } finally {
       setLoadingContent(false);
     }
   };
 
-  // Handle reindex
-  const handleReindex = async () => {
+  // Load long-term memories
+  const loadLongTerm = async () => {
+    setLoadingContent(true);
     try {
-      const response = await reindexMemory();
+      const response = await getLongTermMemories(identityFilter);
       if (response.success) {
-        await loadData();
-      } else {
-        setError(response.error || 'Reindex failed');
+        setSelectedMemories(response.memories);
+        setSelectedLabel('Long-term Memory');
       }
     } catch {
-      setError('Reindex request failed');
+      setSelectedMemories([]);
+    } finally {
+      setLoadingContent(false);
     }
   };
 
-  // Filter files by mode
-  const filteredFiles = useMemo(() => {
-    if (modeFilter === 'all') return files;
-    if (modeFilter === 'safemode') return files.filter((f) => f.identity_id === 'safemode');
-    // "standard" = everything that's NOT safemode
-    return files.filter((f) => f.identity_id !== 'safemode');
-  }, [files, modeFilter]);
+  // Handle clicking an entry in the browse list
+  const handleEntryClick = (entry: MemoryEntry) => {
+    if (entry.memory_type === 'long_term') {
+      loadLongTerm();
+    } else if (entry.date) {
+      loadDailyLogByDate(entry.date);
+    }
+  };
 
-  // Group files by type
-  const groupedFiles = useMemo(() => {
-    const longTerm = filteredFiles.filter((f) => f.file_type === 'long_term');
-    const dailyLogs = filteredFiles.filter((f) => f.file_type === 'daily_log');
-    const other = filteredFiles.filter((f) => f.file_type === 'unknown');
-    return { longTerm, dailyLogs, other };
-  }, [filteredFiles]);
+  // Filter entries by mode
+  const filteredEntries = useMemo(() => {
+    if (modeFilter === 'all') return entries;
+    if (modeFilter === 'safemode') return entries.filter((e) => e.identity_id === 'safemode');
+    return entries.filter((e) => e.identity_id !== 'safemode');
+  }, [entries, modeFilter]);
 
-  if (isLoading && files.length === 0) {
+  const groupedEntries = useMemo(() => {
+    const longTerm = filteredEntries.filter((e) => e.memory_type === 'long_term');
+    const dailyLogs = filteredEntries.filter((e) => e.memory_type === 'daily_log');
+    return { longTerm, dailyLogs };
+  }, [filteredEntries]);
+
+  if (isLoading && entries.length === 0) {
     return (
       <div className="p-8 flex items-center justify-center">
         <div className="flex items-center gap-3">
           <div className="w-6 h-6 border-2 border-stark-500 border-t-transparent rounded-full animate-spin" />
           <span className="text-slate-400">Loading memories...</span>
+        </div>
+      </div>
+    );
+  }
+
+  const tabs: { key: ViewMode; icon: React.ReactNode; label: string }[] = [
+    { key: 'browse', icon: <FolderOpen className="w-4 h-4 inline mr-1.5" />, label: 'Browse' },
+    { key: 'calendar', icon: <Calendar className="w-4 h-4 inline mr-1.5" />, label: 'Calendar' },
+    { key: 'search', icon: <Search className="w-4 h-4 inline mr-1.5" />, label: 'Search' },
+    { key: 'graph', icon: <Share2 className="w-4 h-4 inline mr-1.5" />, label: 'Graph' },
+    { key: 'stats', icon: <BarChart3 className="w-4 h-4 inline mr-1.5" />, label: 'Stats' },
+  ];
+
+  // Graph tab takes full width
+  if (viewMode === 'graph') {
+    return (
+      <div className="h-full flex flex-col">
+        {/* Header */}
+        <div className="px-8 pt-8 pb-4">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h1 className="text-2xl font-bold text-white mb-1">Memory System</h1>
+              <p className="text-slate-400 text-sm">
+                {stats ? `${stats.total_memories} memories | ${stats.daily_log_count} daily | ${stats.long_term_count} long-term` : 'Unified DB-backed memory system'}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-4 border-b border-slate-700 pb-3">
+            <div className="flex gap-1">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => setViewMode(tab.key)}
+                  className={`px-3 py-1.5 rounded text-sm transition-colors ${
+                    viewMode === tab.key ? 'bg-stark-500 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                  }`}
+                >
+                  {tab.icon}
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="flex-1 min-h-0">
+          <Suspense fallback={
+            <div className="flex items-center justify-center h-64">
+              <div className="w-6 h-6 border-2 border-stark-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          }>
+            <MemoryGraph />
+          </Suspense>
         </div>
       </div>
     );
@@ -642,316 +669,226 @@ export default function MemoryBrowser() {
       <div className="mb-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-2xl font-bold text-white mb-1">Memory Browser</h1>
+            <h1 className="text-2xl font-bold text-white mb-1">Memory System</h1>
             <p className="text-slate-400 text-sm">
-              {stats ? (
-                <>
-                  {stats.total_files} files | {stats.daily_log_count} daily logs | {stats.long_term_count} long-term
-                  {stats.date_range && (
-                    <span className="ml-2 text-slate-500">
-                      ({stats.date_range.oldest} to {stats.date_range.newest})
-                    </span>
-                  )}
-                </>
-              ) : (
-                'QMD Markdown-based memory system'
-              )}
+              {stats ? `${stats.total_memories} memories | ${stats.daily_log_count} daily | ${stats.long_term_count} long-term` : 'Unified DB-backed memory system'}
             </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={handleReindex}
-              className="flex items-center gap-2"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Reindex
-            </Button>
           </div>
         </div>
 
-        {/* View mode tabs */}
         <div className="flex items-center gap-4 border-b border-slate-700 pb-3">
           <div className="flex gap-1">
-            <button
-              onClick={() => setViewMode('files')}
-              className={`px-3 py-1.5 rounded text-sm transition-colors ${
-                viewMode === 'files'
-                  ? 'bg-stark-500 text-white'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-700'
-              }`}
-            >
-              <FolderOpen className="w-4 h-4 inline mr-1.5" />
-              Memories
-            </button>
-            <button
-              onClick={() => setViewMode('calendar')}
-              className={`px-3 py-1.5 rounded text-sm transition-colors ${
-                viewMode === 'calendar'
-                  ? 'bg-stark-500 text-white'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-700'
-              }`}
-            >
-              <Calendar className="w-4 h-4 inline mr-1.5" />
-              Calendar
-            </button>
-            <button
-              onClick={() => setViewMode('search')}
-              className={`px-3 py-1.5 rounded text-sm transition-colors ${
-                viewMode === 'search'
-                  ? 'bg-stark-500 text-white'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-700'
-              }`}
-            >
-              <Search className="w-4 h-4 inline mr-1.5" />
-              Search
-            </button>
+            {tabs.map((tab) => (
+              <button
+                key={tab.key}
+                onClick={() => setViewMode(tab.key)}
+                className={`px-3 py-1.5 rounded text-sm transition-colors ${
+                  viewMode === tab.key ? 'bg-stark-500 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                }`}
+              >
+                {tab.icon}
+                {tab.label}
+              </button>
+            ))}
           </div>
 
           {/* Mode filter */}
-          <div className="flex items-center gap-2 ml-auto">
-            <User className="w-4 h-4 text-slate-500" />
-            <select
-              value={modeFilter}
-              onChange={(e) => setModeFilter(e.target.value)}
-              className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-white"
-            >
-              <option value="all">All Memories</option>
-              <option value="standard">Standard</option>
-              <option value="safemode">Safe Mode</option>
-            </select>
-          </div>
+          {viewMode !== 'stats' && (
+            <div className="flex items-center gap-2 ml-auto">
+              <User className="w-4 h-4 text-slate-500" />
+              <select
+                value={modeFilter}
+                onChange={(e) => setModeFilter(e.target.value)}
+                className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-white"
+              >
+                <option value="all">All Memories</option>
+                <option value="standard">Standard</option>
+                <option value="safemode">Safe Mode</option>
+              </select>
+            </div>
+          )}
         </div>
       </div>
 
       {error && (
-        <div className="mb-6 bg-red-500/20 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg">
-          {error}
-          <button onClick={() => setError(null)} className="ml-2 underline">
-            Dismiss
-          </button>
+        <div className="mb-6 bg-red-500/20 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg flex items-center justify-between">
+          <span>{error}</span>
+          <div className="flex items-center gap-3">
+            <button onClick={loadData} className="text-red-300 hover:text-white text-sm font-medium">Retry</button>
+            <button onClick={() => setError(null)} className="text-red-300/60 hover:text-red-300 text-sm">Dismiss</button>
+          </div>
         </div>
       )}
 
-      {/* Main content area */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left panel: File list / Calendar / Search */}
-        <div className="lg:col-span-1">
-          {viewMode === 'files' && (
-            <div className="space-y-4">
-              {/* Long-term memories */}
-              {groupedFiles.longTerm.length > 0 && (
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <Brain className="w-4 h-4 text-purple-400" />
-                    <span className="text-sm font-medium text-purple-400">Long-term Memory</span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setAddEntryType('long_term')}
-                      className="ml-auto text-slate-400 hover:text-white"
-                    >
-                      <Plus className="w-3 h-3" />
-                    </Button>
-                  </div>
-                  <div className="space-y-1">
-                    {groupedFiles.longTerm.map((file) => (
-                      <button
-                        key={file.path}
-                        onClick={() => loadFileContent(file.path)}
-                        className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${
-                          selectedFile === file.path
-                            ? 'bg-purple-500/20 text-purple-300'
-                            : 'text-slate-300 hover:bg-slate-700'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <FileTypeIcon type={file.file_type} />
-                          <span className="truncate">{file.name}</span>
-                          <ModeBadge identityId={file.identity_id} />
-                        </div>
-                        {file.identity_id && file.identity_id !== 'safemode' && (
-                          <span className="text-xs text-slate-500 ml-6">{identityLabel(file.identity_id)}</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+      {/* Stats tab (full width) */}
+      {viewMode === 'stats' && (
+        <StatsView stats={stats} />
+      )}
 
-              {/* Daily logs */}
-              {groupedFiles.dailyLogs.length > 0 && (
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <Calendar className="w-4 h-4 text-blue-400" />
-                    <span className="text-sm font-medium text-blue-400">Daily Logs</span>
-                    <span className="text-xs text-slate-500">({groupedFiles.dailyLogs.length})</span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setAddEntryType('daily')}
-                      className="ml-auto text-slate-400 hover:text-white"
-                    >
-                      <Plus className="w-3 h-3" />
-                    </Button>
-                  </div>
-                  <div className="space-y-1 max-h-96 overflow-y-auto">
-                    {groupedFiles.dailyLogs.map((file) => (
-                      <button
-                        key={file.path}
-                        onClick={() => loadFileContent(file.path)}
-                        className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${
-                          selectedFile === file.path
-                            ? 'bg-blue-500/20 text-blue-300'
-                            : 'text-slate-300 hover:bg-slate-700'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <FileTypeIcon type={file.file_type} />
-                          <span>{file.date}</span>
-                          <ModeBadge identityId={file.identity_id} />
-                          <span className="text-xs text-slate-500 ml-auto">
-                            {file.size > 1024
-                              ? `${(file.size / 1024).toFixed(1)}KB`
-                              : `${file.size}B`}
-                          </span>
-                        </div>
-                        {file.identity_id && file.identity_id !== 'safemode' && (
-                          <span className="text-xs text-slate-500 ml-6">{identityLabel(file.identity_id)}</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {filteredFiles.length === 0 && (
-                <Card>
-                  <CardContent className="text-center py-8">
-                    <FileText className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-                    <p className="text-slate-400">No memory files yet</p>
-                    <p className="text-slate-500 text-sm mt-1">
-                      Memories will appear here as they are created
-                    </p>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
-          )}
-
-          {viewMode === 'calendar' && (
-            <div className="space-y-4">
-              <CalendarView
-                files={filteredFiles}
-                selectedDate={selectedDate}
-                onSelectDate={loadDailyLogByDate}
-              />
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setAddEntryType('daily')}
-                className="w-full flex items-center justify-center gap-2"
-              >
-                <Plus className="w-4 h-4" />
-                Add to Today's Log
-              </Button>
-            </div>
-          )}
-
-          {viewMode === 'search' && (
-            <SearchView onSelectFile={loadFileContent} />
-          )}
-
-          {/* Stats summary */}
-          {stats && (
-            <Card className="mt-4">
-              <CardContent className="py-3">
-                <div className="flex items-center gap-2 text-sm text-slate-400 mb-2">
-                  <BarChart3 className="w-4 h-4" />
-                  <span>Memory Stats</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-xs">
+      {/* Browse/Calendar/Search layouts (two column) */}
+      {viewMode !== 'stats' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Left panel */}
+          <div className="lg:col-span-1">
+            {viewMode === 'browse' && (
+              <div className="space-y-4">
+                {/* Long-term memories */}
+                {groupedEntries.longTerm.length > 0 && (
                   <div>
-                    <span className="text-slate-500">Files:</span>{' '}
-                    <span className="text-white">{stats.total_files}</span>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Brain className="w-4 h-4 text-purple-400" />
+                      <span className="text-sm font-medium text-purple-400">Long-term Memory</span>
+                      <Button variant="ghost" size="sm" onClick={() => setAddEntryType('long_term')} className="ml-auto text-slate-400 hover:text-white">
+                        <Plus className="w-3 h-3" />
+                      </Button>
+                    </div>
+                    <div className="space-y-1">
+                      {groupedEntries.longTerm.map((entry, i) => (
+                        <button
+                          key={`lt-${i}`}
+                          onClick={() => handleEntryClick(entry)}
+                          className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${
+                            selectedLabel === 'Long-term Memory' ? 'bg-purple-500/20 text-purple-300' : 'text-slate-300 hover:bg-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <FileTypeIcon type="long_term" />
+                            <span>Long-term ({entry.entry_count} entries)</span>
+                            <ModeBadge identityId={entry.identity_id} />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
                   </div>
+                )}
+
+                {/* Daily logs */}
+                {groupedEntries.dailyLogs.length > 0 && (
                   <div>
-                    <span className="text-slate-500">Daily:</span>{' '}
-                    <span className="text-blue-400">{stats.daily_log_count}</span>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Calendar className="w-4 h-4 text-blue-400" />
+                      <span className="text-sm font-medium text-blue-400">Daily Logs</span>
+                      <span className="text-xs text-slate-500">({groupedEntries.dailyLogs.length})</span>
+                      <Button variant="ghost" size="sm" onClick={() => setAddEntryType('daily')} className="ml-auto text-slate-400 hover:text-white">
+                        <Plus className="w-3 h-3" />
+                      </Button>
+                    </div>
+                    <div className="space-y-1 max-h-96 overflow-y-auto">
+                      {groupedEntries.dailyLogs.map((entry) => (
+                        <button
+                          key={entry.date}
+                          onClick={() => handleEntryClick(entry)}
+                          className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${
+                            selectedLabel === `Daily Log: ${entry.date}` ? 'bg-blue-500/20 text-blue-300' : 'text-slate-300 hover:bg-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <FileTypeIcon type="daily_log" />
+                            <span>{entry.date}</span>
+                            <ModeBadge identityId={entry.identity_id} />
+                            <span className="text-xs text-slate-500 ml-auto">{entry.entry_count} entries</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
                   </div>
+                )}
+
+                {filteredEntries.length === 0 && (
+                  <Card>
+                    <CardContent className="text-center py-8">
+                      <Brain className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                      <p className="text-slate-400">No memories yet</p>
+                      <p className="text-slate-500 text-sm mt-1">Memories will appear here as they are created</p>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            )}
+
+            {viewMode === 'calendar' && (
+              <div className="space-y-4">
+                <CalendarView entries={filteredEntries} selectedDate={selectedDate} onSelectDate={loadDailyLogByDate} />
+                <Button variant="secondary" size="sm" onClick={() => setAddEntryType('daily')} className="w-full flex items-center justify-center gap-2">
+                  <Plus className="w-4 h-4" />
+                  Add to Today's Log
+                </Button>
+              </div>
+            )}
+
+            {viewMode === 'search' && (
+              <SearchView onSelectMemory={(id) => {
+                // For now, just log. Could expand to show the specific memory.
+                console.log('Selected memory:', id);
+              }} />
+            )}
+
+            {/* Stats summary (below list/calendar) */}
+            {viewMode !== 'search' && stats && (
+              <Card className="mt-4">
+                <CardContent className="py-3">
+                  <div className="flex items-center gap-2 text-sm text-slate-400 mb-2">
+                    <BarChart3 className="w-4 h-4" />
+                    <span>Quick Stats</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <span className="text-slate-500">Total:</span>{' '}
+                      <span className="text-white">{stats.total_memories}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Daily:</span>{' '}
+                      <span className="text-blue-400">{stats.daily_log_count}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Long-term:</span>{' '}
+                      <span className="text-purple-400">{stats.long_term_count}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Identities:</span>{' '}
+                      <span className="text-white">{stats.identity_count}</span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+
+          {/* Right panel: Memory viewer */}
+          <div className="lg:col-span-2">
+            <Card className="h-full min-h-[400px]">
+              <CardContent>
+                {loadingContent ? (
+                  <div className="flex items-center justify-center h-64">
+                    <div className="w-6 h-6 border-2 border-stark-500 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                ) : selectedMemories.length > 0 ? (
                   <div>
-                    <span className="text-slate-500">Long-term:</span>{' '}
-                    <span className="text-purple-400">{stats.long_term_count}</span>
+                    <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-700">
+                      <FileTypeIcon type={selectedLabel?.startsWith('Long') ? 'long_term' : 'daily_log'} />
+                      <div>
+                        <h2 className="text-lg font-medium text-white">{selectedLabel}</h2>
+                        <span className="text-sm text-slate-400">{selectedMemories.length} entries</span>
+                      </div>
+                    </div>
+                    <div className="max-h-[600px] overflow-y-auto space-y-3">
+                      {selectedMemories.map((item) => (
+                        <MemoryItemView key={item.id} item={item} />
+                      ))}
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-slate-500">Identities:</span>{' '}
-                    <span className="text-white">{stats.identity_count}</span>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-64 text-slate-500">
+                    <Brain className="w-12 h-12 mb-3 opacity-50" />
+                    <p>Select a memory group to view entries</p>
+                    <p className="text-sm mt-1">Or use the calendar to browse daily logs</p>
                   </div>
-                </div>
+                )}
               </CardContent>
             </Card>
-          )}
+          </div>
         </div>
-
-        {/* Right panel: Content viewer */}
-        <div className="lg:col-span-2">
-          <Card className="h-full min-h-[400px]">
-            <CardContent>
-              {loadingContent ? (
-                <div className="flex items-center justify-center h-64">
-                  <div className="w-6 h-6 border-2 border-stark-500 border-t-transparent rounded-full animate-spin" />
-                </div>
-              ) : selectedFile && fileContent !== null ? (
-                <div>
-                  {/* File header */}
-                  <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-700">
-                    <FileTypeIcon
-                      type={
-                        selectedFile.includes('MEMORY.md') ? 'long_term' : 'daily_log'
-                      }
-                    />
-                    <div>
-                      <h2 className="text-lg font-medium text-white">{selectedFile}</h2>
-                      {selectedDate && (
-                        <span className="text-sm text-slate-400 flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
-                          {new Date(selectedDate).toLocaleDateString('en-US', {
-                            weekday: 'long',
-                            year: 'numeric',
-                            month: 'long',
-                            day: 'numeric',
-                          })}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Content */}
-                  {fileContent ? (
-                    <div className="max-h-[600px] overflow-y-auto">
-                      <MarkdownViewer content={fileContent} />
-                    </div>
-                  ) : (
-                    <div className="text-center py-12 text-slate-500">
-                      <FileText className="w-10 h-10 mx-auto mb-3 opacity-50" />
-                      <p>No content yet</p>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center h-64 text-slate-500">
-                  <FileText className="w-12 h-12 mb-3 opacity-50" />
-                  <p>Select a file to view its contents</p>
-                  <p className="text-sm mt-1">
-                    Or use the calendar to browse daily logs
-                  </p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+      )}
 
       {/* Add entry modal */}
       {addEntryType && (
@@ -961,9 +898,9 @@ export default function MemoryBrowser() {
           onClose={() => setAddEntryType(null)}
           onSuccess={() => {
             loadData();
-            // Reload current file if it's the same type
-            if (selectedFile) {
-              loadFileContent(selectedFile);
+            if (selectedLabel) {
+              if (selectedLabel.startsWith('Long')) loadLongTerm();
+              else if (selectedDate) loadDailyLogByDate(selectedDate);
             }
           }}
         />

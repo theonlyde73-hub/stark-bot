@@ -15,7 +15,6 @@ use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::models::session_message::MessageRole as DbMessageRole;
 use crate::models::{AgentSettings, CompletionStatus, SessionScope, SpecialRoleGrants, DEFAULT_MAX_TOOL_ITERATIONS};
-use crate::qmd_memory::MemoryStore;
 use crate::telemetry::{
     self, Rollout, RolloutConfig, RolloutManager, SpanCollector, SpanType,
     RewardEmitter, TelemetryStore, Watchdog, WatchdogConfig, ResourceManager,
@@ -50,10 +49,10 @@ pub struct MessageDispatcher {
     wallet_provider: Option<Arc<dyn crate::wallet::WalletProvider>>,
     context_manager: ContextManager,
     archetype_registry: ArchetypeRegistry,
-    /// Memory configuration (simplified - no longer using memory markers)
+    /// Memory configuration
     memory_config: MemoryConfig,
-    /// QMD Memory store for file-based markdown memory system
-    memory_store: Option<Arc<MemoryStore>>,
+    /// Hybrid search engine (FTS + vector + graph)
+    hybrid_search: Option<Arc<crate::memory::HybridSearchEngine>>,
     /// Notes store for Obsidian-compatible notes with FTS5
     notes_store: Option<Arc<NoteStore>>,
     /// SubAgent manager for spawning background AI agents
@@ -123,19 +122,6 @@ impl MessageDispatcher {
     ) -> Self {
         let memory_config = MemoryConfig::from_env();
 
-        // Create QMD memory store (before SubAgentManager so we can pass it through)
-        let memory_dir = std::path::PathBuf::from(memory_config.memory_dir.clone());
-        let memory_store = match MemoryStore::new(memory_dir, &memory_config.memory_db_path()) {
-            Ok(store) => {
-                log::info!("[DISPATCHER] QMD MemoryStore initialized at {}", memory_config.memory_dir);
-                Some(Arc::new(store))
-            }
-            Err(e) => {
-                log::error!("[DISPATCHER] Failed to create MemoryStore: {}", e);
-                None
-            }
-        };
-
         // Create NoteStore for Obsidian-compatible notes
         let notes_config = NotesConfig::from_env();
         let notes_dir = std::path::PathBuf::from(notes_config.notes_dir.clone());
@@ -163,17 +149,22 @@ impl MessageDispatcher {
         if let Some(ref registry) = skill_registry {
             subagent_manager.set_skill_registry(registry.clone());
         }
-        if let Some(ref store) = memory_store {
-            subagent_manager.set_memory_store(store.clone());
-        }
         log::info!("[DISPATCHER] SubAgentManager initialized");
 
-        // Create context manager and link memory store to it
+        // Create context manager
         let mut context_manager = ContextManager::new(db.clone())
             .with_memory_config(memory_config.clone());
-        if let Some(ref store) = memory_store {
-            context_manager = context_manager.with_memory_store(store.clone());
-            log::info!("[DISPATCHER] Memory store linked to context manager");
+
+        // Apply compaction thresholds from bot settings (if available)
+        if let Ok(bot_settings) = db.get_bot_settings() {
+            use crate::context::ThreeTierCompactionConfig;
+            let compaction_cfg = ThreeTierCompactionConfig {
+                background_threshold: bot_settings.compaction_background_threshold,
+                aggressive_threshold: bot_settings.compaction_aggressive_threshold,
+                emergency_threshold: bot_settings.compaction_emergency_threshold,
+                ..ThreeTierCompactionConfig::default()
+            };
+            context_manager = context_manager.with_compaction_config(compaction_cfg);
         }
 
         // Initialize telemetry subsystem
@@ -194,7 +185,7 @@ impl MessageDispatcher {
             context_manager,
             archetype_registry: ArchetypeRegistry::new(),
             memory_config,
-            memory_store,
+            hybrid_search: None,
             notes_store,
             subagent_manager: Some(subagent_manager),
             skill_registry,
@@ -244,6 +235,12 @@ impl MessageDispatcher {
         self
     }
 
+    /// Set the hybrid search engine
+    pub fn with_hybrid_search(mut self, engine: Arc<crate::memory::HybridSearchEngine>) -> Self {
+        self.hybrid_search = Some(engine);
+        self
+    }
+
     /// Set a mock AI client for integration tests (bypasses real AI API)
     #[cfg(test)]
     pub fn with_mock_ai_client(mut self, client: crate::ai::MockAiClient) -> Self {
@@ -262,12 +259,6 @@ impl MessageDispatcher {
         let execution_tracker = Arc::new(ExecutionTracker::new(broadcaster.clone()));
         let memory_config = MemoryConfig::from_env();
 
-        // Create QMD memory store
-        let memory_dir = std::path::PathBuf::from(memory_config.memory_dir.clone());
-        let memory_store = MemoryStore::new(memory_dir, &memory_config.memory_db_path())
-            .ok()
-            .map(Arc::new);
-
         // Create NoteStore
         let notes_config = NotesConfig::from_env();
         let notes_dir = std::path::PathBuf::from(notes_config.notes_dir.clone());
@@ -275,12 +266,9 @@ impl MessageDispatcher {
             .ok()
             .map(Arc::new);
 
-        // Create context manager and link memory store to it
-        let mut context_manager = ContextManager::new(db.clone())
+        // Create context manager
+        let context_manager = ContextManager::new(db.clone())
             .with_memory_config(memory_config.clone());
-        if let Some(ref store) = memory_store {
-            context_manager = context_manager.with_memory_store(store.clone());
-        }
 
         let telemetry_store = Arc::new(TelemetryStore::new(db.clone()));
         let rollout_manager = Arc::new(RolloutManager::new(db.clone()));
@@ -298,7 +286,7 @@ impl MessageDispatcher {
             context_manager,
             archetype_registry: ArchetypeRegistry::new(),
             memory_config,
-            memory_store,
+            hybrid_search: None,
             notes_store,
             subagent_manager: None, // No tools = no subagent support
             skill_registry: None,   // No skills without tools
@@ -314,11 +302,6 @@ impl MessageDispatcher {
             #[cfg(test)]
             mock_ai_client: None,
         }
-    }
-
-    /// Get the QMD MemoryStore (if available)
-    pub fn memory_store(&self) -> Option<Arc<MemoryStore>> {
-        self.memory_store.clone()
     }
 
     /// Get the NoteStore (if available)
@@ -1019,10 +1002,10 @@ impl MessageDispatcher {
             log::debug!("[DISPATCH] WalletProvider attached to tool context ({})", wallet_provider.mode_name());
         }
 
-        // Add MemoryStore for QMD memory tools (memory_search, memory_read)
-        if let Some(ref store) = self.memory_store {
-            tool_context = tool_context.with_memory_store(store.clone());
-            log::debug!("[DISPATCH] MemoryStore attached to tool context");
+        // Add HybridSearchEngine for hybrid memory search (FTS + vector + graph)
+        if let Some(ref engine) = self.hybrid_search {
+            tool_context = tool_context.with_hybrid_search(engine.clone());
+            log::debug!("[DISPATCH] HybridSearchEngine attached to tool context");
         }
 
         // Add NoteStore for notes tools

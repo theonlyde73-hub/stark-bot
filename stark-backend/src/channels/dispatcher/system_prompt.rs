@@ -165,68 +165,70 @@ impl MessageDispatcher {
             ));
         }
 
-        // QMD Memory System: Read from markdown files
-        // In safe mode, use segregated "safemode" memory (memory/safemode/MEMORY.md)
-        // to prevent leaking sensitive data from admin sessions to external users.
-        // No daily log or global memory in safe mode — only curated long-term memory.
-        if let Some(ref memory_store) = self.memory_store {
+        // Memory System: Active retrieval from DB
+        // In safe mode, only show curated safemode memories.
+        // In standard mode, show top long-term memories + today's log + query-relevant results.
+        {
+            let mem_identity: Option<&str> = if is_safe_mode { Some("safemode") } else { Some(identity_id) };
+
             if is_safe_mode {
-                // Safe mode: only inject curated safemode memory
-                if let Ok(safe_memory) = memory_store.get_long_term(Some("safemode")) {
-                    if !safe_memory.is_empty() {
+                // Safe mode: only inject curated safemode long-term memories
+                if let Ok(memories) = self.db.get_long_term_memories(Some("safemode"), 10) {
+                    if !memories.is_empty() {
                         prompt.push_str("## Memory\n");
-                        let content = if safe_memory.len() > 2000 {
-                            format!("...\n{}", &safe_memory[safe_memory.len() - 2000..])
-                        } else {
-                            safe_memory
-                        };
-                        prompt.push_str(&content);
+                        let text: String = memories.iter()
+                            .map(|m| m.content.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n\n");
+                        prompt.push_str(&truncate_tail_chars(&text, 2000));
                         prompt.push_str("\n\n");
                     }
                 }
             } else {
-                // Standard mode: full memory access
-                // Add long-term memory (MEMORY.md)
-                if let Ok(long_term) = memory_store.get_long_term(Some(identity_id)) {
-                    if !long_term.is_empty() {
-                        prompt.push_str("## Long-Term Memory\n");
-                        // Truncate if too long (keep last 2000 chars for recency)
-                        let content = if long_term.len() > 2000 {
-                            format!("...\n{}", &long_term[long_term.len() - 2000..])
-                        } else {
-                            long_term
-                        };
-                        prompt.push_str(&content);
-                        prompt.push_str("\n\n");
-                    }
-                }
+                // Standard mode: today's log + relevant memories via search
 
-                // Add today's activity (daily log)
-                if let Ok(daily_log) = memory_store.get_daily_log(Some(identity_id)) {
-                    if !daily_log.is_empty() {
+                // Today's activity log
+                if let Ok(entries) = self.db.get_today_daily_log(Some(identity_id), 20) {
+                    if !entries.is_empty() {
                         prompt.push_str("## Today's Activity\n");
-                        // Truncate if too long
-                        let content = if daily_log.len() > 1000 {
-                            format!("...\n{}", &daily_log[daily_log.len() - 1000..])
-                        } else {
-                            daily_log
-                        };
-                        prompt.push_str(&content);
+                        let text: String = entries.iter()
+                            .map(|m| m.content.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n\n");
+                        prompt.push_str(&truncate_tail_chars(&text, 1000));
                         prompt.push_str("\n\n");
                     }
                 }
 
-                // Also check global (non-identity) memories
-                if let Ok(global_long_term) = memory_store.get_long_term(None) {
-                    if !global_long_term.is_empty() {
-                        prompt.push_str("## Global Memory\n");
-                        let content = if global_long_term.len() > 1500 {
-                            format!("...\n{}", &global_long_term[global_long_term.len() - 1500..])
-                        } else {
-                            global_long_term
-                        };
-                        prompt.push_str(&content);
-                        prompt.push_str("\n\n");
+                // Active retrieval: FTS search using the user's message for relevant memories
+                let user_query = &message.text;
+                if !user_query.trim().is_empty() {
+                    // Build FTS query from significant words, filtering out stop words
+                    let stop_words = stop_words::get(stop_words::LANGUAGE::English);
+                    let fts_query: String = user_query
+                        .split_whitespace()
+                        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+                        .filter(|w| w.len() >= 2 && !stop_words.contains(&w.as_str()))
+                        .take(8)
+                        .collect::<Vec<_>>()
+                        .join(" OR ");
+                    if !fts_query.is_empty() {
+                        if let Ok(results) = self.db.search_memories_fts(&fts_query, mem_identity, 15) {
+                            if !results.is_empty() {
+                                prompt.push_str("## Relevant Memories\n");
+                                prompt.push_str("The following memories may be relevant to this conversation.\n");
+                                prompt.push_str("Use memory_read/memory_search tools to dig deeper if needed.\n\n");
+                                for (i, (mem, _rank)) in results.iter().enumerate() {
+                                    let snippet: String = mem.content.chars().take(200).collect();
+                                    prompt.push_str(&format!(
+                                        "[{}] (#{}, {}, importance: {}) {}\n",
+                                        i + 1, mem.id, mem.memory_type, mem.importance,
+                                        snippet.replace('\n', " ")
+                                    ));
+                                }
+                                prompt.push('\n');
+                            }
+                        }
                     }
                 }
             }
@@ -244,8 +246,15 @@ impl MessageDispatcher {
             }
         }
 
-        // Memory tool instructions
-        prompt.push_str("## Memory\nUse `memory_search` to find relevant memories. Use `memory_read` to read specific memory files.\n\n");
+        // Memory tool instructions - give agent clear, proactive guidance
+        prompt.push_str("## Memory System\n");
+        prompt.push_str("Your long-term memory, today's activity log, and global memory are shown above (if any exist).\n");
+        prompt.push_str("Use these tools to manage your knowledge:\n\n");
+        prompt.push_str("- **`memory_search`** — Search past memories. Use BEFORE answering questions about the user, recalling past events, or checking if you already know something. Try `mode: \"hybrid\"` for semantic matching.\n");
+        prompt.push_str("- **`memory_read`** — Read specific memory files. Use `list: true` to see all files, `type: \"daily\"` for today's log, `type: \"long_term\"` for persistent facts.\n");
+        prompt.push_str("- **`memory_graph`** — Explore connections between memories. Use `action: \"neighbors\"` to find related memories, `action: \"path\"` to trace how two memories connect.\n");
+        prompt.push_str("- **`memory_associate`** — Link memories together. After learning something that relates to existing knowledge, create associations (types: related, caused_by, contradicts, supersedes, part_of, references, temporal).\n\n");
+        prompt.push_str("**Guidelines:** Proactively search memory when a user references past conversations or preferences. When you learn important new facts, they will be saved automatically. If you find contradictory information, note it.\n\n");
 
         // Add context
         let channel_info = match (&message.chat_name, message.channel_type.as_str()) {
@@ -259,4 +268,16 @@ impl MessageDispatcher {
 
         prompt
     }
+}
+
+/// Truncate a string to keep the last `max_chars` characters, respecting UTF-8
+/// char boundaries. Prepends "...\n" if truncation occurred.
+fn truncate_tail_chars(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        return s.to_string();
+    }
+    let skip = char_count - max_chars;
+    let truncated: String = s.chars().skip(skip).collect();
+    format!("...\n{}", truncated)
 }

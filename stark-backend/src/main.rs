@@ -21,10 +21,10 @@ mod integrations;
 mod middleware;
 mod models;
 mod notes;
-mod qmd_memory;
 mod scheduler;
 mod skills;
 mod tools;
+mod memory;
 mod siwa;
 mod wallet;
 mod x402;
@@ -81,6 +81,8 @@ pub struct AppState {
     pub telemetry_store: Arc<telemetry::TelemetryStore>,
     /// Resource manager for versioned prompts and configs
     pub resource_manager: Arc<telemetry::ResourceManager>,
+    /// Hybrid search engine (FTS + vector + graph)
+    pub hybrid_search: Option<Arc<memory::HybridSearchEngine>>,
 }
 
 /// Auto-retrieve backup from keystore on fresh instance
@@ -980,6 +982,137 @@ fn start_service_binary(exe_path: &std::path::Path, name: &str, port: u16, envs:
     }
 }
 
+/// Migrate QMD markdown memory files into the DB `memories` table.
+/// Parses identity from subdirectory, date from filename, and splits entries at `## HH:MM` headers.
+fn migrate_qmd_memories_to_db(
+    db: &db::Database,
+    memory_dir: &std::path::Path,
+) -> Result<usize, String> {
+    use std::fs;
+
+    // Inline list: recursively find all .md files in the memory directory
+    fn list_md_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
+        if !dir.exists() { return Ok(()); }
+        for entry in fs::read_dir(dir)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                list_md_files(&path, out)?;
+            } else if path.extension().map(|e| e == "md").unwrap_or(false) {
+                out.push(path);
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    list_md_files(memory_dir, &mut files)
+        .map_err(|e| format!("Failed to list memory files: {}", e))?;
+
+    if files.is_empty() {
+        return Ok(0);
+    }
+
+    let mut count = 0usize;
+
+    for file_path in &files {
+        let rel = file_path
+            .strip_prefix(memory_dir)
+            .unwrap_or(file_path)
+            .to_string_lossy()
+            .to_string();
+
+        let content = match fs::read_to_string(file_path) {
+            Ok(c) if !c.trim().is_empty() => c,
+            _ => continue,
+        };
+
+        // Determine identity_id from subdirectory (e.g. "user123/MEMORY.md" -> Some("user123"))
+        let parts: Vec<&str> = rel.split('/').collect();
+        let (identity_id, filename) = if parts.len() >= 2 {
+            (Some(parts[0].to_string()), parts.last().unwrap().to_string())
+        } else {
+            (None, parts[0].to_string())
+        };
+
+        let identity_ref = identity_id.as_deref();
+
+        // Determine memory_type and log_date from filename
+        let (memory_type, log_date) = if filename == "MEMORY.md" {
+            ("long_term", None)
+        } else if let Some(date) = filename.strip_suffix(".md")
+            .and_then(|stem| chrono::NaiveDate::parse_from_str(stem, "%Y-%m-%d").ok()) {
+            ("daily_log", Some(date.format("%Y-%m-%d").to_string()))
+        } else {
+            // Unknown file type, skip
+            continue;
+        };
+
+        // Split content at "## HH:MM" timestamp headers into individual entries
+        let entries = split_qmd_entries(&content);
+
+        for entry in &entries {
+            if entry.trim().is_empty() {
+                continue;
+            }
+            if let Err(e) = db.insert_memory(
+                memory_type,
+                entry,
+                None,                         // category
+                None,                         // tags
+                5,                            // importance (default)
+                identity_ref,
+                None,                         // session_id
+                None,                         // entity_type
+                None,                         // entity_name
+                Some("qmd_migration"),        // source_type
+                log_date.as_deref(),
+            ) {
+                log::warn!("[MIGRATION] Failed to insert entry from {}: {}", rel, e);
+            } else {
+                count += 1;
+            }
+        }
+    }
+
+    Ok(count)
+}
+
+/// Split QMD markdown content at `## HH:MM` timestamp headers into individual entries.
+/// If no headers are found, returns the entire content as a single entry.
+fn split_qmd_entries(content: &str) -> Vec<String> {
+    let mut entries = Vec::new();
+    let mut current = String::new();
+
+    for line in content.lines() {
+        // Match "## HH:MM" pattern (timestamp header)
+        if line.starts_with("## ")
+            && line.len() >= 8
+            && line.chars().nth(3).map(|c| c.is_ascii_digit()).unwrap_or(false)
+        {
+            // Flush previous entry
+            if !current.trim().is_empty() {
+                entries.push(current.trim().to_string());
+            }
+            current = String::new();
+            // Skip the timestamp header itself — content follows
+            continue;
+        }
+        current.push_str(line);
+        current.push('\n');
+    }
+
+    // Flush last entry
+    if !current.trim().is_empty() {
+        entries.push(current.trim().to_string());
+    }
+
+    // If nothing was split (no timestamp headers), return whole content
+    if entries.is_empty() && !content.trim().is_empty() {
+        entries.push(content.trim().to_string());
+    }
+
+    entries
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenv().ok();
@@ -1246,6 +1379,50 @@ async fn main() -> std::io::Result<()> {
     let validator_registry = Arc::new(tool_validators::create_default_registry());
     log::info!("Registered {} tool validators", validator_registry.len());
 
+    // Create embedding generator for hybrid search + association loop
+    let embedding_generator: Arc<dyn memory::EmbeddingGenerator + Send + Sync> =
+        if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
+            log::info!("HybridSearchEngine: using OpenAI embeddings");
+            Arc::new(memory::embeddings::OpenAIEmbeddingGenerator::new(api_key))
+        } else {
+            log::info!("HybridSearchEngine: no OPENAI_API_KEY, vector search disabled");
+            Arc::new(memory::embeddings::NullEmbeddingGenerator)
+        };
+
+    // Create hybrid search engine (FTS + vector + graph)
+    let hybrid_search_engine: Option<Arc<memory::HybridSearchEngine>> =
+        Some(Arc::new(memory::HybridSearchEngine::new(
+            db.clone(),
+            embedding_generator.clone(),
+        )));
+
+    // One-time migration: import QMD markdown files into the DB memories table.
+    // This runs once; afterward the memory/ directory is renamed to memory.migrated/.
+    {
+        let memory_dir = config::memory_config().memory_dir;
+        let memory_path = std::path::Path::new(&memory_dir);
+        if memory_path.exists() && memory_path.is_dir() {
+            match migrate_qmd_memories_to_db(&db, memory_path) {
+                Ok(count) if count > 0 => {
+                    log::info!("[MIGRATION] Migrated {} QMD memory entries to DB", count);
+                    // Rename to prevent re-migration
+                    let migrated_path = memory_path.with_extension("migrated");
+                    if let Err(e) = std::fs::rename(memory_path, &migrated_path) {
+                        log::warn!("[MIGRATION] Failed to rename memory/ to memory.migrated/: {}", e);
+                    } else {
+                        log::info!("[MIGRATION] Renamed {} -> {}", memory_dir, migrated_path.display());
+                    }
+                }
+                Ok(_) => {
+                    log::info!("[MIGRATION] No QMD memory files to migrate");
+                }
+                Err(e) => {
+                    log::error!("[MIGRATION] QMD migration failed: {}", e);
+                }
+            }
+        }
+    }
+
     // Create the shared MessageDispatcher for all message processing
     log::info!("Initializing message dispatcher");
     let mut dispatcher_builder = MessageDispatcher::new_with_wallet_and_skills(
@@ -1258,12 +1435,11 @@ async fn main() -> std::io::Result<()> {
         ).with_hook_manager(hook_manager.clone())
          .with_validator_registry(validator_registry.clone())
          .with_tx_queue(tx_queue.clone());
+    if let Some(ref engine) = hybrid_search_engine {
+        dispatcher_builder = dispatcher_builder.with_hybrid_search(engine.clone());
+    }
     if let Some(ref dq) = disk_quota {
         dispatcher_builder = dispatcher_builder.with_disk_quota(dq.clone());
-        // Also wire disk quota into the MemoryStore for memory append limits
-        if let Some(ref store) = dispatcher_builder.memory_store() {
-            store.set_disk_quota(dq.clone());
-        }
         // Also wire disk quota into the NoteStore
         if let Some(ref store) = dispatcher_builder.notes_store() {
             store.set_disk_quota(dq.clone());
@@ -1294,6 +1470,35 @@ async fn main() -> std::io::Result<()> {
     tokio::spawn(async move {
         scheduler_handle.start(scheduler_shutdown_rx).await;
     });
+
+    // Spawn background association loop (auto-discovers memory connections via embeddings)
+    {
+        let db_loop = db.clone();
+        let emb_loop = embedding_generator.clone();
+        let config = memory::association_loop::AssociationLoopConfig::default();
+        let _assoc_handle = memory::association_loop::spawn_association_loop(db_loop, emb_loop, config);
+        log::info!("Background association loop spawned");
+    }
+
+    // Spawn background memory decay/pruning task (runs every 6 hours)
+    {
+        let db_decay = db.clone();
+        tokio::spawn(async move {
+            let config = memory::decay::DecayConfig::default();
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(6 * 3600)).await;
+                match memory::decay::run_decay_pass(&db_decay, &config) {
+                    Ok((updated, pruned)) => {
+                        log::info!("[DECAY] Pass complete: {} updated, {} pruned", updated, pruned);
+                    }
+                    Err(e) => {
+                        log::error!("[DECAY] Pass failed: {}", e);
+                    }
+                }
+            }
+        });
+        log::info!("Background memory decay task spawned (every 6h)");
+    }
 
     // Spawn slow network-dependent init in background so HTTP server starts immediately
     {
@@ -1445,6 +1650,7 @@ async fn main() -> std::io::Result<()> {
     let wallet_prov = wallet_provider.clone();
     let disk_q = disk_quota.clone();
     let mod_workers = module_workers.clone();
+    let hybrid_search_engine = hybrid_search_engine.clone();
     let frontend_dist = frontend_dist.to_string();
     let dev_mode = dev_mode;
 
@@ -1476,6 +1682,7 @@ async fn main() -> std::io::Result<()> {
                 started_at: std::time::Instant::now(),
                 telemetry_store: Arc::new(telemetry::TelemetryStore::new(Arc::clone(&db))),
                 resource_manager: Arc::new(telemetry::ResourceManager::new(Arc::clone(&db))),
+                hybrid_search: hybrid_search_engine.clone(),
             }))
             .app_data(web::Data::new(Arc::clone(&sched)))
             // WebSocket data for /ws route

@@ -6,7 +6,6 @@ use crate::execution::ProcessManager;
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::notes::NoteStore;
-use crate::qmd_memory::MemoryStore;
 use crate::skills::SkillRegistry;
 use crate::tools::register::RegisterStore;
 use crate::tx_queue::TxQueueManager;
@@ -406,8 +405,6 @@ pub struct ToolContext {
     /// Currently selected network from the UI (e.g., "base", "polygon", "mainnet")
     /// Web3 tools should use this as default unless user explicitly specifies otherwise
     pub selected_network: Option<String>,
-    /// QMD Memory store for markdown-based memory system
-    pub memory_store: Option<Arc<MemoryStore>>,
     /// Notes store for Obsidian-compatible notes with FTS5
     pub notes_store: Option<Arc<NoteStore>>,
     /// Wallet provider for signing transactions (Standard or Flash mode)
@@ -428,6 +425,8 @@ pub struct ToolContext {
     pub current_subagent_id: Option<String>,
     /// If this context is running inside a sub-agent, the sub-agent's depth (0 = top-level)
     pub current_subagent_depth: Option<u32>,
+    /// Hybrid search engine for combined FTS5 + vector + graph memory search
+    pub hybrid_search: Option<Arc<crate::memory::HybridSearchEngine>>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -449,7 +448,6 @@ impl std::fmt::Debug for ToolContext {
             .field("skill_registry", &self.skill_registry.is_some())
             .field("tx_queue", &self.tx_queue.is_some())
             .field("selected_network", &self.selected_network)
-            .field("memory_store", &self.memory_store.is_some())
             .field("notes_store", &self.notes_store.is_some())
             .field("wallet_provider", &self.wallet_provider.is_some())
             .field("platform_chat_id", &self.platform_chat_id)
@@ -459,6 +457,7 @@ impl std::fmt::Debug for ToolContext {
             .field("disk_quota", &self.disk_quota.is_some())
             .field("current_subagent_id", &self.current_subagent_id)
             .field("current_subagent_depth", &self.current_subagent_depth)
+            .field("hybrid_search", &self.hybrid_search.is_some())
             .finish()
     }
 }
@@ -483,7 +482,6 @@ impl Default for ToolContext {
             skill_registry: None,
             tx_queue: None,
             selected_network: None,
-            memory_store: None,
             notes_store: None,
             wallet_provider: None,
             platform_chat_id: None,
@@ -493,6 +491,7 @@ impl Default for ToolContext {
             disk_quota: None,
             current_subagent_id: None,
             current_subagent_depth: None,
+            hybrid_search: None,
         }
     }
 }
@@ -691,12 +690,6 @@ impl ToolContext {
         self
     }
 
-    /// Add a MemoryStore to the context (for QMD memory tools)
-    pub fn with_memory_store(mut self, store: Arc<MemoryStore>) -> Self {
-        self.memory_store = Some(store);
-        self
-    }
-
     /// Add a NoteStore to the context (for notes tools)
     pub fn with_notes_store(mut self, store: Arc<NoteStore>) -> Self {
         self.notes_store = Some(store);
@@ -713,6 +706,12 @@ impl ToolContext {
     /// Add a DiskQuotaManager to the context (for enforcing disk usage limits)
     pub fn with_disk_quota(mut self, dq: Arc<DiskQuotaManager>) -> Self {
         self.disk_quota = Some(dq);
+        self
+    }
+
+    /// Add a HybridSearchEngine to the context (for combined FTS5 + vector + graph search)
+    pub fn with_hybrid_search(mut self, engine: Arc<crate::memory::HybridSearchEngine>) -> Self {
+        self.hybrid_search = Some(engine);
         self
     }
 

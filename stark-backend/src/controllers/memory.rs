@@ -1,12 +1,10 @@
-//! Memory controller - REST API for QMD markdown-based memory system
+//! Memory controller - REST API for the unified DB-backed memory system
 //!
-//! Provides endpoints for browsing, searching, and viewing memory files.
+//! Provides endpoints for browsing, searching, and viewing memories.
 
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
-use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-use crate::qmd_memory::file_ops;
 use crate::AppState;
 
 /// Validate session token from request
@@ -48,52 +46,64 @@ fn validate_session_from_request(
 // ============================================================================
 
 #[derive(Debug, Serialize)]
-struct MemoryFile {
-    /// Relative path from memory root (e.g., "MEMORY.md" or "user123/2024-01-15.md")
+struct MemoryEntry {
+    /// Synthetic path for backward compatibility (e.g., "2024-01-15.md" or "MEMORY.md")
     path: String,
-    /// File name only
-    name: String,
-    /// File type: "daily_log", "long_term", or "unknown"
-    file_type: String,
-    /// Parsed date if this is a daily log file
+    /// Memory type: "daily_log" or "long_term"
+    memory_type: String,
+    /// Parsed date if this is a daily log
     date: Option<String>,
-    /// Identity ID if in a subdirectory
+    /// Identity ID
     identity_id: Option<String>,
-    /// File size in bytes
-    size: u64,
-    /// Last modified timestamp
-    modified: Option<String>,
+    /// Number of entries for this date/type
+    entry_count: i64,
 }
 
 #[derive(Debug, Serialize)]
 struct ListFilesResponse {
     success: bool,
-    files: Vec<MemoryFile>,
+    files: Vec<MemoryEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
-struct ReadFileResponse {
+struct MemoryItem {
+    id: i64,
+    content: String,
+    memory_type: String,
+    importance: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    identity_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    log_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_type: Option<String>,
+    created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ReadMemoriesResponse {
     success: bool,
-    path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    file_type: Option<String>,
+    memory_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     identity_id: Option<String>,
+    memories: Vec<MemoryItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 struct SearchResult {
-    file_path: String,
-    snippet: String,
+    memory_id: i64,
+    content: String,
+    memory_type: String,
+    importance: i64,
     score: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    log_date: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -106,25 +116,17 @@ struct SearchResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct MemoryStats {
-    total_files: usize,
-    daily_log_count: usize,
-    long_term_count: usize,
-    identity_count: usize,
-    identities: Vec<String>,
-    date_range: Option<DateRange>,
-}
-
-#[derive(Debug, Serialize)]
-struct DateRange {
-    oldest: String,
-    newest: String,
-}
-
-#[derive(Debug, Serialize)]
-struct StatsResponse {
+struct MemoryStatsResponse {
     success: bool,
-    stats: MemoryStats,
+    total_memories: i64,
+    daily_log_count: i64,
+    long_term_count: i64,
+    identity_count: i64,
+    identities: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    earliest_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -141,18 +143,13 @@ struct AppendResponse {
 #[derive(Debug, Serialize)]
 struct MemoryInfoResponse {
     success: bool,
-    memory_dir: String,
-    exists: bool,
+    backend: String,
+    total_memories: i64,
 }
 
 // ============================================================================
 // Request Types
 // ============================================================================
-
-#[derive(Debug, Deserialize)]
-struct ReadFileQuery {
-    path: String,
-}
 
 #[derive(Debug, Deserialize)]
 struct SearchQuery {
@@ -174,6 +171,17 @@ struct DailyLogQuery {
 #[derive(Debug, Deserialize)]
 struct LongTermQuery {
     identity_id: Option<String>,
+    #[serde(default = "default_long_term_limit")]
+    limit: Option<i32>,
+}
+
+fn default_long_term_limit() -> Option<i32> {
+    None
+}
+
+#[derive(Debug, Deserialize)]
+struct ListQuery {
+    identity_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -186,176 +194,54 @@ struct AppendBody {
 // Handlers
 // ============================================================================
 
-/// GET /api/memory/files - List all memory files
-async fn list_files(data: web::Data<AppState>, req: HttpRequest) -> impl Responder {
-    if let Err(resp) = validate_session_from_request(&data, &req) {
-        return resp;
-    }
-
-    let memory_store = match data.dispatcher.memory_store() {
-        Some(store) => store,
-        None => {
-            return HttpResponse::ServiceUnavailable().json(ListFilesResponse {
-                success: false,
-                files: vec![],
-                error: Some("Memory system not initialized".to_string()),
-            });
-        }
-    };
-
-    let file_list = match memory_store.list_files() {
-        Ok(files) => files,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(ListFilesResponse {
-                success: false,
-                files: vec![],
-                error: Some(format!("Failed to list files: {}", e)),
-            });
-        }
-    };
-
-    let memory_dir = memory_store.memory_dir();
-    let mut files: Vec<MemoryFile> = Vec::new();
-
-    for rel_path in file_list {
-        let full_path = memory_dir.join(&rel_path);
-        let name = std::path::Path::new(&rel_path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-
-        // Determine file type and parse date
-        let (file_type, date) = if name == "MEMORY.md" {
-            ("long_term".to_string(), None)
-        } else if let Some(d) = file_ops::parse_date_from_filename(&name) {
-            ("daily_log".to_string(), Some(d.format("%Y-%m-%d").to_string()))
-        } else {
-            ("unknown".to_string(), None)
-        };
-
-        // Extract identity_id if in subdirectory
-        let identity_id = std::path::Path::new(&rel_path)
-            .parent()
-            .and_then(|p| p.to_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-
-        // Get file metadata
-        let (size, modified) = if let Ok(metadata) = std::fs::metadata(&full_path) {
-            let mod_time = metadata.modified().ok().map(|t| {
-                let datetime: chrono::DateTime<chrono::Utc> = t.into();
-                datetime.format("%Y-%m-%d %H:%M:%S").to_string()
-            });
-            (metadata.len(), mod_time)
-        } else {
-            (0, None)
-        };
-
-        files.push(MemoryFile {
-            path: rel_path,
-            name,
-            file_type,
-            date,
-            identity_id,
-            size,
-            modified,
-        });
-    }
-
-    // Sort: MEMORY.md first, then daily logs by date descending
-    files.sort_by(|a, b| {
-        // Long-term memories first
-        if a.file_type == "long_term" && b.file_type != "long_term" {
-            return std::cmp::Ordering::Less;
-        }
-        if b.file_type == "long_term" && a.file_type != "long_term" {
-            return std::cmp::Ordering::Greater;
-        }
-        // Then by date descending (newest first)
-        match (&b.date, &a.date) {
-            (Some(bd), Some(ad)) => bd.cmp(ad),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.name.cmp(&b.name),
-        }
-    });
-
-    HttpResponse::Ok().json(ListFilesResponse {
-        success: true,
-        files,
-        error: None,
-    })
-}
-
-/// GET /api/memory/file - Read a specific memory file
-async fn read_file(
+/// GET /api/memory/files - List memory dates and types
+async fn list_files(
     data: web::Data<AppState>,
     req: HttpRequest,
-    query: web::Query<ReadFileQuery>,
+    query: web::Query<ListQuery>,
 ) -> impl Responder {
     if let Err(resp) = validate_session_from_request(&data, &req) {
         return resp;
     }
 
-    let memory_store = match data.dispatcher.memory_store() {
-        Some(store) => store,
-        None => {
-            return HttpResponse::ServiceUnavailable().json(ReadFileResponse {
-                success: false,
-                path: query.path.clone(),
-                content: None,
-                file_type: None,
-                date: None,
-                identity_id: None,
-                error: Some("Memory system not initialized".to_string()),
+    let identity_id = query.identity_id.as_deref();
+    let mut files: Vec<MemoryEntry> = Vec::new();
+
+    // Add long_term entry with count
+    let long_term_count = match data.db.get_long_term_memories(identity_id, 1000) {
+        Ok(mems) => mems.len() as i64,
+        Err(_) => 0,
+    };
+    if long_term_count > 0 {
+        files.push(MemoryEntry {
+            path: "MEMORY.md".to_string(),
+            memory_type: "long_term".to_string(),
+            date: None,
+            identity_id: identity_id.map(|s| s.to_string()),
+            entry_count: long_term_count,
+        });
+    }
+
+    // Add daily_log entries for each date
+    if let Ok(dates) = data.db.list_memory_dates(identity_id) {
+        for date in dates {
+            let count = match data.db.get_daily_log_memories(&date, identity_id, 1000) {
+                Ok(mems) => mems.len() as i64,
+                Err(_) => 0,
+            };
+            files.push(MemoryEntry {
+                path: format!("{}.md", date),
+                memory_type: "daily_log".to_string(),
+                date: Some(date),
+                identity_id: identity_id.map(|s| s.to_string()),
+                entry_count: count,
             });
         }
-    };
+    }
 
-    let content = match memory_store.get_file(&query.path) {
-        Ok(c) => c,
-        Err(e) => {
-            return HttpResponse::NotFound().json(ReadFileResponse {
-                success: false,
-                path: query.path.clone(),
-                content: None,
-                file_type: None,
-                date: None,
-                identity_id: None,
-                error: Some(format!("Failed to read file: {}", e)),
-            });
-        }
-    };
-
-    let name = std::path::Path::new(&query.path)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let (file_type, date) = if name == "MEMORY.md" {
-        (Some("long_term".to_string()), None)
-    } else if let Some(d) = file_ops::parse_date_from_filename(&name) {
-        (
-            Some("daily_log".to_string()),
-            Some(d.format("%Y-%m-%d").to_string()),
-        )
-    } else {
-        (Some("unknown".to_string()), None)
-    };
-
-    let identity_id = std::path::Path::new(&query.path)
-        .parent()
-        .and_then(|p| p.to_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string());
-
-    HttpResponse::Ok().json(ReadFileResponse {
+    HttpResponse::Ok().json(ListFilesResponse {
         success: true,
-        path: query.path.clone(),
-        content: Some(content),
-        file_type,
-        date,
-        identity_id,
+        files,
         error: None,
     })
 }
@@ -370,28 +256,24 @@ async fn search(
         return resp;
     }
 
-    let memory_store = match data.dispatcher.memory_store() {
-        Some(store) => store,
-        None => {
-            return HttpResponse::ServiceUnavailable().json(SearchResponse {
-                success: false,
-                query: query.query.clone(),
-                results: vec![],
-                error: Some("Memory system not initialized".to_string()),
-            });
-        }
-    };
-
     let limit = query.limit.clamp(1, 100);
 
-    match memory_store.search(&query.query, limit) {
+    match data.db.search_memories_fts(&query.query, None, limit) {
         Ok(results) => {
             let results: Vec<SearchResult> = results
                 .into_iter()
-                .map(|r| SearchResult {
-                    file_path: r.file_path,
-                    snippet: r.snippet,
-                    score: r.score,
+                .map(|(mem, rank)| SearchResult {
+                    memory_id: mem.id,
+                    content: if mem.content.chars().count() > 300 {
+                        let truncated: String = mem.content.chars().take(300).collect();
+                        format!("{}...", truncated)
+                    } else {
+                        mem.content
+                    },
+                    memory_type: mem.memory_type,
+                    importance: mem.importance,
+                    score: -rank, // Negate BM25 (returns negative)
+                    log_date: mem.log_date,
                 })
                 .collect();
 
@@ -411,6 +293,22 @@ async fn search(
     }
 }
 
+/// Helper to convert MemoryRows to MemoryItems
+fn rows_to_items(rows: Vec<crate::db::tables::memories::MemoryRow>) -> Vec<MemoryItem> {
+    rows.into_iter()
+        .map(|m| MemoryItem {
+            id: m.id,
+            content: m.content,
+            memory_type: m.memory_type,
+            importance: m.importance,
+            identity_id: m.identity_id,
+            log_date: m.log_date,
+            source_type: m.source_type,
+            created_at: m.created_at,
+        })
+        .collect()
+}
+
 /// GET /api/memory/daily - Get today's or a specific date's daily log
 async fn get_daily_log(
     data: web::Data<AppState>,
@@ -421,85 +319,63 @@ async fn get_daily_log(
         return resp;
     }
 
-    let memory_store = match data.dispatcher.memory_store() {
-        Some(store) => store,
-        None => {
-            return HttpResponse::ServiceUnavailable().json(ReadFileResponse {
-                success: false,
-                path: "".to_string(),
-                content: None,
-                file_type: None,
-                date: None,
-                identity_id: None,
-                error: Some("Memory system not initialized".to_string()),
-            });
-        }
-    };
-
     let identity_id = query.identity_id.as_deref();
 
-    let (content, date_str) = if let Some(date_str) = &query.date {
-        // Parse specific date
-        match NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-            Ok(date) => match memory_store.get_daily_log_for_date(date, identity_id) {
-                Ok(c) => (c, date_str.clone()),
-                Err(e) => {
-                    return HttpResponse::NotFound().json(ReadFileResponse {
-                        success: false,
-                        path: format!("{}.md", date_str),
-                        content: None,
-                        file_type: Some("daily_log".to_string()),
-                        date: Some(date_str.clone()),
-                        identity_id: identity_id.map(|s| s.to_string()),
-                        error: Some(format!("Failed to read daily log: {}", e)),
-                    });
-                }
-            },
-            Err(_) => {
-                return HttpResponse::BadRequest().json(ReadFileResponse {
+    let (date_str, memories) = if let Some(date_str) = &query.date {
+        // Validate date format
+        if chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").is_err() {
+            return HttpResponse::BadRequest().json(ReadMemoriesResponse {
+                success: false,
+                memory_type: "daily_log".to_string(),
+                date: None,
+                identity_id: None,
+                memories: vec![],
+                error: Some("Invalid date format. Use YYYY-MM-DD".to_string()),
+            });
+        }
+        match data.db.get_daily_log_memories(date_str, identity_id, 200) {
+            Ok(mems) => (date_str.clone(), mems),
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(ReadMemoriesResponse {
                     success: false,
-                    path: "".to_string(),
-                    content: None,
-                    file_type: None,
-                    date: None,
-                    identity_id: None,
-                    error: Some("Invalid date format. Use YYYY-MM-DD".to_string()),
+                    memory_type: "daily_log".to_string(),
+                    date: Some(date_str.clone()),
+                    identity_id: identity_id.map(|s| s.to_string()),
+                    memories: vec![],
+                    error: Some(format!("Failed to read daily log: {}", e)),
                 });
             }
         }
     } else {
         // Get today's log
-        let today = chrono::Local::now().date_naive();
-        let date_str = today.format("%Y-%m-%d").to_string();
-        match memory_store.get_daily_log(identity_id) {
-            Ok(c) => (c, date_str),
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        match data.db.get_today_daily_log(identity_id, 200) {
+            Ok(mems) => (today, mems),
             Err(e) => {
-                let date_str = today.format("%Y-%m-%d").to_string();
-                return HttpResponse::Ok().json(ReadFileResponse {
+                let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+                return HttpResponse::Ok().json(ReadMemoriesResponse {
                     success: true,
-                    path: format!("{}.md", date_str),
-                    content: Some(String::new()), // Empty is fine for today's log
-                    file_type: Some("daily_log".to_string()),
-                    date: Some(date_str),
+                    memory_type: "daily_log".to_string(),
+                    date: Some(today),
                     identity_id: identity_id.map(|s| s.to_string()),
+                    memories: vec![],
                     error: Some(format!("No entries yet: {}", e)),
                 });
             }
         }
     };
 
-    HttpResponse::Ok().json(ReadFileResponse {
+    HttpResponse::Ok().json(ReadMemoriesResponse {
         success: true,
-        path: format!("{}.md", date_str),
-        content: Some(content),
-        file_type: Some("daily_log".to_string()),
+        memory_type: "daily_log".to_string(),
         date: Some(date_str),
         identity_id: identity_id.map(|s| s.to_string()),
+        memories: rows_to_items(memories),
         error: None,
     })
 }
 
-/// GET /api/memory/long-term - Get long-term memory (MEMORY.md)
+/// GET /api/memory/long-term - Get long-term memories
 async fn get_long_term(
     data: web::Data<AppState>,
     req: HttpRequest,
@@ -509,41 +385,25 @@ async fn get_long_term(
         return resp;
     }
 
-    let memory_store = match data.dispatcher.memory_store() {
-        Some(store) => store,
-        None => {
-            return HttpResponse::ServiceUnavailable().json(ReadFileResponse {
-                success: false,
-                path: "MEMORY.md".to_string(),
-                content: None,
-                file_type: None,
-                date: None,
-                identity_id: None,
-                error: Some("Memory system not initialized".to_string()),
-            });
-        }
-    };
-
     let identity_id = query.identity_id.as_deref();
+    let limit = query.limit.unwrap_or(100);
 
-    match memory_store.get_long_term(identity_id) {
-        Ok(content) => HttpResponse::Ok().json(ReadFileResponse {
+    match data.db.get_long_term_memories(identity_id, limit) {
+        Ok(mems) => HttpResponse::Ok().json(ReadMemoriesResponse {
             success: true,
-            path: "MEMORY.md".to_string(),
-            content: Some(content),
-            file_type: Some("long_term".to_string()),
+            memory_type: "long_term".to_string(),
             date: None,
             identity_id: identity_id.map(|s| s.to_string()),
+            memories: rows_to_items(mems),
             error: None,
         }),
-        Err(e) => HttpResponse::Ok().json(ReadFileResponse {
+        Err(e) => HttpResponse::Ok().json(ReadMemoriesResponse {
             success: true,
-            path: "MEMORY.md".to_string(),
-            content: Some(String::new()), // Empty is fine
-            file_type: Some("long_term".to_string()),
+            memory_type: "long_term".to_string(),
             date: None,
             identity_id: identity_id.map(|s| s.to_string()),
-            error: Some(format!("No long-term memory yet: {}", e)),
+            memories: vec![],
+            error: Some(format!("No long-term memories yet: {}", e)),
         }),
     }
 }
@@ -558,21 +418,16 @@ async fn append_daily_log(
         return resp;
     }
 
-    let memory_store = match data.dispatcher.memory_store() {
-        Some(store) => store,
-        None => {
-            return HttpResponse::ServiceUnavailable().json(AppendResponse {
-                success: false,
-                message: None,
-                error: Some("Memory system not initialized".to_string()),
-            });
-        }
-    };
-
     let identity_id = body.identity_id.as_deref();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
-    match memory_store.append_daily_log(&body.content, identity_id) {
-        Ok(()) => HttpResponse::Ok().json(AppendResponse {
+    match data.db.insert_memory(
+        "daily_log",
+        &body.content,
+        None, None, 5, identity_id, None, None, None,
+        Some("api"), Some(&today),
+    ) {
+        Ok(_id) => HttpResponse::Ok().json(AppendResponse {
             success: true,
             message: Some("Added to daily log".to_string()),
             error: None,
@@ -595,21 +450,15 @@ async fn append_long_term(
         return resp;
     }
 
-    let memory_store = match data.dispatcher.memory_store() {
-        Some(store) => store,
-        None => {
-            return HttpResponse::ServiceUnavailable().json(AppendResponse {
-                success: false,
-                message: None,
-                error: Some("Memory system not initialized".to_string()),
-            });
-        }
-    };
-
     let identity_id = body.identity_id.as_deref();
 
-    match memory_store.append_long_term(&body.content, identity_id) {
-        Ok(()) => HttpResponse::Ok().json(AppendResponse {
+    match data.db.insert_memory(
+        "long_term",
+        &body.content,
+        None, None, 5, identity_id, None, None, None,
+        Some("api"), None,
+    ) {
+        Ok(_id) => HttpResponse::Ok().json(AppendResponse {
             success: true,
             message: Some("Added to long-term memory".to_string()),
             error: None,
@@ -628,121 +477,40 @@ async fn get_stats(data: web::Data<AppState>, req: HttpRequest) -> impl Responde
         return resp;
     }
 
-    let memory_store = match data.dispatcher.memory_store() {
-        Some(store) => store,
-        None => {
-            return HttpResponse::ServiceUnavailable().json(StatsResponse {
-                success: false,
-                stats: MemoryStats {
-                    total_files: 0,
-                    daily_log_count: 0,
-                    long_term_count: 0,
-                    identity_count: 0,
-                    identities: vec![],
-                    date_range: None,
-                },
-                error: Some("Memory system not initialized".to_string()),
-            });
-        }
-    };
-
-    let file_list = match memory_store.list_files() {
-        Ok(files) => files,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(StatsResponse {
-                success: false,
-                stats: MemoryStats {
-                    total_files: 0,
-                    daily_log_count: 0,
-                    long_term_count: 0,
-                    identity_count: 0,
-                    identities: vec![],
-                    date_range: None,
-                },
-                error: Some(format!("Failed to list files: {}", e)),
-            });
-        }
-    };
-
-    let mut daily_log_count = 0;
-    let mut long_term_count = 0;
-    let mut identities: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut dates: Vec<NaiveDate> = Vec::new();
-
-    for rel_path in &file_list {
-        let name = std::path::Path::new(rel_path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-
-        if name == "MEMORY.md" {
-            long_term_count += 1;
-        } else if let Some(d) = file_ops::parse_date_from_filename(&name) {
-            daily_log_count += 1;
-            dates.push(d);
-        }
-
-        // Extract identity
-        if let Some(parent) = std::path::Path::new(rel_path).parent() {
-            if let Some(id) = parent.to_str().filter(|s| !s.is_empty()) {
-                identities.insert(id.to_string());
-            }
-        }
-    }
-
-    dates.sort();
-    let date_range = if !dates.is_empty() {
-        Some(DateRange {
-            oldest: dates.first().unwrap().format("%Y-%m-%d").to_string(),
-            newest: dates.last().unwrap().format("%Y-%m-%d").to_string(),
-        })
-    } else {
-        None
-    };
-
-    HttpResponse::Ok().json(StatsResponse {
-        success: true,
-        stats: MemoryStats {
-            total_files: file_list.len(),
-            daily_log_count,
-            long_term_count,
-            identity_count: identities.len(),
-            identities: identities.into_iter().collect(),
-            date_range,
-        },
-        error: None,
-    })
-}
-
-/// POST /api/memory/reindex - Force reindex the FTS database
-async fn reindex(data: web::Data<AppState>, req: HttpRequest) -> impl Responder {
-    if let Err(resp) = validate_session_from_request(&data, &req) {
-        return resp;
-    }
-
-    let memory_store = match data.dispatcher.memory_store() {
-        Some(store) => store,
-        None => {
-            return HttpResponse::ServiceUnavailable().json(AppendResponse {
-                success: false,
-                message: None,
-                error: Some("Memory system not initialized".to_string()),
-            });
-        }
-    };
-
-    match memory_store.reindex() {
-        Ok(count) => HttpResponse::Ok().json(AppendResponse {
+    match data.db.get_memory_stats() {
+        Ok(stats) => HttpResponse::Ok().json(MemoryStatsResponse {
             success: true,
-            message: Some(format!("Reindexed {} files", count)),
+            total_memories: stats.total_memories,
+            daily_log_count: stats.daily_log_count,
+            long_term_count: stats.long_term_count,
+            identity_count: stats.identity_count,
+            identities: stats.identities,
+            earliest_date: stats.earliest_date,
+            latest_date: stats.latest_date,
             error: None,
         }),
-        Err(e) => HttpResponse::InternalServerError().json(AppendResponse {
+        Err(e) => HttpResponse::InternalServerError().json(MemoryStatsResponse {
             success: false,
-            message: None,
-            error: Some(format!("Reindex failed: {}", e)),
+            total_memories: 0,
+            daily_log_count: 0,
+            long_term_count: 0,
+            identity_count: 0,
+            identities: vec![],
+            earliest_date: None,
+            latest_date: None,
+            error: Some(format!("Failed to get stats: {}", e)),
         }),
     }
+}
+
+/// POST /api/memory/reindex - No-op (FTS triggers handle sync automatically)
+async fn reindex(_data: web::Data<AppState>, req: HttpRequest) -> impl Responder {
+    // FTS is auto-synced via triggers on the memories table, so reindex is a no-op
+    HttpResponse::Ok().json(AppendResponse {
+        success: true,
+        message: Some("FTS index is auto-synced via triggers. No reindex needed.".to_string()),
+        error: None,
+    })
 }
 
 /// GET /api/memory/info - Get memory system info
@@ -751,23 +519,491 @@ async fn memory_info(data: web::Data<AppState>, req: HttpRequest) -> impl Respon
         return resp;
     }
 
-    let memory_store = data.dispatcher.memory_store();
+    let total = data.db.count_memories().unwrap_or(0);
 
-    match memory_store {
-        Some(store) => {
-            let memory_dir = store.memory_dir();
-            HttpResponse::Ok().json(MemoryInfoResponse {
-                success: true,
-                memory_dir: memory_dir.to_string_lossy().to_string(),
-                exists: memory_dir.exists(),
+    HttpResponse::Ok().json(MemoryInfoResponse {
+        success: true,
+        backend: "sqlite".to_string(),
+        total_memories: total,
+    })
+}
+
+// ============================================================================
+// Graph & Association Types
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+struct GraphNode {
+    id: i64,
+    content: String,
+    memory_type: String,
+    importance: i32,
+}
+
+#[derive(Debug, Serialize)]
+struct GraphEdge {
+    source: i64,
+    target: i64,
+    association_type: String,
+    strength: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct GraphResponse {
+    success: bool,
+    nodes: Vec<GraphNode>,
+    edges: Vec<GraphEdge>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AssociationResponse {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    associations: Option<Vec<AssociationItem>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created: Option<AssociationItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deleted: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AssociationItem {
+    id: i64,
+    source_memory_id: i64,
+    target_memory_id: i64,
+    association_type: String,
+    strength: f64,
+    created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateAssociationBody {
+    source_memory_id: i64,
+    target_memory_id: i64,
+    #[serde(default = "default_association_type")]
+    association_type: String,
+    #[serde(default = "default_strength")]
+    strength: f64,
+}
+
+fn default_association_type() -> String {
+    "related".to_string()
+}
+
+fn default_strength() -> f64 {
+    0.5
+}
+
+#[derive(Debug, Deserialize)]
+struct AssociationQuery {
+    memory_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteAssociationPath {
+    id: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct HybridSearchResponse {
+    success: bool,
+    query: String,
+    mode: String,
+    results: Vec<HybridSearchItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct HybridSearchItem {
+    memory_id: i64,
+    content: String,
+    memory_type: String,
+    importance: i32,
+    rrf_score: f64,
+    fts_rank: Option<f64>,
+    vector_similarity: Option<f32>,
+    association_count: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HybridSearchQuery {
+    query: String,
+    #[serde(default = "default_search_limit")]
+    limit: i32,
+}
+
+#[derive(Debug, Serialize)]
+struct EmbeddingStatsResponse {
+    success: bool,
+    total_memories: i64,
+    memories_with_embeddings: i64,
+    memories_without_embeddings: i64,
+    coverage_percent: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct BackfillResponse {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+// ============================================================================
+// Graph & Association Handlers
+// ============================================================================
+
+/// GET /api/memory/graph - Get memory graph data (nodes + edges)
+async fn get_graph(data: web::Data<AppState>, req: HttpRequest) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    let conn = data.db.conn();
+
+    // Get all memories as nodes
+    let nodes: Vec<GraphNode> = {
+        let mut stmt = match conn.prepare(
+            "SELECT id, content, memory_type, importance FROM memories ORDER BY id",
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(GraphResponse {
+                    success: false,
+                    nodes: vec![],
+                    edges: vec![],
+                    error: Some(format!("Failed to query memories: {}", e)),
+                });
+            }
+        };
+
+        match stmt.query_map([], |row| {
+            Ok(GraphNode {
+                id: row.get(0)?,
+                content: {
+                    let c: String = row.get(1)?;
+                    if c.chars().count() > 200 {
+                        let truncated: String = c.chars().take(200).collect();
+                        format!("{}...", truncated)
+                    } else {
+                        c
+                    }
+                },
+                memory_type: row.get(2)?,
+                importance: row.get::<_, f64>(3)?.round() as i32,
             })
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(GraphResponse {
+                    success: false,
+                    nodes: vec![],
+                    edges: vec![],
+                    error: Some(format!("Failed to query memories: {}", e)),
+                });
+            }
         }
-        None => HttpResponse::Ok().json(MemoryInfoResponse {
+    };
+
+    // Get all associations as edges
+    let edges: Vec<GraphEdge> = {
+        let mut stmt = match conn.prepare(
+            "SELECT source_memory_id, target_memory_id, association_type, strength FROM memory_associations",
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(GraphResponse {
+                    success: false,
+                    nodes: vec![],
+                    edges: vec![],
+                    error: Some(format!("Failed to query associations: {}", e)),
+                });
+            }
+        };
+
+        match stmt.query_map([], |row| {
+            Ok(GraphEdge {
+                source: row.get(0)?,
+                target: row.get(1)?,
+                association_type: row.get(2)?,
+                strength: row.get(3)?,
+            })
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(GraphResponse {
+                    success: false,
+                    nodes: vec![],
+                    edges: vec![],
+                    error: Some(format!("Failed to query associations: {}", e)),
+                });
+            }
+        }
+    };
+
+    HttpResponse::Ok().json(GraphResponse {
+        success: true,
+        nodes,
+        edges,
+        error: None,
+    })
+}
+
+/// POST /api/memory/associations - Create a new association
+async fn create_association(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    body: web::Json<CreateAssociationBody>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    let strength = body.strength.clamp(0.0, 1.0);
+
+    match data.db.create_memory_association(
+        body.source_memory_id,
+        body.target_memory_id,
+        &body.association_type,
+        strength,
+        None,
+    ) {
+        Ok(id) => HttpResponse::Ok().json(AssociationResponse {
             success: true,
-            memory_dir: "Not configured".to_string(),
-            exists: false,
+            associations: None,
+            created: Some(AssociationItem {
+                id,
+                source_memory_id: body.source_memory_id,
+                target_memory_id: body.target_memory_id,
+                association_type: body.association_type.clone(),
+                strength,
+                created_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            }),
+            deleted: None,
+            error: None,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(AssociationResponse {
+            success: false,
+            associations: None,
+            created: None,
+            deleted: None,
+            error: Some(format!("Failed to create association: {}", e)),
         }),
     }
+}
+
+/// GET /api/memory/associations - List associations for a memory
+async fn list_associations(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    query: web::Query<AssociationQuery>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    match data.db.get_memory_associations(query.memory_id) {
+        Ok(associations) => {
+            let items: Vec<AssociationItem> = associations
+                .into_iter()
+                .map(|a| AssociationItem {
+                    id: a.id,
+                    source_memory_id: a.source_memory_id,
+                    target_memory_id: a.target_memory_id,
+                    association_type: a.association_type,
+                    strength: a.strength as f64,
+                    created_at: a.created_at,
+                })
+                .collect();
+
+            HttpResponse::Ok().json(AssociationResponse {
+                success: true,
+                associations: Some(items),
+                created: None,
+                deleted: None,
+                error: None,
+            })
+        }
+        Err(e) => HttpResponse::InternalServerError().json(AssociationResponse {
+            success: false,
+            associations: None,
+            created: None,
+            deleted: None,
+            error: Some(format!("Failed to list associations: {}", e)),
+        }),
+    }
+}
+
+/// DELETE /api/memory/associations/{id} - Delete an association
+async fn delete_association(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<i64>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    let association_id = path.into_inner();
+
+    match data.db.delete_memory_association(association_id) {
+        Ok(deleted) => HttpResponse::Ok().json(AssociationResponse {
+            success: true,
+            associations: None,
+            created: None,
+            deleted: Some(deleted),
+            error: None,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(AssociationResponse {
+            success: false,
+            associations: None,
+            created: None,
+            deleted: None,
+            error: Some(format!("Failed to delete association: {}", e)),
+        }),
+    }
+}
+
+/// GET /api/memory/hybrid-search - Combined FTS + vector + graph search
+async fn hybrid_search(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    query: web::Query<HybridSearchQuery>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    let engine = match &data.hybrid_search {
+        Some(engine) => engine,
+        None => {
+            return HttpResponse::ServiceUnavailable().json(HybridSearchResponse {
+                success: false,
+                query: query.query.clone(),
+                mode: "hybrid".to_string(),
+                results: vec![],
+                error: Some("Hybrid search engine not initialized".to_string()),
+            });
+        }
+    };
+
+    let limit = query.limit.clamp(1, 50) as usize;
+
+    match engine.search(&query.query, limit).await {
+        Ok(results) => {
+            let items: Vec<HybridSearchItem> = results
+                .into_iter()
+                .map(|r| HybridSearchItem {
+                    memory_id: r.memory_id,
+                    content: r.content,
+                    memory_type: r.memory_type,
+                    importance: r.importance,
+                    rrf_score: r.rrf_score,
+                    fts_rank: r.fts_rank,
+                    vector_similarity: r.vector_similarity,
+                    association_count: r.association_count,
+                })
+                .collect();
+
+            HttpResponse::Ok().json(HybridSearchResponse {
+                success: true,
+                query: query.query.clone(),
+                mode: "hybrid".to_string(),
+                results: items,
+                error: None,
+            })
+        }
+        Err(e) => HttpResponse::InternalServerError().json(HybridSearchResponse {
+            success: false,
+            query: query.query.clone(),
+            mode: "hybrid".to_string(),
+            results: vec![],
+            error: Some(format!("Hybrid search failed: {}", e)),
+        }),
+    }
+}
+
+/// GET /api/memory/embeddings/stats - Get embedding statistics
+async fn embedding_stats(data: web::Data<AppState>, req: HttpRequest) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    let conn = data.db.conn();
+
+    let total_memories: i64 = conn
+        .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    let memories_with_embeddings: i64 = conn
+        .query_row("SELECT COUNT(*) FROM memory_embeddings", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    let memories_without = total_memories - memories_with_embeddings;
+    let coverage = if total_memories > 0 {
+        (memories_with_embeddings as f64 / total_memories as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    HttpResponse::Ok().json(EmbeddingStatsResponse {
+        success: true,
+        total_memories,
+        memories_with_embeddings,
+        memories_without_embeddings: memories_without,
+        coverage_percent: coverage,
+        error: None,
+    })
+}
+
+/// POST /api/memory/embeddings/backfill - Trigger embedding backfill
+async fn backfill_embeddings(data: web::Data<AppState>, req: HttpRequest) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    let engine = match &data.hybrid_search {
+        Some(engine) => engine,
+        None => {
+            return HttpResponse::ServiceUnavailable().json(BackfillResponse {
+                success: false,
+                message: None,
+                error: Some("Hybrid search engine not initialized. Embedding backfill requires an embedding provider.".to_string()),
+            });
+        }
+    };
+
+    // Check if a backfill is already running
+    if engine.is_backfill_running() {
+        return HttpResponse::Conflict().json(BackfillResponse {
+            success: false,
+            message: None,
+            error: Some("A backfill is already running. Please wait for it to complete.".to_string()),
+        });
+    }
+
+    // Run backfill in background
+    let engine = engine.clone();
+    tokio::spawn(async move {
+        match engine.backfill_embeddings().await {
+            Ok(count) => log::info!("[EMBEDDINGS] Backfill complete: {} embeddings generated", count),
+            Err(e) => log::error!("[EMBEDDINGS] Backfill failed: {}", e),
+        }
+    });
+
+    HttpResponse::Ok().json(BackfillResponse {
+        success: true,
+        message: Some("Embedding backfill started in background".to_string()),
+        error: None,
+    })
 }
 
 /// Configure memory routes
@@ -775,7 +1011,6 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api/memory")
             .route("/files", web::get().to(list_files))
-            .route("/file", web::get().to(read_file))
             .route("/search", web::get().to(search))
             .route("/daily", web::get().to(get_daily_log))
             .route("/daily", web::post().to(append_daily_log))
@@ -783,6 +1018,14 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("/long-term", web::post().to(append_long_term))
             .route("/stats", web::get().to(get_stats))
             .route("/reindex", web::post().to(reindex))
-            .route("/info", web::get().to(memory_info)),
+            .route("/info", web::get().to(memory_info))
+            // Phase 1: Memory System Overhaul endpoints
+            .route("/graph", web::get().to(get_graph))
+            .route("/associations", web::post().to(create_association))
+            .route("/associations", web::get().to(list_associations))
+            .route("/associations/{id}", web::delete().to(delete_association))
+            .route("/hybrid-search", web::get().to(hybrid_search))
+            .route("/embeddings/stats", web::get().to(embedding_stats))
+            .route("/embeddings/backfill", web::post().to(backfill_embeddings)),
     );
 }

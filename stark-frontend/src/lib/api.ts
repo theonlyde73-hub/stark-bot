@@ -1192,6 +1192,9 @@ export interface BotSettings {
   theme_accent?: string;
   proxy_url?: string;
   kanban_auto_execute: boolean;
+  compaction_background_threshold?: number;
+  compaction_aggressive_threshold?: number;
+  compaction_emergency_threshold?: number;
   created_at: string;
   updated_at: string;
 }
@@ -1215,6 +1218,9 @@ export async function updateBotSettings(data: {
   theme_accent?: string;
   proxy_url?: string;
   kanban_auto_execute?: boolean;
+  compaction_background_threshold?: number;
+  compaction_aggressive_threshold?: number;
+  compaction_emergency_threshold?: number;
 }): Promise<BotSettings> {
   return apiFetch('/bot-settings', {
     method: 'PUT',
@@ -2080,4 +2086,32 @@ export async function deleteSpecialRoleAssignment(id: number): Promise<{ success
   return apiFetch(`/special-roles/assignments/${id}`, {
     method: 'DELETE',
   });
+}
+
+// Memory Graph & Association API
+import type {
+  MemoryGraphResponse,
+  HybridSearchResponse,
+  EmbeddingStatsResponse,
+  CortexBulletin,
+} from '@/types';
+
+export async function getMemoryGraph(): Promise<MemoryGraphResponse> {
+  return apiFetch('/memory/graph');
+}
+
+export async function getHybridSearch(query: string, limit = 20): Promise<HybridSearchResponse> {
+  return apiFetch(`/memory/hybrid-search?query=${encodeURIComponent(query)}&limit=${limit}`);
+}
+
+export async function getEmbeddingStats(): Promise<EmbeddingStatsResponse> {
+  return apiFetch('/memory/embeddings/stats');
+}
+
+export async function backfillEmbeddings(): Promise<{ success: boolean; message: string }> {
+  return apiFetch('/memory/embeddings/backfill', { method: 'POST' });
+}
+
+export async function getCortexBulletin(): Promise<CortexBulletin> {
+  return apiFetch('/bulletin');
 }
