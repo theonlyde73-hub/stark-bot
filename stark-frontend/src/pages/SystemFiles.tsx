@@ -11,6 +11,7 @@ import {
   Sparkles,
   ClipboardList,
   Trash2,
+  ArrowLeft,
 } from 'lucide-react';
 import {
   listIntrinsicFiles,
@@ -34,6 +35,7 @@ export default function SystemFiles() {
   const [fileError, setFileError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [mobileView, setMobileView] = useState<'list' | 'preview'>('list');
 
   const loadFiles = async () => {
     setIsLoading(true);
@@ -55,6 +57,7 @@ export default function SystemFiles() {
     setSelectedFile(name);
     setIsEditing(false);
     setSaveMessage(null);
+    setMobileView('preview');
     try {
       const response = await readIntrinsicFile(name);
       if (response.success && response.content !== undefined) {
@@ -108,6 +111,7 @@ export default function SystemFiles() {
         setSelectedFile(null);
         setIsEditing(false);
         setSaveMessage(null);
+        setMobileView('list');
       } else {
         setFileError(response.error || 'Failed to delete file');
       }
@@ -137,11 +141,11 @@ export default function SystemFiles() {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="p-6 border-b border-slate-700">
+      <div className="p-4 md:p-6 border-b border-slate-700">
         <div className="flex items-center justify-between mb-2">
           <div>
             <h1 className="text-2xl font-bold text-white">System Files</h1>
-            <p className="text-slate-400 text-sm mt-1">
+            <p className="text-slate-400 text-sm mt-1 hidden md:block">
               Core configuration files that define the agent's behavior
             </p>
           </div>
@@ -158,7 +162,7 @@ export default function SystemFiles() {
       {/* Content */}
       <div className="flex-1 flex overflow-hidden">
         {/* File List */}
-        <div className="w-80 border-r border-slate-700 overflow-y-auto">
+        <div className={`w-full md:w-80 border-r border-slate-700 overflow-y-auto ${mobileView === 'preview' ? 'hidden md:block' : ''}`}>
           {isLoading ? (
             <div className="flex items-center justify-center h-32">
               <RefreshCw className="w-6 h-6 text-slate-400 animate-spin" />
@@ -217,11 +221,17 @@ export default function SystemFiles() {
         </div>
 
         {/* File Preview/Editor */}
-        <div className="flex-1 overflow-hidden flex flex-col bg-slate-900">
+        <div className={`flex-1 overflow-hidden flex flex-col bg-slate-900 ${mobileView === 'list' ? 'hidden md:flex' : ''}`}>
           {selectedFile ? (
             <>
               <div className="px-4 py-3 border-b border-slate-700 flex items-center justify-between">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <button
+                    onClick={() => setMobileView('list')}
+                    className="md:hidden p-1 -ml-1 mr-1 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors flex-shrink-0"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
                   {selectedFile === 'soul.md' ? (
                     <Sparkles className="w-4 h-4 text-purple-400" />
                   ) : selectedFile === 'guidelines.md' ? (

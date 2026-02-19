@@ -108,11 +108,25 @@ struct SearchResult {
     log_date: Option<String>,
 }
 
+/// A memory surfaced via graph edge expansion (connected to an FTS hit)
+#[derive(Debug, Serialize)]
+struct GraphResult {
+    memory_id: i64,
+    content: String,
+    memory_type: String,
+    importance: i64,
+    /// Cumulative edge strength (×100) connecting this to the FTS seed set
+    graph_strength: i32,
+}
+
 #[derive(Debug, Serialize)]
 struct SearchResponse {
     success: bool,
     query: String,
     results: Vec<SearchResult>,
+    /// Memories connected to the FTS hits via graph edges
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    graph_results: Vec<GraphResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -263,6 +277,8 @@ async fn search(
 
     match data.db.search_memories_fts(&query.query, query.identity_id.as_deref(), limit) {
         Ok(results) => {
+            let seed_ids: Vec<i64> = results.iter().map(|(m, _)| m.id).collect();
+
             let results: Vec<SearchResult> = results
                 .into_iter()
                 .map(|(mem, rank)| SearchResult {
@@ -281,10 +297,41 @@ async fn search(
                 })
                 .collect();
 
+            // Graph expansion: surface memories connected to FTS hits via edges
+            let graph_limit = (limit / 2).max(3).min(10);
+            let graph_results = match data.db.graph_expand_from_seeds(&seed_ids, graph_limit) {
+                Ok(neighbors) => neighbors
+                    .into_iter()
+                    .filter_map(|(neighbor_id, strength)| {
+                        let mem = data.db.get_memory(neighbor_id).ok()??;
+                        // Respect identity filter
+                        if let Some(ref id_filter) = query.identity_id {
+                            if mem.identity_id.as_deref() != Some(id_filter.as_str()) {
+                                return None;
+                            }
+                        }
+                        Some(GraphResult {
+                            memory_id: mem.id,
+                            content: if mem.content.chars().count() > 200 {
+                                let truncated: String = mem.content.chars().take(200).collect();
+                                format!("{}...", truncated)
+                            } else {
+                                mem.content
+                            },
+                            memory_type: mem.memory_type,
+                            importance: mem.importance,
+                            graph_strength: strength,
+                        })
+                    })
+                    .collect(),
+                Err(_) => vec![],
+            };
+
             HttpResponse::Ok().json(SearchResponse {
                 success: true,
                 query: query.query.clone(),
                 results,
+                graph_results,
                 error: None,
             })
         }
@@ -292,6 +339,7 @@ async fn search(
             success: false,
             query: query.query.clone(),
             results: vec![],
+            graph_results: vec![],
             error: Some(format!("Search failed: {}", e)),
         }),
     }
@@ -1028,10 +1076,32 @@ async fn rebuild_associations(data: web::Data<AppState>, req: HttpRequest) -> im
     };
 
     let db = data.db.clone();
+    let db2 = data.db.clone();
     let embedding_generator = engine.embedding_generator().clone();
     let config = crate::memory::association_loop::AssociationLoopConfig::default();
 
     tokio::spawn(async move {
+        // Step 0: Backfill missing entity_name / category metadata from content
+        match crate::memory::association_loop::backfill_memory_metadata(&db2) {
+            Ok(count) => {
+                if count > 0 {
+                    log::info!("[ASSOCIATIONS] Backfilled metadata for {} memories", count);
+                }
+            }
+            Err(e) => log::warn!("[ASSOCIATIONS] Metadata backfill failed: {}", e),
+        }
+
+        // Step 1: Reclassify existing "related" associations using metadata heuristics
+        match crate::memory::association_loop::reclassify_existing_associations(&db2) {
+            Ok(count) => {
+                if count > 0 {
+                    log::info!("[ASSOCIATIONS] Reclassified {} existing associations", count);
+                }
+            }
+            Err(e) => log::error!("[ASSOCIATIONS] Reclassification failed: {}", e),
+        }
+
+        // Step 2: Discover new associations with proper type classification
         match crate::memory::association_loop::run_association_pass(&db, &embedding_generator, &config).await {
             Ok(()) => log::info!("[ASSOCIATIONS] Rebuild pass complete"),
             Err(e) => log::error!("[ASSOCIATIONS] Rebuild pass failed: {}", e),
@@ -1040,7 +1110,7 @@ async fn rebuild_associations(data: web::Data<AppState>, req: HttpRequest) -> im
 
     HttpResponse::Ok().json(BackfillResponse {
         success: true,
-        message: Some("Association rebuild started in background".to_string()),
+        message: Some("Association rebuild started in background (includes reclassification of existing associations)".to_string()),
         error: None,
     })
 }

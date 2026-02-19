@@ -178,6 +178,78 @@ impl Database {
         rows.collect()
     }
 
+    /// Expand from seed memory IDs to their graph neighbors.
+    /// Returns (neighbor_memory_id, total_strength_x100) pairs ranked by cumulative
+    /// connection strength to the seed set.  Neighbors that ARE in the seed set
+    /// are excluded so you only get new discoveries.
+    pub fn graph_expand_from_seeds(
+        &self,
+        seed_ids: &[i64],
+        limit: i32,
+    ) -> Result<Vec<(i64, i32)>, rusqlite::Error> {
+        if seed_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut unique_seeds: Vec<i64> = seed_ids.to_vec();
+        unique_seeds.sort_unstable();
+        unique_seeds.dedup();
+        unique_seeds.truncate(50);
+
+        let conn = self.conn();
+        let n = unique_seeds.len();
+
+        let make_placeholders = |offset: usize| -> String {
+            (1..=n)
+                .map(|i| format!("?{}", offset + i))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let p1 = make_placeholders(0);
+        let p2 = make_placeholders(n);
+        let p3 = make_placeholders(2 * n);
+        let p4 = make_placeholders(3 * n);
+
+        let query = format!(
+            "SELECT neighbor_id, SUM(strength_int) as total_strength FROM (
+                 SELECT target_memory_id AS neighbor_id,
+                        CAST(strength * 100 AS INTEGER) AS strength_int
+                 FROM memory_associations
+                 WHERE source_memory_id IN ({p1})
+                   AND target_memory_id NOT IN ({p2})
+                 UNION ALL
+                 SELECT source_memory_id AS neighbor_id,
+                        CAST(strength * 100 AS INTEGER) AS strength_int
+                 FROM memory_associations
+                 WHERE target_memory_id IN ({p3})
+                   AND source_memory_id NOT IN ({p4})
+             )
+             GROUP BY neighbor_id
+             ORDER BY total_strength DESC
+             LIMIT ?{}",
+            4 * n + 1
+        );
+
+        // Bind seed_ids four times (once per IN clause) + limit
+        let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        for _ in 0..4 {
+            for id in &unique_seeds {
+                all_params.push(Box::new(*id));
+            }
+        }
+        all_params.push(Box::new(limit));
+
+        let mut stmt = conn.prepare(&query)?;
+        let results = stmt
+            .query_map(rusqlite::params_from_iter(all_params.iter()), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i32>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(results)
+    }
+
     /// Check if an association already exists between two memories
     pub fn association_exists(
         &self,

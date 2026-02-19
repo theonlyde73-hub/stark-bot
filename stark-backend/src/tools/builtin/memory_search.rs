@@ -205,7 +205,7 @@ impl Tool for MemorySearchTool {
             }
         }
 
-        // FTS mode (default): use DB full-text search
+        // FTS mode (default): use DB full-text search + graph expansion
         match db.search_memories_fts(&params.query, identity_id, result_limit) {
             Ok(results) => {
                 if results.is_empty() {
@@ -214,6 +214,8 @@ impl Tool for MemorySearchTool {
                         params.query
                     ));
                 }
+
+                let mut all_memory_ids: Vec<i64> = results.iter().map(|(m, _)| m.id).collect();
 
                 let mut output = format!(
                     "## Memory Search Results\n**Query:** \"{}\"\n**Found:** {} result(s)\n\n",
@@ -240,11 +242,56 @@ impl Tool for MemorySearchTool {
                     ));
                 }
 
+                // Graph expansion: surface memories connected to FTS hits via edges
+                let seed_ids: Vec<i64> = results.iter().map(|(m, _)| m.id).collect();
+                let graph_limit = (result_limit / 2).max(3).min(10);
+                if let Ok(neighbors) = db.graph_expand_from_seeds(&seed_ids, graph_limit) {
+                    if !neighbors.is_empty() {
+                        // Fetch neighbor memory details
+                        let mut graph_entries = Vec::new();
+                        for (neighbor_id, strength) in &neighbors {
+                            if let Ok(Some(mem)) = db.get_memory(*neighbor_id) {
+                                // Apply identity filter in safe mode
+                                if let Some(id_filter) = identity_id {
+                                    if mem.identity_id.as_deref() != Some(id_filter) {
+                                        continue;
+                                    }
+                                }
+                                graph_entries.push((mem, *strength));
+                            }
+                        }
+
+                        if !graph_entries.is_empty() {
+                            output.push_str(&format!(
+                                "---\n### Related via Graph ({} connected)\n\n",
+                                graph_entries.len()
+                            ));
+                            for (mem, strength) in &graph_entries {
+                                let snippet: String = if mem.content.chars().count() > 200 {
+                                    let truncated: String = mem.content.chars().take(200).collect();
+                                    format!("{}...", truncated)
+                                } else {
+                                    mem.content.clone()
+                                };
+                                output.push_str(&format!(
+                                    "- **Memory #{}** ({}) | strength: {} | importance: {}\n  {}\n\n",
+                                    mem.id,
+                                    mem.memory_type,
+                                    strength,
+                                    mem.importance,
+                                    snippet,
+                                ));
+                                all_memory_ids.push(mem.id);
+                            }
+                        }
+                    }
+                }
+
                 ToolResult::success(output).with_metadata(json!({
                     "query": params.query,
                     "mode": "fts",
-                    "result_count": results.len(),
-                    "memory_ids": results.iter().map(|(m, _)| m.id).collect::<Vec<_>>()
+                    "result_count": all_memory_ids.len(),
+                    "memory_ids": all_memory_ids
                 }))
             }
             Err(e) => ToolResult::error(format!("Search failed: {}", e)),

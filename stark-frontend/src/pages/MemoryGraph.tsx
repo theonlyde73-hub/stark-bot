@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as d3 from 'd3';
-import { RefreshCw, Database, Search, X, Circle, ArrowRight, ExternalLink, Link } from 'lucide-react';
+import { RefreshCw, Database, Search, X, Circle, ArrowRight, ExternalLink, Link, Menu } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import { getMemoryGraph, getHybridSearch, getEmbeddingStats, backfillEmbeddings, rebuildAssociations } from '@/lib/api';
 import type {
@@ -114,6 +114,9 @@ export default function MemoryGraph() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [highlightedNodeIds, setHighlightedNodeIds] = useState<Set<number>>(new Set());
   const highlightedRef = useRef<Set<number>>(new Set());
+
+  // Mobile sidebar
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Embedding stats
   const [embeddingStats, setEmbeddingStats] = useState<EmbeddingStatsResponse | null>(null);
@@ -532,23 +535,24 @@ export default function MemoryGraph() {
   return (
     <div className="h-full flex flex-col bg-slate-900">
       {/* ── Top toolbar ── */}
-      <div className="px-4 py-3 border-b border-slate-700 flex items-center justify-between flex-shrink-0">
-        <div className="flex items-center gap-4">
-          <h1 className="text-lg font-semibold text-slate-200">Memory Graph</h1>
-          <span className="text-xs text-slate-400">
-            {nodeCount} nodes / {edgeCount} edges
+      <div className="px-3 md:px-4 py-3 border-b border-slate-700 flex items-center justify-between flex-shrink-0 gap-2">
+        <div className="flex items-center gap-2 md:gap-4 min-w-0">
+          <h1 className="text-base md:text-lg font-semibold text-slate-200 whitespace-nowrap">Memory Graph</h1>
+          <span className="text-xs text-slate-400 whitespace-nowrap">
+            {nodeCount} / {edgeCount}
           </span>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="secondary" size="sm" onClick={handleRefresh}>
-            <RefreshCw size={14} className="mr-1.5" />
-            Refresh
+            <RefreshCw size={14} className="md:mr-1.5" />
+            <span className="hidden md:inline">Refresh</span>
           </Button>
           <Button
             variant="secondary"
             size="sm"
             onClick={handleBackfill}
             isLoading={backfillLoading}
+            className="hidden md:flex"
           >
             <Database size={14} className="mr-1.5" />
             Backfill Embeddings
@@ -558,10 +562,18 @@ export default function MemoryGraph() {
             size="sm"
             onClick={handleRebuildAssociations}
             isLoading={rebuildLoading}
+            className="hidden md:flex"
           >
             <Link size={14} className="mr-1.5" />
             Rebuild Associations
           </Button>
+          {/* Mobile sidebar toggle */}
+          <button
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="md:hidden p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+          >
+            <Menu size={18} />
+          </button>
         </div>
       </div>
 
@@ -614,8 +626,56 @@ export default function MemoryGraph() {
           )}
         </div>
 
+        {/* ── Sidebar backdrop (mobile) ── */}
+        {sidebarOpen && (
+          <div
+            className="md:hidden fixed inset-0 bg-black/50 z-30"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+
         {/* ── Sidebar ── */}
-        <div className="w-[300px] flex-shrink-0 border-l border-slate-700 bg-slate-800 flex flex-col overflow-hidden">
+        <div className={`
+          fixed md:relative right-0 top-0 h-full z-40
+          w-[280px] md:w-[300px] flex-shrink-0 border-l border-slate-700 bg-slate-800 flex flex-col overflow-hidden
+          transition-transform duration-200 ease-in-out
+          ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'} md:translate-x-0
+        `}>
+          {/* Mobile sidebar header */}
+          <div className="md:hidden flex items-center justify-between px-3 py-2 border-b border-slate-700">
+            <span className="text-sm font-semibold text-slate-300">Controls</span>
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="p-1 text-slate-400 hover:text-white"
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          {/* Mobile-only action buttons */}
+          <div className="md:hidden flex gap-2 px-3 py-2 border-b border-slate-700">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleBackfill}
+              isLoading={backfillLoading}
+              className="flex-1 text-xs"
+            >
+              <Database size={12} className="mr-1" />
+              Backfill
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleRebuildAssociations}
+              isLoading={rebuildLoading}
+              className="flex-1 text-xs"
+            >
+              <Link size={12} className="mr-1" />
+              Rebuild
+            </Button>
+          </div>
+
           {/* Search */}
           <div className="p-3 border-b border-slate-700">
             <div className="relative">
