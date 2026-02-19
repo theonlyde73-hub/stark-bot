@@ -29,7 +29,7 @@ impl MessageDispatcher {
         session_id: i64,
         is_safe_mode: bool,
         watchdog: &Arc<Watchdog>,
-    ) -> Result<(String, bool), String> {
+    ) -> Result<(String, bool, Option<String>), String> {
         // Get max tool iterations from bot settings
         let max_tool_iterations = self.db.get_bot_settings()
             .map(|s| s.max_tool_iterations as usize)
@@ -551,7 +551,7 @@ impl MessageDispatcher {
                 // say_to_user content takes priority — it IS the final result (already broadcast)
                 if !last_say_to_user_content.is_empty() {
                     log::info!("[ORCHESTRATED_LOOP] Returning say_to_user content as final result ({} chars)", last_say_to_user_content.len());
-                    return Ok((last_say_to_user_content.clone(), true));
+                    return Ok((last_say_to_user_content.clone(), true, last_say_to_user_id.clone()));
                 }
 
                 if orchestrator_complete {
@@ -561,9 +561,9 @@ impl MessageDispatcher {
                     if !final_summary.is_empty() { parts.push(&final_summary); }
                     if !ai_response.content.trim().is_empty() { parts.push(&ai_response.content); }
                     let response = parts.join("\n\n");
-                    return Ok((response, false));
+                    return Ok((response, false, None));
                 } else {
-                    return Ok((ai_response.content, false));
+                    return Ok((ai_response.content, false, None));
                 }
             }
 
@@ -766,7 +766,7 @@ impl MessageDispatcher {
         session_id: i64,
         is_safe_mode: bool,
         watchdog: &Arc<Watchdog>,
-    ) -> Result<(String, bool), String> {
+    ) -> Result<(String, bool, Option<String>), String> {
         // Get max tool iterations from bot settings
         let max_tool_iterations = self.db.get_bot_settings()
             .map(|s| s.max_tool_iterations as usize)

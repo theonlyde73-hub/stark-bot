@@ -113,14 +113,14 @@ export async function sendChatMessage(
   content: string,
   conversationHistory: Array<{ role: string; content: string }>,
   network?: string  // The currently selected network from the UI
-): Promise<{ response: string }> {
+): Promise<{ response: string; message_id?: string }> {
   // Backend expects { messages: [...] } with the full conversation including the new message
   const messages = [
     ...conversationHistory,
     { role: 'user', content }
   ];
 
-  const response = await apiFetch<{ success: boolean; message?: { content: string }; error?: string }>('/chat', {
+  const response = await apiFetch<{ success: boolean; message?: { content: string }; message_id?: string; error?: string }>('/chat', {
     method: 'POST',
     body: JSON.stringify({ messages, network }),
   });
@@ -129,7 +129,7 @@ export async function sendChatMessage(
     throw new Error(response.error || 'Failed to get response');
   }
 
-  return { response: response.message.content };
+  return { response: response.message.content, message_id: response.message_id };
 }
 
 // Agent Settings API

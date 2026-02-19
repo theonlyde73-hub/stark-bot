@@ -1045,6 +1045,49 @@ async fn rebuild_associations(data: web::Data<AppState>, req: HttpRequest) -> im
     })
 }
 
+/// DELETE /api/memory/all - Delete all memories
+async fn delete_all_memories(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    body: web::Json<serde_json::Value>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    // Require explicit confirmation
+    if body.get("confirm").and_then(|v| v.as_bool()) != Some(true) {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "error": "Must set confirm: true to delete all memories"
+        }));
+    }
+
+    let conn = data.db.conn();
+
+    // Delete related tables first (embeddings + associations cascade via FK,
+    // but be explicit for FTS which uses triggers)
+    let deleted_count = match conn.execute("DELETE FROM memories", []) {
+        Ok(n) => n,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to delete memories: {}", e)
+            }));
+        }
+    };
+
+    // Reindex notes store
+    if let Some(store) = data.dispatcher.notes_store() {
+        let _ = store.reindex();
+    }
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "deleted_count": deleted_count
+    }))
+}
+
 /// Configure memory routes
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
@@ -1066,6 +1109,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("/hybrid-search", web::get().to(hybrid_search))
             .route("/embeddings/stats", web::get().to(embedding_stats))
             .route("/embeddings/backfill", web::post().to(backfill_embeddings))
-            .route("/associations/rebuild", web::post().to(rebuild_associations)),
+            .route("/associations/rebuild", web::post().to(rebuild_associations))
+            .route("/all", web::delete().to(delete_all_memories)),
     );
 }

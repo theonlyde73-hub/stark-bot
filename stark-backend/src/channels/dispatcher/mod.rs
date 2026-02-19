@@ -1142,7 +1142,7 @@ impl MessageDispatcher {
                                 log::error!("[DISPATCH] Failed to record x402 payment: {}", e);
                             }
                         }
-                        Ok((content, false))
+                        Ok((content, false, None))
                     }
                     Err(e) => Err(e),
                 }
@@ -1426,7 +1426,7 @@ impl MessageDispatcher {
         archetype_id: ArchetypeId,
         is_safe_mode: bool,
         watchdog: &Arc<Watchdog>,
-    ) -> Result<(String, bool), String> {
+    ) -> Result<(String, bool, Option<String>), String> {
         // Load existing agent context or create new one
         let mut orchestrator = match self.db.get_agent_context(session_id) {
             Ok(Some(context)) => {
@@ -1559,7 +1559,7 @@ impl MessageDispatcher {
                     log::error!("[TOOL_LOOP] Failed to record x402 payment: {}", e);
                 }
             }
-            return Ok((content, false));
+            return Ok((content, false, None));
         }
 
         // Get the archetype for this request

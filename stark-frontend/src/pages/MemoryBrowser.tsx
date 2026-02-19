@@ -12,6 +12,7 @@ import {
   X,
   Share2,
   Hash,
+  Trash2,
 } from 'lucide-react';
 import Card, { CardContent } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
@@ -156,6 +157,13 @@ async function appendToLongTerm(content: string, identityId?: string): Promise<{
   return apiFetch('/memory/long-term', {
     method: 'POST',
     body: JSON.stringify({ content, identity_id: identityId }),
+  });
+}
+
+async function deleteAllMemories(): Promise<{ success: boolean; deleted_count?: number; error?: string }> {
+  return apiFetch('/memory/all', {
+    method: 'DELETE',
+    body: JSON.stringify({ confirm: true }),
   });
 }
 
@@ -522,6 +530,10 @@ export default function MemoryBrowser() {
   // Add entry modal
   const [addEntryType, setAddEntryType] = useState<'daily' | 'long_term' | null>(null);
 
+  // Delete all confirmation
+  const [showDeleteAll, setShowDeleteAll] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const identityFilter = modeFilter === 'safemode' ? 'safemode' : undefined;
 
   // Load entries and stats
@@ -588,6 +600,28 @@ export default function MemoryBrowser() {
       loadLongTerm();
     } else if (entry.date) {
       loadDailyLogByDate(entry.date);
+    }
+  };
+
+  // Handle delete all memories
+  const handleDeleteAll = async () => {
+    setIsDeleting(true);
+    try {
+      const response = await deleteAllMemories();
+      if (response.success) {
+        setShowDeleteAll(false);
+        setSelectedMemories([]);
+        setSelectedLabel(null);
+        loadData();
+      } else {
+        setError(response.error || 'Failed to delete memories');
+        setShowDeleteAll(false);
+      }
+    } catch {
+      setError('Failed to delete memories');
+      setShowDeleteAll(false);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -807,6 +841,21 @@ export default function MemoryBrowser() {
                     </CardContent>
                   </Card>
                 )}
+
+                {/* Delete all memories */}
+                {filteredEntries.length > 0 && (
+                  <div className="pt-4 border-t border-slate-700">
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      onClick={() => setShowDeleteAll(true)}
+                      className="w-full flex items-center justify-center gap-2"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Delete All Memories
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -890,6 +939,30 @@ export default function MemoryBrowser() {
                 )}
               </CardContent>
             </Card>
+          </div>
+        </div>
+      )}
+
+      {/* Delete all confirmation modal */}
+      {showDeleteAll && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-slate-900 rounded-lg p-6 max-w-md w-full mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-red-400">Delete All Memories</h2>
+              <button onClick={() => setShowDeleteAll(false)} className="text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-slate-300 mb-2">
+              This will permanently delete <span className="font-bold text-white">{stats?.total_memories ?? 'all'}</span> memories, including daily logs, long-term memories, embeddings, and associations.
+            </p>
+            <p className="text-red-400 text-sm mb-6">This action cannot be undone.</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setShowDeleteAll(false)}>Cancel</Button>
+              <Button variant="danger" onClick={handleDeleteAll} disabled={isDeleting}>
+                {isDeleting ? 'Deleting...' : 'Delete Everything'}
+              </Button>
+            </div>
           </div>
         </div>
       )}

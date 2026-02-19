@@ -146,10 +146,10 @@ export default function AgentChat() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  // Track the last say_to_user content to prevent duplicate messages.
-  // say_to_user is delivered via two paths (WebSocket tool.result + HTTP response),
-  // and without this guard the race between them can cause duplicates.
-  const lastSayToUserRef = useRef<string>('');
+  // Dedup set: say_to_user messages arrive via two paths (WebSocket + HTTP response).
+  // Both carry the same UUID (message_id). We track seen IDs so whichever path
+  // arrives second is silently dropped — O(1), no content scanning.
+  const seenMessageIds = useRef<Set<string>>(new Set());
   // Track spawn message IDs so we can update them when session_ready fires
   const subagentSpawnMsgIds = useRef<Map<string, string>>(new Map());
   const navigate = useNavigate();
@@ -346,28 +346,21 @@ export default function AgentChat() {
       if (!isWebChannelEvent(data)) return;
 
       console.log('[AgentChat] Received tool.result event:', data);
-      const event = data as { tool_name: string; success: boolean; duration_ms: number; content: string };
+      const event = data as { tool_name: string; success: boolean; duration_ms: number; content: string; message_id?: string };
 
       // Show say_to_user messages immediately as assistant bubbles
       if (event.tool_name === 'say_to_user') {
         if (event.success && event.content.trim()) {
-          const trimmed = event.content.trim();
-          // Deduplicate: say_to_user content is also returned in the HTTP response.
-          // If the HTTP response won the race and was already added, skip.
-          lastSayToUserRef.current = trimmed;
-          setMessages((prev) => {
-            const alreadyExists = prev.some(
-              (m) => m.role === 'assistant' && m.content.trim() === trimmed
-            );
-            if (alreadyExists) return prev;
-            return [...prev, {
-              id: crypto.randomUUID(),
-              role: 'assistant' as MessageRole,
-              content: event.content,
-              timestamp: new Date(),
-              sessionId,
-            }];
-          });
+          // UUID-based dedup: if the HTTP response already rendered this message, skip
+          if (event.message_id && seenMessageIds.current.has(event.message_id)) return;
+          if (event.message_id) seenMessageIds.current.add(event.message_id);
+          setMessages((prev) => [...prev, {
+            id: crypto.randomUUID(),
+            role: 'assistant' as MessageRole,
+            content: event.content,
+            timestamp: new Date(),
+            sessionId,
+          }]);
         }
         return;
       }
@@ -1272,6 +1265,7 @@ export default function AgentChat() {
           setAgentSubtype(null);
           setSubagents([]);
           setMessages([]);
+          seenMessageIds.current.clear();
         }
       } catch (err) {
         console.error('[Session] Failed to clear session:', err);
@@ -1505,25 +1499,18 @@ export default function AgentChat() {
       ));
       // Skip empty responses and responses already delivered via say_to_user WebSocket event
       if (response.response.trim()) {
-        const trimmedResponse = response.response.trim();
-        // Fast path: if the ref matches, say_to_user WebSocket already delivered it
-        if (trimmedResponse === lastSayToUserRef.current) {
-          lastSayToUserRef.current = '';  // reset for next interaction
+        // UUID-based dedup: if the WebSocket already rendered this message, skip
+        if (response.message_id && seenMessageIds.current.has(response.message_id)) {
+          // Already shown via WebSocket — nothing to do
         } else {
-          // Fallback: scan messages for exact content match
-          setMessages((prev) => {
-            const alreadyDelivered = prev.some(
-              (m) => m.role === 'assistant' && m.content.trim() === trimmedResponse
-            );
-            if (alreadyDelivered) return prev;
-            return [...prev, {
-              id: crypto.randomUUID(),
-              role: 'assistant' as MessageRole,
-              content: response.response,
-              timestamp: new Date(),
-              sessionId,
-            }];
-          });
+          if (response.message_id) seenMessageIds.current.add(response.message_id);
+          setMessages((prev) => [...prev, {
+            id: crypto.randomUUID(),
+            role: 'assistant' as MessageRole,
+            content: response.response,
+            timestamp: new Date(),
+            sessionId,
+          }]);
         }
       }
     } catch (error) {
@@ -1887,6 +1874,7 @@ export default function AgentChat() {
                     setAgentSubtype(null);
                     setSubagents([]);
                     setMessages([]);
+                    seenMessageIds.current.clear();
                   }
                 } catch (err) {
                   console.error('[Session] Failed to create new session:', err);

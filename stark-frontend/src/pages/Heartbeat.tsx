@@ -206,9 +206,9 @@ function HeartbeatSection({ config, setConfig, setMessage }: HeartbeatSectionPro
 
   const [formData, setFormData] = useState({
     interval_minutes: config?.interval_minutes || 60,
-    active_hours_start: config?.active_hours_start || '09:00',
-    active_hours_end: config?.active_hours_end || '17:00',
-    active_days: config?.active_days || 'mon,tue,wed,thu,fri',
+    active_hours_start: config?.active_hours_start || '01:00',
+    active_hours_end: config?.active_hours_end || '01:00',
+    active_days: config?.active_days || 'mon,tue,wed,thu,fri,sat,sun',
     enabled: config?.enabled || false,
     impulse_evolver: config?.impulse_evolver ?? true,
   });
@@ -220,9 +220,9 @@ function HeartbeatSection({ config, setConfig, setMessage }: HeartbeatSectionPro
       setIntervalUnit(interval.unit);
       setFormData({
         interval_minutes: config.interval_minutes,
-        active_hours_start: config.active_hours_start || '09:00',
-        active_hours_end: config.active_hours_end || '17:00',
-        active_days: config.active_days || 'mon,tue,wed,thu,fri',
+        active_hours_start: config.active_hours_start || '01:00',
+        active_hours_end: config.active_hours_end || '01:00',
+        active_days: config.active_days || 'mon,tue,wed,thu,fri,sat,sun',
         enabled: config.enabled,
         impulse_evolver: config.impulse_evolver ?? true,
       });

@@ -683,8 +683,10 @@ impl Scheduler {
             let start_time = NaiveTime::parse_from_str(start, "%H:%M").unwrap_or(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
             let end_time = NaiveTime::parse_from_str(end, "%H:%M").unwrap_or(NaiveTime::from_hms_opt(23, 59, 59).unwrap());
 
-            // Handle overnight schedules (e.g., 22:00-06:00)
-            if start_time <= end_time {
+            // When start == end, the heartbeat is always active (24/7)
+            if start_time == end_time {
+                // Always running - no time restriction
+            } else if start_time < end_time {
                 // Normal case: start and end are on same day (e.g., 09:00-17:00)
                 if current_time < start_time || current_time > end_time {
                     return false;
