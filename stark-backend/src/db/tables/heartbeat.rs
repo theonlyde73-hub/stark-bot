@@ -133,7 +133,7 @@ impl Database {
 
         conn.query_row(
             "SELECT id, channel_id, interval_minutes, target, active_hours_start, active_hours_end,
-                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id,
+                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id, impulse_evolver,
                     created_at, updated_at
              FROM heartbeat_configs WHERE id = ?1",
             [id],
@@ -186,7 +186,7 @@ impl Database {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, channel_id, interval_minutes, target, active_hours_start, active_hours_end,
-                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id,
+                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id, impulse_evolver,
                     created_at, updated_at
              FROM heartbeat_configs ORDER BY id"
         )?;
@@ -205,7 +205,7 @@ impl Database {
 
         conn.query_row(
             "SELECT id, channel_id, interval_minutes, target, active_hours_start, active_hours_end,
-                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id,
+                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id, impulse_evolver,
                     created_at, updated_at
              FROM heartbeat_configs WHERE id = ?1",
             [id],
@@ -220,7 +220,7 @@ impl Database {
 
         let mut stmt = conn.prepare(
             "SELECT id, channel_id, interval_minutes, target, active_hours_start, active_hours_end,
-                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id,
+                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id, impulse_evolver,
                     created_at, updated_at
              FROM heartbeat_configs
              WHERE enabled = 1 AND (next_beat_at IS NULL OR next_beat_at <= ?1)
