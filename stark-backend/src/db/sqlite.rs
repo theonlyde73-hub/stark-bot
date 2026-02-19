@@ -599,6 +599,8 @@ impl Database {
         let _ = conn.execute("ALTER TABLE memories ADD COLUMN source_type TEXT DEFAULT 'inferred'", []);
         let _ = conn.execute("ALTER TABLE memories ADD COLUMN superseded_by INTEGER", []);
         let _ = conn.execute("ALTER TABLE memories ADD COLUMN last_accessed TEXT", []);
+        let _ = conn.execute("ALTER TABLE memories ADD COLUMN valid_from TEXT", []);
+        let _ = conn.execute("ALTER TABLE memories ADD COLUMN valid_until TEXT", []);
 
         // FTS5 virtual table for full-text search on memories
         conn.execute(
