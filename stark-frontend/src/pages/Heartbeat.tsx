@@ -362,29 +362,34 @@ function HeartbeatSection({ config, setConfig, setMessage }: HeartbeatSectionPro
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                Active Hours Start
-              </label>
-              <input
-                type="time"
-                value={formData.active_hours_start}
-                onChange={(e) => setFormData({ ...formData, active_hours_start: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:border-stark-500 focus:outline-none"
-              />
+          <div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Active Hours Start
+                </label>
+                <input
+                  type="time"
+                  value={formData.active_hours_start}
+                  onChange={(e) => setFormData({ ...formData, active_hours_start: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:border-stark-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Active Hours End
+                </label>
+                <input
+                  type="time"
+                  value={formData.active_hours_end}
+                  onChange={(e) => setFormData({ ...formData, active_hours_end: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:border-stark-500 focus:outline-none"
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                Active Hours End
-              </label>
-              <input
-                type="time"
-                value={formData.active_hours_end}
-                onChange={(e) => setFormData({ ...formData, active_hours_end: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:border-stark-500 focus:outline-none"
-              />
-            </div>
+            {formData.active_hours_start === formData.active_hours_end && (
+              <p className="text-xs text-stark-400 mt-1.5">Same start and end time = always active (24/7)</p>
+            )}
           </div>
 
           <div>

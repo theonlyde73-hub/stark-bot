@@ -1381,14 +1381,16 @@ async fn main() -> std::io::Result<()> {
     log::info!("Registered {} tool validators", validator_registry.len());
 
     // Create embedding generator for hybrid search + association loop
+    let embeddings_server_url = std::env::var("EMBEDDINGS_SERVER_URL")
+        .unwrap_or_else(|_| "https://embeddings.defirelay.com".to_string());
+    log::info!(
+        "HybridSearchEngine: using remote embeddings server at {}",
+        embeddings_server_url
+    );
     let embedding_generator: Arc<dyn memory::EmbeddingGenerator + Send + Sync> =
-        if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
-            log::info!("HybridSearchEngine: using OpenAI embeddings");
-            Arc::new(memory::embeddings::OpenAIEmbeddingGenerator::new(api_key))
-        } else {
-            log::info!("HybridSearchEngine: no OPENAI_API_KEY, vector search disabled");
-            Arc::new(memory::embeddings::NullEmbeddingGenerator)
-        };
+        Arc::new(memory::embeddings::RemoteEmbeddingGenerator::new(
+            embeddings_server_url,
+        ));
 
     // Create hybrid search engine (FTS + vector + graph)
     let hybrid_search_engine: Option<Arc<memory::HybridSearchEngine>> =

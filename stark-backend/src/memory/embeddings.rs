@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use serde_json::Value;
+use std::time::Duration;
 
 /// Trait for generating text embeddings from various providers.
 #[async_trait]
@@ -7,55 +7,37 @@ pub trait EmbeddingGenerator {
     async fn generate(&self, text: &str) -> Result<Vec<f32>, String>;
 }
 
-/// OpenAI-backed embedding generator using the embeddings API.
-pub struct OpenAIEmbeddingGenerator {
+/// Remote embedding generator that calls a self-hosted ONNX embeddings server.
+/// Mirrors the whisper-server pattern (POST JSON, get JSON response).
+pub struct RemoteEmbeddingGenerator {
     client: reqwest::Client,
-    api_key: String,
-    model: String,
-    dimensions: usize,
+    server_url: String,
 }
 
-impl OpenAIEmbeddingGenerator {
-    /// Create a new generator with default model (text-embedding-3-small) and 256 dimensions.
-    pub fn new(api_key: String) -> Self {
-        Self {
-            client: reqwest::Client::new(),
-            api_key,
-            model: "text-embedding-3-small".to_string(),
-            dimensions: 256,
-        }
-    }
-
-    /// Create a new generator with a specific model and dimension count.
-    pub fn with_model(api_key: String, model: String, dimensions: usize) -> Self {
-        Self {
-            client: reqwest::Client::new(),
-            api_key,
-            model,
-            dimensions,
-        }
+impl RemoteEmbeddingGenerator {
+    pub fn new(server_url: String) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("Failed to build HTTP client");
+        Self { client, server_url }
     }
 }
 
 #[async_trait]
-impl EmbeddingGenerator for OpenAIEmbeddingGenerator {
+impl EmbeddingGenerator for RemoteEmbeddingGenerator {
     async fn generate(&self, text: &str) -> Result<Vec<f32>, String> {
-        let client = &self.client;
+        let url = format!("{}/embed", self.server_url.trim_end_matches('/'));
 
-        let body = serde_json::json!({
-            "input": text,
-            "model": self.model,
-            "dimensions": self.dimensions,
-        });
+        let body = serde_json::json!({ "text": text });
 
-        let response = client
-            .post("https://api.openai.com/v1/embeddings")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
+        let response = self
+            .client
+            .post(&url)
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("Failed to call OpenAI embeddings API: {}", e))?;
+            .map_err(|e| format!("Embeddings server request failed: {}", e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -64,23 +46,20 @@ impl EmbeddingGenerator for OpenAIEmbeddingGenerator {
                 .await
                 .unwrap_or_else(|_| "unknown error".to_string());
             return Err(format!(
-                "OpenAI embeddings API returned status {}: {}",
+                "Embeddings server returned status {}: {}",
                 status, error_body
             ));
         }
 
-        let json: Value = response
+        let json: serde_json::Value = response
             .json()
             .await
-            .map_err(|e| format!("Failed to parse OpenAI embeddings response: {}", e))?;
+            .map_err(|e| format!("Failed to parse embeddings response: {}", e))?;
 
         let embedding = json
-            .get("data")
-            .and_then(|d| d.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|item| item.get("embedding"))
+            .get("embedding")
             .and_then(|e| e.as_array())
-            .ok_or_else(|| "Missing embedding data in OpenAI response".to_string())?;
+            .ok_or_else(|| "Missing 'embedding' field in response".to_string())?;
 
         let vector: Vec<f32> = embedding
             .iter()
