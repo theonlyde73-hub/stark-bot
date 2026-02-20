@@ -122,14 +122,15 @@ impl RunSkillScriptTool {
         Ok(())
     }
 
-    /// Detect interpreter from file extension
-    fn interpreter_for_extension(name: &str) -> Result<&'static str, String> {
+    /// Detect interpreter from file extension.
+    /// Returns a slice of command args — e.g. `["uv", "run"]` for Python, `["bash"]` for shell.
+    fn interpreter_for_extension(name: &str) -> Result<&'static [&'static str], String> {
         if name.ends_with(".py") {
-            Ok("python3")
+            Ok(&["uv", "run"])
         } else if name.ends_with(".sh") {
-            Ok("bash")
+            Ok(&["bash"])
         } else if name.ends_with(".js") {
-            Ok("node")
+            Ok(&["node"])
         } else {
             Err(format!(
                 "Unsupported script extension. Use .py, .sh, or .js. Got: {}",
@@ -183,8 +184,8 @@ impl Tool for RunSkillScriptTool {
             return ToolResult::error(format!("Invalid script name: {}", e));
         }
 
-        // 2. Determine interpreter
-        let interpreter = match Self::interpreter_for_extension(&params.script) {
+        // 2. Determine interpreter (may be multi-arg, e.g. ["uv", "run"])
+        let interpreter_args = match Self::interpreter_for_extension(&params.script) {
             Ok(i) => i,
             Err(e) => return ToolResult::error(e),
         };
@@ -288,7 +289,10 @@ impl Tool for RunSkillScriptTool {
         // 5. Build command
         let timeout_secs = params.timeout.unwrap_or(60).min(300);
 
-        let mut cmd = Command::new(interpreter);
+        let mut cmd = Command::new(interpreter_args[0]);
+        for extra in &interpreter_args[1..] {
+            cmd.arg(extra);
+        }
         cmd.arg(&script_path);
 
         // Pass action as 1st arg
@@ -354,7 +358,7 @@ impl Tool for RunSkillScriptTool {
             skill_name,
             params.script,
             params.action,
-            interpreter,
+            interpreter_args.join(" "),
             timeout_secs
         );
 

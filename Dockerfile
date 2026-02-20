@@ -37,14 +37,13 @@ LABEL org.opencontainers.image.version="${STARKBOT_VERSION}"
 WORKDIR /app
 
 # Install runtime dependencies and tools for skills
+# Note: Python is NOT installed here — skill scripts use `uv run` which manages its own Python.
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     sqlite3 \
     curl \
     git \
     jq \
-    python3 \
-    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv (fast Python package manager for skills)

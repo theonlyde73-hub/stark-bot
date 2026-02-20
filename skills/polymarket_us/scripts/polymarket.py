@@ -21,7 +21,7 @@ def ensure_sdk():
     except ModuleNotFoundError:
         print("Installing polymarket-us SDK...", file=sys.stderr)
         subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "polymarket-us", "-q"],
+            ["uv", "pip", "install", "polymarket-us", "-q"],
             stdout=subprocess.DEVNULL,
         )
 

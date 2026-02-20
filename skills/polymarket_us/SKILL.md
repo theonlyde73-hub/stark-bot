@@ -6,7 +6,7 @@ author: starkbot
 homepage: https://docs.polymarket.us/
 metadata: {"clawdbot":{"emoji":"🎲"}}
 requires_tools: [run_skill_script]
-requires_binaries: [python3]
+requires_binaries: [uv]
 requires_api_keys:
   POLYMARKET_KEY_ID:
     description: "Polymarket US API key ID — get one at https://poly.market/dev-portal"

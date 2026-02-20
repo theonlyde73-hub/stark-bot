@@ -44,6 +44,7 @@ AI Agents that directly interface with private keys always pose a serious risk. 
 - Rust 1.88+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
 - SQLite3 (usually pre-installed on Linux)
 - Node.js 18+ (for frontend development)
+- [uv](https://docs.astral.sh/uv/) (for Python-based skill scripts — replaces system python3/pip)
 
 ### Environment Setup
 
