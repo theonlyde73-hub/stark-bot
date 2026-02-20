@@ -73,7 +73,7 @@ export default function Sidebar() {
       <div className="p-6 border-b border-slate-700">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-stark-400">StarkBot</h1>
+            <h1 className="text-2xl text-stark-400" style={{ fontFamily: "'Orbitron', sans-serif" }}>StarkBot</h1>
             {version && (
               <span className="text-xs text-slate-500">v{version}</span>
             )}

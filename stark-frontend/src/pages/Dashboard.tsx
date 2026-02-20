@@ -196,29 +196,7 @@ export default function Dashboard() {
           </div>
         </div>
         </>
-      ) : (
-        <div className="mb-8 p-6 bg-slate-800/50 rounded-lg border border-slate-700">
-          <h2 className="text-xl font-semibold text-white mb-4">Getting Started</h2>
-          <ul className="space-y-2 text-slate-300">
-            <li className="flex items-start gap-2">
-              <span className="text-stark-400 mt-1">•</span>
-              <span>USDC on Base is needed to use the default AI model relay</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-stark-400 mt-1">•</span>
-              <span>A custom AI model endpoint can be configured in Agent Settings as an alternative</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-stark-400 mt-1">•</span>
-              <span>StarkBot is stateless so the encrypted backup store must be used to maintain state such as API keys and memories</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-stark-400 mt-1">•</span>
-              <span>To setup automation, configure a heartbeat and the impulse map or set up scheduled cron jobs</span>
-            </li>
-          </ul>
-        </div>
-      )}
+      ) : null}
 
       {activeCapabilities.length > 0 && (
         <div className="mb-8 p-6 bg-slate-800/50 rounded-lg border border-slate-700">
