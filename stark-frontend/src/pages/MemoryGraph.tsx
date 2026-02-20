@@ -291,18 +291,21 @@ export default function MemoryGraph() {
         strength: e.strength,
       }));
 
-    // Simulation
+    // Simulation – spread nodes out so connected clusters don't clump
+    const nodeCount = d3Nodes.length;
+    const chargeStrength = Math.min(-400, -200 - nodeCount * 3); // scale repulsion with graph size
     const simulation = d3.forceSimulation<D3Node, D3Link>(d3Nodes)
       .force(
         'link',
         d3.forceLink<D3Node, D3Link>(d3Links)
           .id((d) => d.id)
-          .distance(80)
-          .strength((d) => 0.2 + (d as D3Link).strength * 0.5),
+          .distance(200)
+          .strength((d) => 0.1 + (d as D3Link).strength * 0.2),
       )
-      .force('charge', d3.forceManyBody().strength(-200))
-      .force('center', d3.forceCenter(0, 0))
-      .force('collide', d3.forceCollide<D3Node>().radius((d) => nodeRadius(d.importance) + 4));
+      .force('charge', d3.forceManyBody().strength(chargeStrength).distanceMax(800))
+      .force('center', d3.forceCenter(0, 0).strength(0.03))
+      .force('collide', d3.forceCollide<D3Node>().radius((d) => nodeRadius(d.importance) + 20).strength(0.7))
+      .alphaDecay(0.02);
 
     simulationRef.current = simulation;
 

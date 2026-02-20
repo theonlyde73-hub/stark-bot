@@ -18,6 +18,7 @@ pub mod social_media;
 mod local_rpc;
 mod memory_associate;
 mod memory_graph;
+mod memory_merge;
 mod notes;
 mod process_status;
 mod memory_read;
@@ -53,6 +54,7 @@ pub use social_media::{DiscordLookupTool, DiscordReadTool, DiscordWriteTool, Fig
 pub use local_rpc::LocalRpcTool;
 pub use memory_associate::MemoryAssociateTool;
 pub use memory_graph::MemoryGraphTool;
+pub use memory_merge::MemoryMergeTool;
 pub use notes::NotesTool;
 pub use process_status::ProcessStatusTool;
 pub use memory_read::MemoryReadTool;

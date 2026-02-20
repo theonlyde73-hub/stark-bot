@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Cloud, Upload, Download, Shield, AlertCircle, CheckCircle, X, Key, Brain, Settings, Link2, RefreshCw, Clock, AlertTriangle, Heart, MessageSquare, Sparkles, Zap } from 'lucide-react';
+import { Cloud, Upload, Download, Shield, AlertCircle, CheckCircle, X, Key, Brain, Settings, Link2, RefreshCw, Clock, AlertTriangle, Heart, MessageSquare, Sparkles, Zap, Coins } from 'lucide-react';
+import { JsonRpcProvider, Contract, formatUnits } from 'ethers';
 import Card, { CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
-import { backupKeysToCloud, restoreKeysFromCloud, previewCloudBackup, CloudBackupPreview } from '@/lib/api';
+import { backupKeysToCloud, restoreKeysFromCloud, previewCloudBackup, CloudBackupPreview, getConfigStatus } from '@/lib/api';
 
 export default function CloudBackup() {
   const [isUploading, setIsUploading] = useState(false);
@@ -17,10 +18,37 @@ export default function CloudBackup() {
   // Backup cost in STARKBOT tokens
   const BACKUP_COST_STARKBOT = 1000;
 
+  // STARKBOT token balance
+  const STARKBOT_TOKEN = '0x587Cd533F418825521f3A1daa7CCd1E7339A1B07';
+  const BASE_RPC = 'https://mainnet.base.org';
+  const [starkbotBalance, setStarkbotBalance] = useState<string | null>(null);
+  const [balanceLoading, setBalanceLoading] = useState(true);
+
   useEffect(() => {
     // Load preview on mount
     loadPreview();
+    // Load STARKBOT balance on mount
+    loadStarkbotBalance();
   }, []);
+
+  const loadStarkbotBalance = async () => {
+    setBalanceLoading(true);
+    try {
+      const config = await getConfigStatus();
+      if (!config.wallet_address) {
+        setBalanceLoading(false);
+        return;
+      }
+      const provider = new JsonRpcProvider(BASE_RPC);
+      const contract = new Contract(STARKBOT_TOKEN, ['function balanceOf(address) view returns (uint256)'], provider);
+      const balance = await contract.balanceOf(config.wallet_address);
+      setStarkbotBalance(formatUnits(balance, 18));
+    } catch (err) {
+      console.error('Failed to fetch STARKBOT balance:', err);
+    } finally {
+      setBalanceLoading(false);
+    }
+  };
 
   const loadPreview = async () => {
     setIsPreviewing(true);
@@ -428,6 +456,33 @@ export default function CloudBackup() {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* STARKBOT Token Balance */}
+      <Card className="mt-6 border-slate-700/50">
+        <CardContent className="pt-6">
+          <div className="flex items-center gap-4">
+            <Coins className="w-6 h-6 text-stark-400 flex-shrink-0" />
+            <div className="flex-1">
+              <h4 className="font-medium text-white mb-1">STARKBOT Token Balance</h4>
+              <p className="text-xs text-slate-400">Base Network</p>
+            </div>
+            <div className="text-right">
+              {balanceLoading ? (
+                <div className="w-5 h-5 border-2 border-stark-500 border-t-transparent rounded-full animate-spin" />
+              ) : starkbotBalance !== null ? (
+                <div>
+                  <span className="text-2xl font-bold text-stark-400">
+                    {Number(starkbotBalance).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  </span>
+                  <span className="text-sm text-stark-300 ml-2">STARKBOT</span>
+                </div>
+              ) : (
+                <span className="text-sm text-slate-500">Unable to load</span>
+              )}
             </div>
           </div>
         </CardContent>

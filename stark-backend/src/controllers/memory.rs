@@ -153,6 +153,10 @@ struct AppendResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    memory_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    similar_memories: Option<Vec<crate::memory::ConsolidationHint>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
@@ -479,14 +483,30 @@ async fn append_daily_log(
         None, None, 5, identity_id, None, None, None,
         Some("api"), Some(&today),
     ) {
-        Ok(_id) => HttpResponse::Ok().json(AppendResponse {
-            success: true,
-            message: Some("Added to daily log".to_string()),
-            error: None,
-        }),
+        Ok(id) => {
+            // Check for consolidation hints if hybrid search is available
+            let hints = if let Some(engine) = &data.hybrid_search {
+                let h = engine.find_consolidation_hints(&body.content, 3).await;
+                // Filter out the just-inserted memory from hints
+                let h: Vec<_> = h.into_iter().filter(|hint| hint.memory_id != id).collect();
+                if h.is_empty() { None } else { Some(h) }
+            } else {
+                None
+            };
+
+            HttpResponse::Ok().json(AppendResponse {
+                success: true,
+                message: Some("Added to daily log".to_string()),
+                memory_id: Some(id),
+                similar_memories: hints,
+                error: None,
+            })
+        }
         Err(e) => HttpResponse::InternalServerError().json(AppendResponse {
             success: false,
             message: None,
+            memory_id: None,
+            similar_memories: None,
             error: Some(format!("Failed to append: {}", e)),
         }),
     }
@@ -510,14 +530,29 @@ async fn append_long_term(
         None, None, 5, identity_id, None, None, None,
         Some("api"), None,
     ) {
-        Ok(_id) => HttpResponse::Ok().json(AppendResponse {
-            success: true,
-            message: Some("Added to long-term memory".to_string()),
-            error: None,
-        }),
+        Ok(id) => {
+            // Check for consolidation hints if hybrid search is available
+            let hints = if let Some(engine) = &data.hybrid_search {
+                let h = engine.find_consolidation_hints(&body.content, 3).await;
+                let h: Vec<_> = h.into_iter().filter(|hint| hint.memory_id != id).collect();
+                if h.is_empty() { None } else { Some(h) }
+            } else {
+                None
+            };
+
+            HttpResponse::Ok().json(AppendResponse {
+                success: true,
+                message: Some("Added to long-term memory".to_string()),
+                memory_id: Some(id),
+                similar_memories: hints,
+                error: None,
+            })
+        }
         Err(e) => HttpResponse::InternalServerError().json(AppendResponse {
             success: false,
             message: None,
+            memory_id: None,
+            similar_memories: None,
             error: Some(format!("Failed to append: {}", e)),
         }),
     }
@@ -561,6 +596,8 @@ async fn reindex(_data: web::Data<AppState>, req: HttpRequest) -> impl Responder
     HttpResponse::Ok().json(AppendResponse {
         success: true,
         message: Some("FTS index is auto-synced via triggers. No reindex needed.".to_string()),
+        memory_id: None,
+        similar_memories: None,
         error: None,
     })
 }
@@ -1158,6 +1195,351 @@ async fn delete_all_memories(
     }))
 }
 
+// ============================================================================
+// Merge, Export & Import Types
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+struct MergeBody {
+    memory_id_a: i64,
+    memory_id_b: i64,
+    #[serde(default = "default_merge_strategy")]
+    strategy: String,
+    custom_content: Option<String>,
+}
+
+fn default_merge_strategy() -> String {
+    "append".to_string()
+}
+
+#[derive(Debug, Serialize)]
+struct MergeResponse {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    new_memory_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    superseded_ids: Option<Vec<i64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MemoryExportData {
+    version: u32,
+    exported_at: String,
+    total_memories: usize,
+    memories: Vec<MemoryExportEntry>,
+    #[serde(default)]
+    associations: Vec<AssociationExportEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MemoryExportEntry {
+    original_id: i64,
+    memory_type: String,
+    content: String,
+    category: Option<String>,
+    tags: Option<String>,
+    importance: i64,
+    identity_id: Option<String>,
+    entity_type: Option<String>,
+    entity_name: Option<String>,
+    source_type: Option<String>,
+    log_date: Option<String>,
+    created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AssociationExportEntry {
+    source_original_id: i64,
+    target_original_id: i64,
+    association_type: String,
+    strength: f64,
+    metadata: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportQuery {
+    memory_type: Option<String>,
+    identity_id: Option<String>,
+    date_from: Option<String>,
+    date_to: Option<String>,
+    #[serde(default = "default_include_associations")]
+    include_associations: bool,
+}
+
+fn default_include_associations() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportBody {
+    #[serde(default = "default_import_strategy")]
+    strategy: String,
+    data: MemoryExportData,
+}
+
+fn default_import_strategy() -> String {
+    "append".to_string()
+}
+
+#[derive(Debug, Serialize)]
+struct ImportResponse {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    imported_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skipped_duplicates: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    associations_created: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+// ============================================================================
+// Merge, Export & Import Handlers
+// ============================================================================
+
+/// POST /api/memory/merge - Merge two memories
+async fn merge_memories(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    body: web::Json<MergeBody>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    use crate::db::tables::memories::MergeStrategy;
+
+    let strategy = match body.strategy.as_str() {
+        "append" => MergeStrategy::Append,
+        "replace_with_newer" => MergeStrategy::ReplaceWithNewer,
+        "custom" => {
+            let content = match &body.custom_content {
+                Some(c) if !c.is_empty() => c.clone(),
+                _ => return HttpResponse::BadRequest().json(MergeResponse {
+                    success: false,
+                    new_memory_id: None,
+                    superseded_ids: None,
+                    error: Some("custom_content is required when strategy is \"custom\"".to_string()),
+                }),
+            };
+            MergeStrategy::Custom(content)
+        }
+        _ => return HttpResponse::BadRequest().json(MergeResponse {
+            success: false,
+            new_memory_id: None,
+            superseded_ids: None,
+            error: Some(format!("Unknown strategy: \"{}\". Use append, replace_with_newer, or custom.", body.strategy)),
+        }),
+    };
+
+    match data.db.merge_memories(body.memory_id_a, body.memory_id_b, &strategy) {
+        Ok(new_id) => HttpResponse::Ok().json(MergeResponse {
+            success: true,
+            new_memory_id: Some(new_id),
+            superseded_ids: Some(vec![body.memory_id_a, body.memory_id_b]),
+            error: None,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(MergeResponse {
+            success: false,
+            new_memory_id: None,
+            superseded_ids: None,
+            error: Some(format!("Failed to merge: {}", e)),
+        }),
+    }
+}
+
+/// GET /api/memory/export - Export memories as JSON
+async fn export_memories(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    query: web::Query<ExportQuery>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    let memories = match data.db.list_memories_filtered(
+        query.memory_type.as_deref(),
+        query.identity_id.as_deref(),
+        query.date_from.as_deref(),
+        query.date_to.as_deref(),
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to export memories: {}", e)
+            }));
+        }
+    };
+
+    let memory_ids: Vec<i64> = memories.iter().map(|m| m.id).collect();
+
+    let associations = if query.include_associations && !memory_ids.is_empty() {
+        match data.db.list_associations_for_memories(&memory_ids) {
+            Ok(assocs) => assocs
+                .into_iter()
+                .map(|a| AssociationExportEntry {
+                    source_original_id: a.source_memory_id,
+                    target_original_id: a.target_memory_id,
+                    association_type: a.association_type,
+                    strength: a.strength,
+                    metadata: a.metadata,
+                })
+                .collect(),
+            Err(e) => {
+                log::warn!("Failed to export associations: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    let export_entries: Vec<MemoryExportEntry> = memories
+        .into_iter()
+        .map(|m| MemoryExportEntry {
+            original_id: m.id,
+            memory_type: m.memory_type,
+            content: m.content,
+            category: m.category,
+            tags: m.tags,
+            importance: m.importance,
+            identity_id: m.identity_id,
+            entity_type: m.entity_type,
+            entity_name: m.entity_name,
+            source_type: m.source_type,
+            log_date: m.log_date,
+            created_at: m.created_at,
+        })
+        .collect();
+
+    let export = MemoryExportData {
+        version: 1,
+        exported_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        total_memories: export_entries.len(),
+        memories: export_entries,
+        associations,
+    };
+
+    HttpResponse::Ok()
+        .insert_header(("Content-Disposition", "attachment; filename=\"memories_export.json\""))
+        .json(export)
+}
+
+/// POST /api/memory/import - Import memories from JSON
+async fn import_memories(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    body: web::Json<ImportBody>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    let strategy = body.strategy.as_str();
+
+    // Replace strategy: clear everything first
+    if strategy == "replace" {
+        if let Err(e) = data.db.clear_memories_for_restore() {
+            return HttpResponse::InternalServerError().json(ImportResponse {
+                success: false,
+                imported_count: None,
+                skipped_duplicates: None,
+                associations_created: None,
+                error: Some(format!("Failed to clear memories for replace: {}", e)),
+            });
+        }
+    }
+
+    let mut imported = 0usize;
+    let mut skipped = 0usize;
+    let mut id_mapping: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+
+    for entry in &body.data.memories {
+        // Merge strategy: check for duplicates via FTS
+        if strategy == "merge" {
+            if let Ok(similar) = data.db.find_similar_memories_fts(
+                &entry.content,
+                Some(&entry.memory_type),
+                entry.identity_id.as_deref(),
+                3,
+            ) {
+                // BM25 returns negative scores; strong match = more negative (< -5)
+                if similar.iter().any(|(_, rank)| *rank < -5.0) {
+                    skipped += 1;
+                    // Map to the best match so associations can still reference it
+                    if let Some((best, _)) = similar.first() {
+                        id_mapping.insert(entry.original_id, best.id);
+                    }
+                    continue;
+                }
+            }
+        }
+
+        match data.db.insert_memory(
+            &entry.memory_type,
+            &entry.content,
+            entry.category.as_deref(),
+            entry.tags.as_deref(),
+            entry.importance,
+            entry.identity_id.as_deref(),
+            None,
+            entry.entity_type.as_deref(),
+            entry.entity_name.as_deref(),
+            entry.source_type.as_deref(),
+            entry.log_date.as_deref(),
+        ) {
+            Ok(new_id) => {
+                id_mapping.insert(entry.original_id, new_id);
+                imported += 1;
+            }
+            Err(e) => {
+                log::warn!("Failed to import memory {}: {}", entry.original_id, e);
+            }
+        }
+    }
+
+    // Recreate associations using the old->new ID mapping
+    let mut associations_created = 0usize;
+    for assoc in &body.data.associations {
+        let new_source = id_mapping.get(&assoc.source_original_id);
+        let new_target = id_mapping.get(&assoc.target_original_id);
+
+        if let (Some(&src), Some(&tgt)) = (new_source, new_target) {
+            if src == tgt {
+                continue; // skip self-references
+            }
+            match data.db.create_memory_association(
+                src,
+                tgt,
+                &assoc.association_type,
+                assoc.strength,
+                assoc.metadata.as_deref(),
+            ) {
+                Ok(_) => associations_created += 1,
+                Err(e) => log::warn!(
+                    "Failed to import association {}->{}: {}",
+                    assoc.source_original_id,
+                    assoc.target_original_id,
+                    e
+                ),
+            }
+        }
+    }
+
+    HttpResponse::Ok().json(ImportResponse {
+        success: true,
+        imported_count: Some(imported),
+        skipped_duplicates: Some(skipped),
+        associations_created: Some(associations_created),
+        error: None,
+    })
+}
+
 /// Configure memory routes
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
@@ -1180,6 +1562,10 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("/embeddings/stats", web::get().to(embedding_stats))
             .route("/embeddings/backfill", web::post().to(backfill_embeddings))
             .route("/associations/rebuild", web::post().to(rebuild_associations))
-            .route("/all", web::delete().to(delete_all_memories)),
+            .route("/all", web::delete().to(delete_all_memories))
+            // Phase 2: Dedup, merge, export/import
+            .route("/merge", web::post().to(merge_memories))
+            .route("/export", web::get().to(export_memories))
+            .route("/import", web::post().to(import_memories)),
     );
 }

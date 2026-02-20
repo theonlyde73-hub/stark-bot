@@ -250,6 +250,57 @@ impl Database {
         Ok(results)
     }
 
+    /// List associations where both source and target are in the given memory ID set.
+    /// Used for export to capture only associations within the exported subset.
+    pub fn list_associations_for_memories(
+        &self,
+        memory_ids: &[i64],
+    ) -> Result<Vec<MemoryAssociationRow>, rusqlite::Error> {
+        if memory_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let conn = self.conn();
+        let n = memory_ids.len();
+
+        // Build two sets of placeholders for the IN clauses
+        let p1: String = (1..=n).map(|i| format!("?{}", i)).collect::<Vec<_>>().join(", ");
+        let p2: String = (1..=n).map(|i| format!("?{}", n + i)).collect::<Vec<_>>().join(", ");
+
+        let sql = format!(
+            "SELECT id, source_memory_id, target_memory_id, association_type, strength, metadata, created_at
+             FROM memory_associations
+             WHERE source_memory_id IN ({}) AND target_memory_id IN ({})
+             ORDER BY id",
+            p1, p2
+        );
+
+        // Bind memory_ids twice (once for each IN clause)
+        let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        for _ in 0..2 {
+            for id in memory_ids {
+                all_params.push(Box::new(*id));
+            }
+        }
+
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(all_params.iter()),
+            |row| {
+                Ok(MemoryAssociationRow {
+                    id: row.get(0)?,
+                    source_memory_id: row.get(1)?,
+                    target_memory_id: row.get(2)?,
+                    association_type: row.get(3)?,
+                    strength: row.get(4)?,
+                    metadata: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            },
+        )?;
+        rows.collect()
+    }
+
     /// Check if an association already exists between two memories
     pub fn association_exists(
         &self,

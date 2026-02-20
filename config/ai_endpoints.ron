@@ -28,10 +28,10 @@
         x402_cost: Some(5000),
     ),
     "morpheus": (
-        display_name: "Morpheus M2.5 (free)",
+        display_name: "GLM-5 via Morpheus (free)",
         endpoint: "https://inference.defirelay.com/api/v1/chat/completions",
-        model_archetype: "minimax",
-        model: Some("morpheus-m2.5"),
+        model_archetype: "openai",
+        model: Some("morpheus-glm5"),
         x402_cost: Some(0),
     ),
 }

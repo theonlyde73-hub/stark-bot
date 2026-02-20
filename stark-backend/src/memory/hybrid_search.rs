@@ -6,6 +6,18 @@ use crate::db::Database;
 use super::embeddings::EmbeddingGenerator;
 use super::vector_search;
 
+/// Hint returned at write time suggesting possible duplicates or related content.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConsolidationHint {
+    pub memory_id: i64,
+    /// First 200 chars of the existing memory's content
+    pub content_preview: String,
+    /// Cosine similarity score (0.0–1.0)
+    pub similarity: f64,
+    /// Human-readable suggestion
+    pub suggestion: String,
+}
+
 /// Result from the hybrid search engine, combining FTS, vector, and graph signals.
 #[derive(Debug, Clone)]
 pub struct HybridSearchResult {
@@ -233,6 +245,73 @@ impl HybridSearchEngine {
             .collect();
 
         Ok(results)
+    }
+
+    /// Find consolidation hints for new content before it is stored.
+    ///
+    /// Generates an embedding for `content`, runs vector similarity search,
+    /// and returns hints for memories above the 0.70 similarity threshold.
+    pub async fn find_consolidation_hints(
+        &self,
+        content: &str,
+        limit: usize,
+    ) -> Vec<ConsolidationHint> {
+        let query_embedding = match self.embedding_generator.generate(content).await {
+            Ok(emb) => emb,
+            Err(e) => {
+                log::warn!("Failed to generate embedding for consolidation hints: {}", e);
+                return Vec::new();
+            }
+        };
+
+        let candidates = match self.load_embeddings() {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("Failed to load embeddings for consolidation hints: {}", e);
+                return Vec::new();
+            }
+        };
+
+        let results = vector_search::find_similar(&query_embedding, &candidates, limit, 0.70);
+
+        let conn = self.db.conn();
+        let mut hints = Vec::new();
+
+        for hit in results {
+            let similarity = hit.similarity as f64;
+            let suggestion = if similarity >= 0.85 {
+                "possible duplicate — consider merging".to_string()
+            } else {
+                "related content exists — review before saving".to_string()
+            };
+
+            // Fetch the content preview
+            let preview = conn
+                .query_row(
+                    "SELECT content FROM memories WHERE id = ?1",
+                    rusqlite::params![hit.memory_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+                .map(|c| {
+                    if c.chars().count() > 200 {
+                        let truncated: String = c.chars().take(200).collect();
+                        format!("{}...", truncated)
+                    } else {
+                        c
+                    }
+                })
+                .unwrap_or_default();
+
+            hints.push(ConsolidationHint {
+                memory_id: hit.memory_id,
+                content_preview: preview,
+                similarity,
+                suggestion,
+            });
+        }
+
+        hints
     }
 
     /// Check if a backfill is currently running.

@@ -32,6 +32,7 @@ fn register_all_tools(registry: &mut ToolRegistry) {
     // Memory graph tools (associations + knowledge graph)
     registry.register(Arc::new(builtin::MemoryAssociateTool::new()));
     registry.register(Arc::new(builtin::MemoryGraphTool::new()));
+    registry.register(Arc::new(builtin::MemoryMergeTool::new()));
     // Notes tool (Obsidian-compatible notes with FTS5)
     registry.register(Arc::new(builtin::NotesTool::new()));
     registry.register(Arc::new(builtin::ModifySoulTool::new()));

@@ -53,6 +53,7 @@ fn row_to_memory(row: &rusqlite::Row) -> rusqlite::Result<MemoryRow> {
 impl Database {
     /// Insert a new memory and return its ID.
     /// FTS index is updated automatically via database triggers.
+    /// Content is automatically redacted for PII/secrets before insertion.
     pub fn insert_memory(
         &self,
         memory_type: &str,
@@ -67,6 +68,17 @@ impl Database {
         source_type: Option<&str>,
         log_date: Option<&str>,
     ) -> Result<i64, rusqlite::Error> {
+        // Redact secrets/PII before persisting
+        let redaction = crate::memory::redaction::redact_content(content);
+        if redaction.redaction_count > 0 {
+            log::warn!(
+                "Redacted {} secret(s) from memory: {:?}",
+                redaction.redaction_count,
+                redaction.redacted_types
+            );
+        }
+        let content = &redaction.content;
+
         let conn = self.conn();
         conn.execute(
             "INSERT INTO memories (
@@ -319,6 +331,231 @@ impl Database {
         rows.collect()
     }
 
+    // ====================================================================
+    // Duplicate detection & merge
+    // ====================================================================
+
+    /// Find similar memories using FTS5.
+    /// Extracts the first few significant words from content and searches for matches.
+    /// Returns (MemoryRow, BM25 rank) pairs sorted by relevance.
+    pub fn find_similar_memories_fts(
+        &self,
+        content: &str,
+        memory_type: Option<&str>,
+        identity_id: Option<&str>,
+        limit: i32,
+    ) -> Result<Vec<(MemoryRow, f64)>, rusqlite::Error> {
+        // Extract first few significant words for the FTS query
+        let words: Vec<&str> = content
+            .split_whitespace()
+            .filter(|w| w.len() > 2) // skip short words
+            .take(8)
+            .collect();
+        if words.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Quote each token to prevent FTS5 operator interpretation
+        let fts_query: String = words
+            .iter()
+            .map(|w| {
+                let escaped = w.replace('"', "\"\"");
+                format!("\"{}\"", escaped)
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let conn = self.conn();
+        let mut conditions = vec!["memories_fts MATCH ?1".to_string()];
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(fts_query)];
+        let mut idx = 2;
+
+        if let Some(mt) = memory_type {
+            conditions.push(format!("memories.memory_type = ?{}", idx));
+            params.push(Box::new(mt.to_string()));
+            idx += 1;
+        }
+        if let Some(iid) = identity_id {
+            conditions.push(format!("memories.identity_id = ?{}", idx));
+            params.push(Box::new(iid.to_string()));
+            idx += 1;
+        }
+        conditions.push(format!("memories.superseded_by IS NULL"));
+
+        let where_clause = conditions.join(" AND ");
+        let sql = format!(
+            "SELECT {cols}, bm25(memories_fts) as rank
+             FROM memories
+             JOIN memories_fts ON memories.id = memories_fts.rowid
+             WHERE {where_clause}
+             ORDER BY rank
+             LIMIT ?{idx}",
+            cols = MEMORY_SELECT_COLS,
+            where_clause = where_clause,
+            idx = idx,
+        );
+        params.push(Box::new(limit));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(param_refs.as_slice(), |row| {
+            let memory = row_to_memory(row)?;
+            let rank: f64 = row.get(15)?;
+            Ok((memory, rank))
+        })?;
+        rows.collect()
+    }
+
+    /// Merge two memories into a new one.
+    ///
+    /// 1. Fetch both memories
+    /// 2. Combine content per strategy
+    /// 3. Union tags, take max importance
+    /// 4. Insert new memory
+    /// 5. Set `superseded_by` on both originals
+    /// 6. Transfer associations to the new memory
+    /// 7. Return new memory ID
+    pub fn merge_memories(
+        &self,
+        id_a: i64,
+        id_b: i64,
+        strategy: &MergeStrategy,
+    ) -> Result<i64, rusqlite::Error> {
+        let mem_a = self.get_memory(id_a)?
+            .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)?;
+        let mem_b = self.get_memory(id_b)?
+            .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)?;
+
+        // Determine merged content
+        let merged_content = match strategy {
+            MergeStrategy::Append => {
+                format!("{}\n\n---\n\n{}", mem_a.content, mem_b.content)
+            }
+            MergeStrategy::ReplaceWithNewer => {
+                // Newer = later created_at
+                if mem_b.created_at >= mem_a.created_at {
+                    mem_b.content.clone()
+                } else {
+                    mem_a.content.clone()
+                }
+            }
+            MergeStrategy::Custom(text) => text.clone(),
+        };
+
+        // Union tags
+        let merged_tags = match (&mem_a.tags, &mem_b.tags) {
+            (Some(a), Some(b)) => {
+                let mut all: Vec<&str> = a.split(',').chain(b.split(',')).collect();
+                all.sort_unstable();
+                all.dedup();
+                Some(all.join(","))
+            }
+            (Some(a), None) => Some(a.clone()),
+            (None, Some(b)) => Some(b.clone()),
+            (None, None) => None,
+        };
+
+        // Take max importance
+        let importance = mem_a.importance.max(mem_b.importance);
+
+        // Use the newer memory's metadata for type, identity, etc.
+        let newer = if mem_b.created_at >= mem_a.created_at { &mem_b } else { &mem_a };
+
+        // Insert new merged memory
+        let new_id = self.insert_memory(
+            &newer.memory_type,
+            &merged_content,
+            newer.category.as_deref(),
+            merged_tags.as_deref(),
+            importance,
+            newer.identity_id.as_deref(),
+            newer.session_id,
+            newer.entity_type.as_deref(),
+            newer.entity_name.as_deref(),
+            Some("merge"),
+            newer.log_date.as_deref(),
+        )?;
+
+        let conn = self.conn();
+
+        // Mark both originals as superseded
+        conn.execute(
+            "UPDATE memories SET superseded_by = ?1 WHERE id IN (?2, ?3)",
+            rusqlite::params![new_id, id_a, id_b],
+        )?;
+
+        // Transfer associations: point source/target from old IDs to new ID
+        conn.execute(
+            "UPDATE memory_associations SET source_memory_id = ?1 WHERE source_memory_id IN (?2, ?3)",
+            rusqlite::params![new_id, id_a, id_b],
+        )?;
+        conn.execute(
+            "UPDATE memory_associations SET target_memory_id = ?1 WHERE target_memory_id IN (?2, ?3)",
+            rusqlite::params![new_id, id_a, id_b],
+        )?;
+
+        // Clean up any self-referencing associations created by the transfer
+        conn.execute(
+            "DELETE FROM memory_associations WHERE source_memory_id = target_memory_id",
+            [],
+        )?;
+
+        Ok(new_id)
+    }
+
+    // ====================================================================
+    // Filtered listing (for export)
+    // ====================================================================
+
+    /// List memories with optional filters for export.
+    pub fn list_memories_filtered(
+        &self,
+        memory_type: Option<&str>,
+        identity_id: Option<&str>,
+        date_from: Option<&str>,
+        date_to: Option<&str>,
+    ) -> Result<Vec<MemoryRow>, rusqlite::Error> {
+        let conn = self.conn();
+        let mut conditions: Vec<String> = Vec::new();
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut idx = 1;
+
+        if let Some(mt) = memory_type {
+            conditions.push(format!("memory_type = ?{}", idx));
+            params.push(Box::new(mt.to_string()));
+            idx += 1;
+        }
+        if let Some(iid) = identity_id {
+            conditions.push(format!("identity_id = ?{}", idx));
+            params.push(Box::new(iid.to_string()));
+            idx += 1;
+        }
+        if let Some(df) = date_from {
+            conditions.push(format!("created_at >= ?{}", idx));
+            params.push(Box::new(df.to_string()));
+            idx += 1;
+        }
+        if let Some(dt) = date_to {
+            conditions.push(format!("created_at <= ?{}", idx));
+            params.push(Box::new(dt.to_string()));
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let sql = format!(
+            "SELECT {} FROM memories {} ORDER BY id",
+            MEMORY_SELECT_COLS, where_clause
+        );
+
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(param_refs.as_slice(), |row| row_to_memory(row))?;
+        rows.collect()
+    }
+
     /// Get memory statistics aggregated from the DB.
     pub fn get_memory_stats(
         &self,
@@ -360,4 +597,15 @@ pub struct MemoryStats {
     pub identities: Vec<String>,
     pub earliest_date: Option<String>,
     pub latest_date: Option<String>,
+}
+
+/// Strategy for merging two memories.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum MergeStrategy {
+    /// Join both contents with a separator
+    Append,
+    /// Keep only the newer memory's content
+    ReplaceWithNewer,
+    /// Use caller-provided content
+    Custom(String),
 }
