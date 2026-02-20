@@ -147,6 +147,31 @@ pub async fn update_agent_settings(
     }
     let request = body.into_inner();
 
+    // Validate payment_mode if provided
+    let payment_mode = request.payment_mode.as_deref().unwrap_or("x402");
+    if !["none", "credits", "x402", "custom"].contains(&payment_mode) {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": format!("Invalid payment_mode: {}. Must be none, credits, x402, or custom.", payment_mode)
+        }));
+    }
+
+    // If payment_mode is "none", disable AI and return early
+    if payment_mode == "none" {
+        match state.db.disable_agent_settings() {
+            Ok(_) => {
+                log::info!("Disabled AI agent (payment_mode=none)");
+                let response: AgentSettingsResponse = AgentSettings::default().into();
+                return HttpResponse::Ok().json(response);
+            }
+            Err(e) => {
+                log::error!("Failed to disable agent: {}", e);
+                return HttpResponse::InternalServerError().json(serde_json::json!({
+                    "error": format!("Database error: {}", e)
+                }));
+            }
+        }
+    }
+
     // Validate endpoint
     if request.endpoint.is_empty() {
         return HttpResponse::BadRequest().json(serde_json::json!({
@@ -163,16 +188,17 @@ pub async fn update_agent_settings(
 
     // Save settings
     log::info!(
-        "Saving agent settings: endpoint_name={:?}, endpoint={}, archetype={}, max_response_tokens={}, max_context_tokens={}, has_secret_key={}",
+        "Saving agent settings: endpoint_name={:?}, endpoint={}, archetype={}, max_response_tokens={}, max_context_tokens={}, has_secret_key={}, payment_mode={}",
         request.endpoint_name,
         request.endpoint,
         request.model_archetype,
         request.max_response_tokens,
         request.max_context_tokens,
-        request.secret_key.is_some()
+        request.secret_key.is_some(),
+        payment_mode
     );
 
-    match state.db.save_agent_settings(request.endpoint_name.as_deref(), &request.endpoint, &request.model_archetype, request.model.as_deref(), request.max_response_tokens, request.max_context_tokens, request.secret_key.as_deref()) {
+    match state.db.save_agent_settings(request.endpoint_name.as_deref(), &request.endpoint, &request.model_archetype, request.model.as_deref(), request.max_response_tokens, request.max_context_tokens, request.secret_key.as_deref(), payment_mode) {
         Ok(settings) => {
             log::info!("Updated agent settings to use {:?} / {} endpoint with {} archetype", request.endpoint_name, request.endpoint, request.model_archetype);
             let response: AgentSettingsResponse = settings.into();

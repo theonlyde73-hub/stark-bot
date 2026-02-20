@@ -1,10 +1,10 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { MessageSquare, Calendar, Wrench, Zap, Sparkles, Wallet, Copy, Check, Newspaper } from 'lucide-react';
+import { MessageSquare, Calendar, Wrench, Zap, Sparkles, Wallet, Copy, Check, Newspaper, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import Card, { CardContent } from '@/components/ui/Card';
 import { useApi } from '@/hooks/useApi';
 import { useWallet } from '@/hooks/useWallet';
-import { getCortexBulletin, SkillInfo } from '@/lib/api';
+import { getCortexBulletin, getAgentSettings, SkillInfo } from '@/lib/api';
 import type { CortexBulletin } from '@/types';
 
 interface ServiceCapability {
@@ -44,11 +44,20 @@ export default function Dashboard() {
     }
   }, [address]);
   const [bulletin, setBulletin] = useState<CortexBulletin | null>(null);
+  const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
 
   useEffect(() => {
     getCortexBulletin()
       .then(setBulletin)
       .catch(() => setBulletin(null));
+
+    getAgentSettings()
+      .then((data: Record<string, unknown>) => {
+        const mode = data.payment_mode as string | undefined;
+        const enabled = data.enabled as boolean | undefined;
+        setAiConfigured(mode ? mode !== 'none' : enabled !== false);
+      })
+      .catch(() => setAiConfigured(null));
   }, []);
 
   const { data: sessions } = useApi<Array<unknown>>('/sessions');
@@ -144,27 +153,72 @@ export default function Dashboard() {
         )}
       </div>
 
-      <div className="mb-8 p-6 bg-slate-800/50 rounded-lg border border-slate-700">
-        <h2 className="text-xl font-semibold text-white mb-4">Getting Started</h2>
-        <ul className="space-y-2 text-slate-300">
-          <li className="flex items-start gap-2">
-            <span className="text-stark-400 mt-1">•</span>
-            <span>USDC on Base is needed to use the default AI model relay</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="text-stark-400 mt-1">•</span>
-            <span>A custom AI model endpoint can be configured in Agent Settings as an alternative</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="text-stark-400 mt-1">•</span>
-            <span>StarkBot is stateless so the encrypted backup store must be used to maintain state such as API keys and memories</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="text-stark-400 mt-1">•</span>
-            <span>To setup automation, configure a heartbeat and the impulse map or set up scheduled cron jobs</span>
-          </li>
-        </ul>
-      </div>
+      {aiConfigured === false ? (
+        <>
+        <div className="mb-6 p-8 rounded-lg border border-slate-700 bg-gradient-to-br from-slate-800/80 via-slate-800/50 to-stark-500/10">
+          <h2 className="text-2xl font-bold text-white mb-3">Welcome to Your Personal Agent</h2>
+          <p className="text-slate-300 text-sm leading-relaxed max-w-2xl mb-4">
+            StarkBot is an autonomous AI agent that lives on your infrastructure and works for you around the clock.
+            Connect it to your favorite services — GitHub, Twitter, Discord, Telegram, and more — and let it
+            handle tasks, monitor events, trade tokens, generate images, and execute complex workflows on your behalf.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+            <div className="flex items-start gap-2 text-slate-400">
+              <Zap className="w-4 h-4 text-stark-400 mt-0.5 flex-shrink-0" />
+              <span>Scheduled automations &amp; cron jobs</span>
+            </div>
+            <div className="flex items-start gap-2 text-slate-400">
+              <Wallet className="w-4 h-4 text-stark-400 mt-0.5 flex-shrink-0" />
+              <span>On-chain payments &amp; token swaps</span>
+            </div>
+            <div className="flex items-start gap-2 text-slate-400">
+              <MessageSquare className="w-4 h-4 text-stark-400 mt-0.5 flex-shrink-0" />
+              <span>Multi-platform messaging &amp; social</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="mb-8 p-6 bg-amber-500/10 rounded-lg border border-amber-500/30">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-6 h-6 text-amber-400 mt-0.5 flex-shrink-0" />
+            <div>
+              <h2 className="text-lg font-semibold text-amber-300 mb-1">AI Model Not Configured</h2>
+              <p className="text-slate-300 text-sm mb-3">
+                Your agent does not have an AI model configured. Chat and autonomous features will not work until a model is set up.
+              </p>
+              <a
+                href="/agent-settings"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 transition-colors text-sm font-medium"
+              >
+                Configure AI Model
+              </a>
+            </div>
+          </div>
+        </div>
+        </>
+      ) : (
+        <div className="mb-8 p-6 bg-slate-800/50 rounded-lg border border-slate-700">
+          <h2 className="text-xl font-semibold text-white mb-4">Getting Started</h2>
+          <ul className="space-y-2 text-slate-300">
+            <li className="flex items-start gap-2">
+              <span className="text-stark-400 mt-1">•</span>
+              <span>USDC on Base is needed to use the default AI model relay</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-stark-400 mt-1">•</span>
+              <span>A custom AI model endpoint can be configured in Agent Settings as an alternative</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-stark-400 mt-1">•</span>
+              <span>StarkBot is stateless so the encrypted backup store must be used to maintain state such as API keys and memories</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-stark-400 mt-1">•</span>
+              <span>To setup automation, configure a heartbeat and the impulse map or set up scheduled cron jobs</span>
+            </li>
+          </ul>
+        </div>
+      )}
 
       {activeCapabilities.length > 0 && (
         <div className="mb-8 p-6 bg-slate-800/50 rounded-lg border border-slate-700">

@@ -18,6 +18,17 @@ use super::types::{PaymentRequired, X402PaymentInfo};
 use crate::erc8128::Erc8128Signer;
 use crate::wallet::WalletProvider;
 
+/// Payment mode controlling how the X402 client handles payment negotiation
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PaymentMode {
+    /// Legacy behavior: try ERC-8128 credits, fall back to x402
+    Auto,
+    /// ERC-8128 credits only — error if no credits available (no x402 fallback)
+    CreditsOnly,
+    /// x402 only — skip ERC-8128 entirely, go straight to x402 on 402
+    X402Only,
+}
+
 /// Result of a request that may have required payment
 pub struct X402Response {
     pub response: Response,
@@ -33,6 +44,8 @@ pub struct X402Client {
     erc8128_signer: Erc8128Signer,
     /// Hosts known to support ERC-8128 credits (discovered via `x-erc8128-credits` header).
     erc8128_credits_hosts: Arc<Mutex<HashSet<String>>>,
+    /// Payment mode controlling credit vs x402 negotiation
+    payment_mode: PaymentMode,
 }
 
 impl X402Client {
@@ -49,7 +62,14 @@ impl X402Client {
             wallet_provider,
             erc8128_signer,
             erc8128_credits_hosts: Arc::new(Mutex::new(HashSet::new())),
+            payment_mode: PaymentMode::Auto,
         })
+    }
+
+    /// Set the payment mode (builder pattern)
+    pub fn with_payment_mode(mut self, mode: PaymentMode) -> Self {
+        self.payment_mode = mode;
+        self
     }
 
     /// Create a new x402 client with a private key (backward compatible)
@@ -72,6 +92,7 @@ impl X402Client {
             wallet_provider: wp,
             erc8128_signer,
             erc8128_credits_hosts: Arc::new(Mutex::new(HashSet::new())),
+            payment_mode: PaymentMode::Auto,
         })
     }
 
@@ -135,11 +156,34 @@ impl X402Client {
         url: &str,
         body: &T,
     ) -> Result<X402Response, String> {
-        log::info!("[X402] Making POST request to {}", url);
+        log::info!("[X402] Making POST request to {} (mode={:?})", url, self.payment_mode);
 
         // Serialize body upfront (needed for ERC-8128 Content-Digest)
         let body_bytes = serde_json::to_vec(body)
             .map_err(|e| format!("Failed to serialize request body: {}", e))?;
+
+        // ── X402Only mode: skip all ERC-8128 logic ──
+        if self.payment_mode == PaymentMode::X402Only {
+            let initial_response = self
+                .client
+                .post(url)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(body_bytes.clone())
+                .send()
+                .await
+                .map_err(|e| format!("Request failed: {}", e))?;
+
+            if initial_response.status().as_u16() != 402 {
+                return Ok(X402Response {
+                    response: initial_response,
+                    payment: None,
+                });
+            }
+
+            return self
+                .handle_402_with_x402(initial_response, url, &body_bytes)
+                .await;
+        }
 
         // ── Proactive ERC-8128 path: if we know this host supports credits ──
         if self.is_erc8128_credits_host(url) {
@@ -159,6 +203,9 @@ impl X402Client {
                             });
                         }
                         Ok(response_402) => {
+                            if self.payment_mode == PaymentMode::CreditsOnly {
+                                return Err("ERC-8128 credits exhausted and payment mode is CreditsOnly (no x402 fallback)".to_string());
+                            }
                             log::info!(
                                 "[X402] ERC-8128 credits not accepted (maybe exhausted), falling through to x402"
                             );
@@ -168,6 +215,9 @@ impl X402Client {
                                 .await;
                         }
                         Err(e) => {
+                            if self.payment_mode == PaymentMode::CreditsOnly {
+                                return Err(format!("ERC-8128 proactive request failed and payment mode is CreditsOnly: {}", e));
+                            }
                             log::warn!(
                                 "[X402] ERC-8128 proactive request failed: {}, falling through",
                                 e
@@ -176,6 +226,9 @@ impl X402Client {
                     }
                 }
                 Err(e) => {
+                    if self.payment_mode == PaymentMode::CreditsOnly {
+                        return Err(format!("ERC-8128 signing failed and payment mode is CreditsOnly: {}", e));
+                    }
                     log::warn!("[X402] ERC-8128 signing failed: {}, falling through", e);
                 }
             }
@@ -219,6 +272,9 @@ impl X402Client {
                             });
                         }
                         Ok(response_402) => {
+                            if self.payment_mode == PaymentMode::CreditsOnly {
+                                return Err("ERC-8128 credits not available and payment mode is CreditsOnly (no x402 fallback)".to_string());
+                            }
                             log::info!(
                                 "[X402] ERC-8128 signed request still got 402 (no credits?), falling through to x402"
                             );
@@ -227,6 +283,9 @@ impl X402Client {
                                 .await;
                         }
                         Err(e) => {
+                            if self.payment_mode == PaymentMode::CreditsOnly {
+                                return Err(format!("ERC-8128 retry failed and payment mode is CreditsOnly: {}", e));
+                            }
                             log::warn!(
                                 "[X402] ERC-8128 retry request failed: {}, falling through to x402",
                                 e
@@ -235,6 +294,9 @@ impl X402Client {
                     }
                 }
                 Err(e) => {
+                    if self.payment_mode == PaymentMode::CreditsOnly {
+                        return Err(format!("ERC-8128 signing failed and payment mode is CreditsOnly: {}", e));
+                    }
                     log::warn!(
                         "[X402] ERC-8128 signing failed: {}, falling through to x402",
                         e
@@ -244,6 +306,9 @@ impl X402Client {
         }
 
         // ── No ERC-8128 or it failed: standard x402 payment ──
+        if self.payment_mode == PaymentMode::CreditsOnly {
+            return Err("Received 402 but no ERC-8128 credits available and payment mode is CreditsOnly".to_string());
+        }
         self.handle_402_with_x402(initial_response, url, &body_bytes)
             .await
     }

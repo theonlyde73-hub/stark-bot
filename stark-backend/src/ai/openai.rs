@@ -21,6 +21,9 @@ pub struct OpenAIClient {
     model: Option<String>,
     max_tokens: u32,
     x402_client: Option<Arc<X402Client>>,
+    /// Payment type hint sent in the request body for routers that support it
+    /// Maps from PaymentMode: Auto→"auto", CreditsOnly→"credits", X402Only→"x402"
+    payment_type: Option<String>,
     /// Optional broadcaster for emitting retry events
     broadcaster: Option<Arc<EventBroadcaster>>,
     /// Channel ID for events (set when broadcasting)
@@ -39,6 +42,9 @@ struct OpenAICompletionRequest {
     tool_choice: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
+    /// Payment method preference for routers that support it: "auto", "credits", or "x402"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payment_type: Option<String>,
 }
 
 /// Streaming chunk response from OpenAI API
@@ -171,6 +177,7 @@ impl OpenAIClient {
         model: Option<&str>,
         wallet_provider: Option<Arc<dyn WalletProvider>>,
         max_tokens: Option<u32>,
+        payment_mode: Option<crate::x402::PaymentMode>,
     ) -> Result<Self, String> {
         let endpoint_url = endpoint
             .unwrap_or("https://api.openai.com/v1/chat/completions")
@@ -190,11 +197,12 @@ impl OpenAIClient {
         }
 
         // Create x402 client if wallet provider is provided and endpoint uses x402
+        let mode = payment_mode.unwrap_or(crate::x402::PaymentMode::Auto);
         let x402_client = if is_x402_endpoint(&endpoint_url) {
             if let Some(provider) = wallet_provider {
-                match X402Client::new(provider) {
+                match X402Client::new(provider).map(|c| c.with_payment_mode(mode)) {
                     Ok(c) => {
-                        log::info!("[AI] x402 enabled for endpoint {} with wallet {}", endpoint_url, c.wallet_address());
+                        log::info!("[AI] x402 enabled for endpoint {} with wallet {} (mode={:?})", endpoint_url, c.wallet_address(), mode);
                         Some(Arc::new(c))
                     }
                     Err(e) => {
@@ -208,6 +216,13 @@ impl OpenAIClient {
             }
         } else {
             None
+        };
+
+        // Map PaymentMode to the payment_type string for the request body
+        let payment_type_str = match mode {
+            crate::x402::PaymentMode::CreditsOnly => Some("credits".to_string()),
+            crate::x402::PaymentMode::X402Only => Some("x402".to_string()),
+            crate::x402::PaymentMode::Auto => None, // "auto" is the default, omit it
         };
 
         // Determine model: use provided model, or infer from endpoint URL
@@ -231,6 +246,7 @@ impl OpenAIClient {
             model: effective_model,
             max_tokens: max_tokens.unwrap_or(40096),
             x402_client,
+            payment_type: payment_type_str,
             broadcaster: None,
             channel_id: None,
         })
@@ -307,6 +323,7 @@ impl OpenAIClient {
             model: model_name,
             max_tokens: max_tokens.unwrap_or(40000),
             x402_client,
+            payment_type: None,
             broadcaster: None,
             channel_id: None,
         })
@@ -422,6 +439,7 @@ impl OpenAIClient {
             tools: openai_tools.clone(),
             tool_choice: if tools.is_empty() { None } else { Some("required".to_string()) },
             stream: None,
+            payment_type: self.payment_type.clone(),
         };
 
         // Debug: Log full request details
@@ -747,6 +765,7 @@ impl OpenAIClient {
             tools: openai_tools.clone(),
             tool_choice: if tools.is_empty() { None } else { Some("required".to_string()) },
             stream: Some(true),
+            payment_type: self.payment_type.clone(),
         };
 
         log::info!(

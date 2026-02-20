@@ -363,6 +363,8 @@ pub struct AgentSettingsEntry {
     /// Secret key is included so the user doesn't have to re-enter API keys after restore.
     /// The entire backup payload is already encrypted with ECIES — this is not stored in plaintext.
     pub secret_key: Option<String>,
+    /// Payment mode: "none", "credits", "x402", "custom"
+    pub payment_mode: String,
 }
 
 /// On-chain agent identity registration entry in backup (full metadata — DB is single source of truth)
@@ -766,6 +768,7 @@ pub async fn collect_backup_data(
                 max_context_tokens: s.max_context_tokens,
                 enabled: s.enabled,
                 secret_key: s.secret_key.clone(),
+                payment_mode: s.payment_mode.clone(),
             })
             .collect();
     }

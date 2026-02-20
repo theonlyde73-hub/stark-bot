@@ -188,7 +188,7 @@ impl AiClient {
         settings: &AgentSettings,
         wallet_provider: Option<std::sync::Arc<dyn crate::wallet::WalletProvider>>,
     ) -> Result<Self, String> {
-        use crate::x402::is_x402_endpoint;
+        use crate::x402::{is_x402_endpoint, PaymentMode};
 
         // Get archetype to determine client type and default model
         let archetype_id = Self::infer_archetype(settings);
@@ -203,6 +203,13 @@ impl AiClient {
             ""  // x402 endpoints use crypto signatures, no API key needed
         } else {
             settings.secret_key.as_deref().unwrap_or("")
+        };
+
+        // Convert payment_mode string to PaymentMode enum
+        let payment_mode = match settings.payment_mode.as_str() {
+            "credits" => Some(PaymentMode::CreditsOnly),
+            "x402" => Some(PaymentMode::X402Only),
+            _ => Some(PaymentMode::Auto),
         };
 
         // Use ClaudeClient for Claude archetype (native Anthropic API with x-api-key header)
@@ -222,6 +229,7 @@ impl AiClient {
             Some(model),
             wallet_provider,
             Some(settings.max_response_tokens as u32),
+            payment_mode,
         )?;
         Ok(AiClient::OpenAI(client))
     }

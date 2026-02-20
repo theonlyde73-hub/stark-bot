@@ -785,6 +785,7 @@ async fn restore_backup_data(
             log::warn!("[Keystore] Failed to disable existing agent settings for restore: {}", e);
         }
         for entry in &backup_data.agent_settings {
+            let payment_mode = if entry.payment_mode.is_empty() { "x402" } else { &entry.payment_mode };
             match db.save_agent_settings(
                 entry.endpoint_name.as_deref(),
                 &entry.endpoint,
@@ -793,6 +794,7 @@ async fn restore_backup_data(
                 entry.max_response_tokens,
                 entry.max_context_tokens,
                 entry.secret_key.as_deref(),
+                payment_mode,
             ) {
                 Ok(saved) => {
                     if !entry.enabled {

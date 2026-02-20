@@ -285,6 +285,12 @@ impl Database {
             conn.execute("ALTER TABLE agent_settings ADD COLUMN endpoint_name TEXT", [])?;
         }
 
+        // Migration: Add payment_mode column to agent_settings
+        let _ = conn.execute(
+            "ALTER TABLE agent_settings ADD COLUMN payment_mode TEXT NOT NULL DEFAULT 'x402'",
+            [],
+        );
+
         // Migration: Add web3_tx_requires_confirmation column to bot_settings if it doesn't exist
         let has_web3_tx_confirmation: bool = conn
             .query_row(

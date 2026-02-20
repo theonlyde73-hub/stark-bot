@@ -1,13 +1,15 @@
 import { useState, useEffect, FormEvent } from 'react';
-import { Save, Settings } from 'lucide-react';
+import { Save, Settings, Ban, CreditCard, Coins, Globe } from 'lucide-react';
 import Card, { CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import { getAgentSettings, updateAgentSettings, getBotSettings, updateBotSettings, getAiEndpointPresets, AiEndpointPreset } from '@/lib/api';
+import { useWallet } from '@/hooks/useWallet';
 
 type ModelArchetype = 'kimi' | 'llama' | 'claude' | 'openai' | 'minimax';
+type PaymentMode = 'none' | 'credits' | 'x402' | 'custom';
 
-interface Settings {
+interface SettingsData {
   endpoint_name?: string | null;
   endpoint?: string;
   model_archetype?: string;
@@ -15,10 +17,21 @@ interface Settings {
   max_response_tokens?: number;
   max_context_tokens?: number;
   has_secret_key?: boolean;
+  enabled?: boolean;
+  payment_mode?: string;
 }
 
+const MODE_CARDS: { mode: PaymentMode; title: string; subtitle: string; icon: typeof Ban }[] = [
+  { mode: 'none', title: 'None', subtitle: 'AI disabled', icon: Ban },
+  { mode: 'credits', title: 'DefiRelay Credits', subtitle: 'ERC-8128 credits', icon: CreditCard },
+  { mode: 'x402', title: 'DefiRelay x402', subtitle: 'Pay-per-call USDC', icon: Coins },
+  { mode: 'custom', title: 'Custom', subtitle: 'Your own endpoint', icon: Globe },
+];
+
 export default function AgentSettings() {
+  const { usdcBalance } = useWallet();
   const [presets, setPresets] = useState<AiEndpointPreset[]>([]);
+  const [paymentMode, setPaymentMode] = useState<PaymentMode>('none');
   const [endpointOption, setEndpointOption] = useState<string>('kimi');
   const [customEndpoint, setCustomEndpoint] = useState('');
   const [modelArchetype, setModelArchetype] = useState<ModelArchetype>('kimi');
@@ -45,45 +58,55 @@ export default function AgentSettings() {
     } catch (err) {
       console.error('Failed to load AI endpoint presets:', err);
     } finally {
-      // Pass presets directly since setPresets hasn't applied yet
       loadSettings(loadedPresets);
     }
   };
 
   // Lock archetype for preset endpoints
   useEffect(() => {
-    const preset = presets.find(p => p.id === endpointOption);
-    if (preset) {
-      setModelArchetype(preset.model_archetype as ModelArchetype);
+    if (paymentMode === 'credits' || paymentMode === 'x402') {
+      const preset = presets.find(p => p.id === endpointOption);
+      if (preset) {
+        setModelArchetype(preset.model_archetype as ModelArchetype);
+      }
     }
-  }, [endpointOption, presets]);
+  }, [endpointOption, presets, paymentMode]);
 
-  // Archetype is only selectable for custom endpoints
-  const isArchetypeLocked = endpointOption !== 'custom';
+  const isArchetypeLocked = paymentMode !== 'custom';
 
   const loadSettings = async (loadedPresets: AiEndpointPreset[]) => {
     try {
-      const data = await getAgentSettings() as Settings;
+      const data = await getAgentSettings() as SettingsData;
 
-      // Match dropdown by endpoint_name (the preset key from ai_endpoints.ron)
+      // Detect payment_mode from API response
+      if (data.payment_mode && ['none', 'credits', 'x402', 'custom'].includes(data.payment_mode)) {
+        setPaymentMode(data.payment_mode as PaymentMode);
+      } else if (data.enabled === false) {
+        setPaymentMode('none');
+      } else if (data.endpoint && !data.endpoint.includes('defirelay.com')) {
+        setPaymentMode('custom');
+      } else {
+        setPaymentMode('x402');
+      }
+
+      // Match dropdown by endpoint_name
       if (data.endpoint_name && loadedPresets.some(p => p.id === data.endpoint_name)) {
         setEndpointOption(data.endpoint_name);
       } else if (data.endpoint) {
-        setEndpointOption('custom');
-        setCustomEndpoint(data.endpoint);
+        if (data.endpoint.includes('defirelay.com')) {
+          setEndpointOption(loadedPresets.length > 0 ? loadedPresets[0].id : 'custom');
+        } else {
+          setCustomEndpoint(data.endpoint);
+        }
       } else {
         setEndpointOption(loadedPresets.length > 0 ? loadedPresets[0].id : 'custom');
       }
 
-      // Set secret key indicator
       setHasExistingSecretKey(data.has_secret_key ?? false);
 
-      // Set model archetype
       if (data.model_archetype && ['kimi', 'llama', 'claude', 'openai', 'minimax'].includes(data.model_archetype)) {
         setModelArchetype(data.model_archetype as ModelArchetype);
       }
-
-      // Set token limits
       if (data.max_response_tokens && data.max_response_tokens > 0) {
         setMaxResponseTokens(data.max_response_tokens);
       }
@@ -111,9 +134,7 @@ export default function AgentSettings() {
     setIsSavingBehavior(true);
     setMessage(null);
     try {
-      await updateBotSettings({
-        max_tool_iterations: maxToolIterations,
-      });
+      await updateBotSettings({ max_tool_iterations: maxToolIterations });
       setMessage({ type: 'success', text: 'Agent behavior settings saved successfully' });
     } catch (err) {
       setMessage({ type: 'error', text: 'Failed to save agent behavior settings' });
@@ -127,37 +148,42 @@ export default function AgentSettings() {
     setIsSaving(true);
     setMessage(null);
 
+    // For "none" mode, just send payment_mode
+    if (paymentMode === 'none') {
+      try {
+        await updateAgentSettings({ payment_mode: 'none', endpoint: '', model_archetype: 'kimi', max_response_tokens: maxResponseTokens, max_context_tokens: maxContextTokens });
+        setMessage({ type: 'success', text: 'AI capabilities disabled' });
+      } catch (err) {
+        setMessage({ type: 'error', text: 'Failed to save settings' });
+      } finally {
+        setIsSaving(false);
+      }
+      return;
+    }
+
+    const selectedPreset = (paymentMode === 'credits' || paymentMode === 'x402')
+      ? presets.find(p => p.id === endpointOption)
+      : null;
+
     let endpoint: string;
-    const selectedPreset = presets.find(p => p.id === endpointOption);
     if (selectedPreset) {
       endpoint = selectedPreset.endpoint;
     } else {
       endpoint = customEndpoint;
     }
 
-    if (endpointOption === 'custom' && !customEndpoint.trim()) {
+    if (paymentMode === 'custom' && !customEndpoint.trim()) {
       setMessage({ type: 'error', text: 'Please enter a custom endpoint URL' });
       setIsSaving(false);
       return;
     }
 
-    // Enforce minimum context tokens
     const contextTokens = Math.max(maxContextTokens, 80000);
+    const archetype = selectedPreset ? selectedPreset.model_archetype : modelArchetype;
 
     try {
-      // Enforce archetype for preset endpoints
-      const archetype = selectedPreset ? selectedPreset.model_archetype : modelArchetype;
-
-      // Only include secret_key for custom endpoints, and only if provided
-      const payload: {
-        endpoint_name?: string | null;
-        endpoint: string;
-        model_archetype: string;
-        model?: string | null;
-        max_response_tokens: number;
-        max_context_tokens: number;
-        secret_key?: string;
-      } = {
+      const payload: Record<string, unknown> = {
+        payment_mode: paymentMode,
         endpoint_name: selectedPreset ? selectedPreset.id : null,
         endpoint,
         model_archetype: archetype,
@@ -166,20 +192,19 @@ export default function AgentSettings() {
         max_context_tokens: contextTokens,
       };
 
-      if (endpointOption === 'custom' && secretKey.trim()) {
+      if (paymentMode === 'custom' && secretKey.trim()) {
         payload.secret_key = secretKey;
       }
 
       await updateAgentSettings(payload);
-      setMessage({ type: 'success', text: 'Endpoint settings saved successfully' });
+      setMessage({ type: 'success', text: 'Settings saved successfully' });
 
-      // Update the indicator if we saved a new key
-      if (endpointOption === 'custom' && secretKey.trim()) {
+      if (paymentMode === 'custom' && secretKey.trim()) {
         setHasExistingSecretKey(true);
-        setSecretKey(''); // Clear the input after saving
+        setSecretKey('');
       }
     } catch (err) {
-      setMessage({ type: 'error', text: 'Failed to save endpoint settings' });
+      setMessage({ type: 'error', text: 'Failed to save settings' });
     } finally {
       setIsSaving(false);
     }
@@ -200,56 +225,130 @@ export default function AgentSettings() {
     <div className="p-8">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-white mb-2">Agent Settings</h1>
-        <p className="text-slate-400">Configure your AI agent endpoint and model type</p>
+        <p className="text-slate-400">Configure how your AI agent connects to a model provider</p>
       </div>
 
       <div className="grid gap-6 max-w-2xl">
+        {/* Payment Mode Selector */}
         <Card>
           <CardHeader>
-            <CardTitle>Endpoint Configuration</CardTitle>
+            <CardTitle>Payment Mode</CardTitle>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleEndpointSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Agent Endpoint
-                </label>
-                <select
-                  value={endpointOption}
-                  onChange={(e) => setEndpointOption(e.target.value)}
-                  className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-stark-500 focus:border-transparent"
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {MODE_CARDS.map(({ mode, title, subtitle, icon: Icon }) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setPaymentMode(mode)}
+                  className={`relative flex flex-col items-start p-4 rounded-lg border-2 transition-all text-left ${
+                    paymentMode === mode
+                      ? 'border-stark-500 bg-stark-500/10'
+                      : 'border-slate-700 bg-slate-800/50 hover:border-slate-600'
+                  }`}
                 >
-                  {presets.map(preset => (
-                    <option key={preset.id} value={preset.id}>
-                      {preset.display_name}{preset.x402_cost != null && preset.x402_cost > 0 ? ` (${(preset.x402_cost / 1_000_000).toFixed(4)} USDC/call)` : preset.x402_cost === 0 ? ' (free)' : ''}
-                    </option>
-                  ))}
-                  <option value="custom">Custom Endpoint</option>
-                </select>
-                {(() => {
-                  const selected = presets.find(p => p.id === endpointOption);
-                  if (selected?.x402_cost != null && selected.x402_cost > 0) {
-                    const cost = (selected.x402_cost / 1_000_000).toFixed(4);
-                    return (
-                      <p className="text-xs text-yellow-400 mt-1">
-                        x402 payment: {cost} USDC per API call
-                      </p>
-                    );
-                  } else if (selected?.x402_cost === 0) {
-                    return (
-                      <p className="text-xs text-green-400 mt-1">
-                        Free — no x402 payment required
-                      </p>
-                    );
-                  }
-                  return null;
-                })()}
-              </div>
+                  <div className={`absolute top-3 right-3 w-3 h-3 rounded-full border-2 ${
+                    paymentMode === mode
+                      ? 'border-stark-500 bg-stark-500'
+                      : 'border-slate-600'
+                  }`} />
+                  <Icon className={`w-5 h-5 mb-2 ${paymentMode === mode ? 'text-stark-400' : 'text-slate-500'}`} />
+                  <span className={`text-sm font-medium ${paymentMode === mode ? 'text-white' : 'text-slate-300'}`}>
+                    {title}
+                  </span>
+                  <span className="text-xs text-slate-500">{subtitle}</span>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
 
-              {endpointOption === 'custom' && (
-                <>
+        {/* Mode-specific content */}
+        <form onSubmit={handleEndpointSubmit} className="grid gap-6">
+          {paymentMode === 'none' && (
+            <Card>
+              <CardContent>
+                <div className="flex items-center gap-3 py-4">
+                  <Ban className="w-6 h-6 text-slate-500" />
+                  <div>
+                    <p className="text-slate-300 font-medium">AI capabilities are disabled</p>
+                    <p className="text-sm text-slate-500">Select a payment mode above to enable AI features</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {(paymentMode === 'credits' || paymentMode === 'x402') && (
+            <Card>
+              <CardHeader>
+                <CardTitle>DefiRelay Endpoint</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      Model Preset
+                    </label>
+                    <select
+                      value={endpointOption}
+                      onChange={(e) => setEndpointOption(e.target.value)}
+                      className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-stark-500 focus:border-transparent"
+                    >
+                      {presets.map(preset => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.display_name}{preset.x402_cost != null && preset.x402_cost > 0 ? ` (${(preset.x402_cost / 1_000_000).toFixed(4)} USDC/call)` : preset.x402_cost === 0 ? ' (free)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {(() => {
+                      const selected = presets.find(p => p.id === endpointOption);
+                      if (selected?.x402_cost != null && selected.x402_cost > 0) {
+                        const cost = (selected.x402_cost / 1_000_000).toFixed(4);
+                        return (
+                          <p className="text-xs text-yellow-400 mt-1">
+                            {paymentMode === 'credits' ? 'ERC-8128 credits' : 'x402 payment'}: {cost} USDC per API call
+                          </p>
+                        );
+                      } else if (selected?.x402_cost === 0) {
+                        return (
+                          <p className="text-xs text-green-400 mt-1">
+                            Free — no payment required
+                          </p>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
+
+                  {paymentMode === 'x402' && usdcBalance !== null && (
+                    <div className="flex items-center gap-2 px-3 py-2 bg-slate-700/30 rounded-lg">
+                      <Coins className="w-4 h-4 text-blue-400" />
+                      <span className="text-sm text-slate-300">USDC Balance (Base):</span>
+                      <span className="text-sm font-mono text-white">{parseFloat(usdcBalance).toFixed(2)}</span>
+                    </div>
+                  )}
+
+                  {paymentMode === 'credits' && (
+                    <div className="flex items-center gap-2 px-3 py-2 bg-slate-700/30 rounded-lg">
+                      <CreditCard className="w-4 h-4 text-green-400" />
+                      <span className="text-sm text-slate-400">Credit balance is checked at request time via ERC-8128</span>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {paymentMode === 'custom' && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Custom Endpoint</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
                   <Input
-                    label="Custom Endpoint URL"
+                    label="Endpoint URL"
                     value={customEndpoint}
                     onChange={(e) => setCustomEndpoint(e.target.value)}
                     placeholder="https://your-endpoint.com/v1/chat/completions"
@@ -265,80 +364,99 @@ export default function AgentSettings() {
                       type="password"
                       value={secretKey}
                       onChange={(e) => setSecretKey(e.target.value)}
-                      placeholder={hasExistingSecretKey ? "Leave empty to keep existing key" : "Leave empty if using x402 endpoint (defirelay.com)"}
+                      placeholder={hasExistingSecretKey ? 'Leave empty to keep existing key' : 'Enter API key'}
                       className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-stark-500 focus:border-transparent"
                     />
                     <p className="text-xs text-slate-500 mt-1">
-                      Required for standard OpenAI-compatible endpoints. Not needed for x402 endpoints (defirelay.com).
+                      Required for standard OpenAI-compatible endpoints
                     </p>
                   </div>
-                </>
-              )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Model Archetype
-                </label>
-                <select
-                  value={modelArchetype}
-                  onChange={(e) => setModelArchetype(e.target.value as ModelArchetype)}
-                  disabled={isArchetypeLocked}
-                  className={`w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-stark-500 focus:border-transparent ${isArchetypeLocked ? 'opacity-60 cursor-not-allowed' : ''}`}
-                >
-                  <option value="kimi">Kimi</option>
-                  <option value="llama">Llama</option>
-                  <option value="claude">Claude</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="minimax">MiniMax</option>
-                </select>
-                <p className="text-xs text-slate-500 mt-1">
-                  {isArchetypeLocked
-                    ? `Locked to ${modelArchetype} for this endpoint`
-                    : 'Select the model family to optimize prompt formatting'}
-                </p>
-              </div>
+          {/* Common settings (shown for all active modes) */}
+          {paymentMode !== 'none' && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Model Configuration</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      Model Archetype
+                    </label>
+                    <select
+                      value={modelArchetype}
+                      onChange={(e) => setModelArchetype(e.target.value as ModelArchetype)}
+                      disabled={isArchetypeLocked}
+                      className={`w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-stark-500 focus:border-transparent ${isArchetypeLocked ? 'opacity-60 cursor-not-allowed' : ''}`}
+                    >
+                      <option value="kimi">Kimi</option>
+                      <option value="llama">Llama</option>
+                      <option value="claude">Claude</option>
+                      <option value="openai">OpenAI</option>
+                      <option value="minimax">MiniMax</option>
+                    </select>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {isArchetypeLocked
+                        ? `Locked to ${modelArchetype} for this preset`
+                        : 'Select the model family to optimize prompt formatting'}
+                    </p>
+                  </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Max Response Tokens
-                </label>
-                <input
-                  type="number"
-                  value={maxResponseTokens}
-                  onChange={(e) => setMaxResponseTokens(parseInt(e.target.value) || 40000)}
-                  min={1000}
-                  max={200000}
-                  className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-stark-500 focus:border-transparent"
-                />
-                <p className="text-xs text-slate-500 mt-1">
-                  Maximum tokens for AI response output (default: 40,000)
-                </p>
-              </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      Max Response Tokens
+                    </label>
+                    <input
+                      type="number"
+                      value={maxResponseTokens}
+                      onChange={(e) => setMaxResponseTokens(parseInt(e.target.value) || 40000)}
+                      min={1000}
+                      max={200000}
+                      className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-stark-500 focus:border-transparent"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      Maximum tokens for AI response output (default: 40,000)
+                    </p>
+                  </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Max Context Tokens
-                </label>
-                <input
-                  type="number"
-                  value={maxContextTokens}
-                  onChange={(e) => setMaxContextTokens(parseInt(e.target.value) || 100000)}
-                  min={80000}
-                  max={200000}
-                  className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-stark-500 focus:border-transparent"
-                />
-                <p className="text-xs text-slate-500 mt-1">
-                  Context window limit for conversation history (min: 80,000, default: 100,000). Controls when compaction triggers.
-                </p>
-              </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      Max Context Tokens
+                    </label>
+                    <input
+                      type="number"
+                      value={maxContextTokens}
+                      onChange={(e) => setMaxContextTokens(parseInt(e.target.value) || 100000)}
+                      min={80000}
+                      max={200000}
+                      className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-stark-500 focus:border-transparent"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      Context window limit for conversation history (min: 80,000, default: 100,000)
+                    </p>
+                  </div>
 
-              <Button type="submit" isLoading={isSaving} className="w-fit">
-                <Save className="w-4 h-4 mr-2" />
-                Save Endpoint Settings
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
+                  <Button type="submit" isLoading={isSaving} className="w-fit">
+                    <Save className="w-4 h-4 mr-2" />
+                    Save Settings
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {paymentMode === 'none' && (
+            <Button type="submit" isLoading={isSaving} className="w-fit">
+              <Save className="w-4 h-4 mr-2" />
+              Save Settings
+            </Button>
+          )}
+        </form>
 
         {/* Agent Behavior Section */}
         <Card>

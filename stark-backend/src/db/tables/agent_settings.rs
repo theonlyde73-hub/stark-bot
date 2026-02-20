@@ -16,7 +16,7 @@ impl Database {
         let conn = self.conn();
 
         let mut stmt = conn.prepare(
-            "SELECT id, endpoint_name, endpoint, model_archetype, model, max_response_tokens, max_context_tokens, enabled, secret_key, created_at, updated_at
+            "SELECT id, endpoint_name, endpoint, model_archetype, model, max_response_tokens, max_context_tokens, enabled, secret_key, created_at, updated_at, payment_mode
              FROM agent_settings WHERE enabled = 1 LIMIT 1",
         )?;
 
@@ -33,7 +33,7 @@ impl Database {
         let conn = self.conn();
 
         let mut stmt = conn.prepare(
-            "SELECT id, endpoint_name, endpoint, model_archetype, model, max_response_tokens, max_context_tokens, enabled, secret_key, created_at, updated_at
+            "SELECT id, endpoint_name, endpoint, model_archetype, model, max_response_tokens, max_context_tokens, enabled, secret_key, created_at, updated_at, payment_mode
              FROM agent_settings WHERE endpoint_name = ?1",
         )?;
 
@@ -49,7 +49,7 @@ impl Database {
         let conn = self.conn();
 
         let mut stmt = conn.prepare(
-            "SELECT id, endpoint_name, endpoint, model_archetype, model, max_response_tokens, max_context_tokens, enabled, secret_key, created_at, updated_at
+            "SELECT id, endpoint_name, endpoint, model_archetype, model, max_response_tokens, max_context_tokens, enabled, secret_key, created_at, updated_at, payment_mode
              FROM agent_settings WHERE endpoint = ?1 AND (model = ?2 OR (?2 IS NULL AND model IS NULL))",
         )?;
 
@@ -65,7 +65,7 @@ impl Database {
         let conn = self.conn();
 
         let mut stmt = conn.prepare(
-            "SELECT id, endpoint_name, endpoint, model_archetype, model, max_response_tokens, max_context_tokens, enabled, secret_key, created_at, updated_at
+            "SELECT id, endpoint_name, endpoint, model_archetype, model, max_response_tokens, max_context_tokens, enabled, secret_key, created_at, updated_at, payment_mode
              FROM agent_settings ORDER BY id",
         )?;
 
@@ -87,6 +87,7 @@ impl Database {
         max_response_tokens: i32,
         max_context_tokens: i32,
         secret_key: Option<&str>,
+        payment_mode: &str,
     ) -> SqliteResult<AgentSettings> {
         let conn = self.conn();
         let now = Utc::now().to_rfc3339();
@@ -115,15 +116,15 @@ impl Database {
         if let Some(id) = existing {
             // Update existing
             conn.execute(
-                "UPDATE agent_settings SET endpoint_name = ?1, endpoint = ?2, model_archetype = ?3, model = ?4, max_response_tokens = ?5, max_context_tokens = ?6, secret_key = ?7, enabled = 1, updated_at = ?8 WHERE id = ?9",
-                rusqlite::params![endpoint_name, endpoint, model_archetype, model, max_response_tokens, max_context_tokens, secret_key, &now, id],
+                "UPDATE agent_settings SET endpoint_name = ?1, endpoint = ?2, model_archetype = ?3, model = ?4, max_response_tokens = ?5, max_context_tokens = ?6, secret_key = ?7, enabled = 1, updated_at = ?8, payment_mode = ?10 WHERE id = ?9",
+                rusqlite::params![endpoint_name, endpoint, model_archetype, model, max_response_tokens, max_context_tokens, secret_key, &now, id, payment_mode],
             )?;
         } else {
             // Insert new
             conn.execute(
-                "INSERT INTO agent_settings (endpoint_name, endpoint, model_archetype, model, max_response_tokens, max_context_tokens, secret_key, enabled, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9)",
-                rusqlite::params![endpoint_name, endpoint, model_archetype, model, max_response_tokens, max_context_tokens, secret_key, &now, &now],
+                "INSERT INTO agent_settings (endpoint_name, endpoint, model_archetype, model, max_response_tokens, max_context_tokens, secret_key, enabled, created_at, updated_at, payment_mode)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10)",
+                rusqlite::params![endpoint_name, endpoint, model_archetype, model, max_response_tokens, max_context_tokens, secret_key, &now, &now, payment_mode],
             )?;
         }
 
@@ -163,6 +164,7 @@ impl Database {
             max_context_tokens: row.get::<_, Option<i32>>(6)?.unwrap_or(DEFAULT_CONTEXT_TOKENS),
             enabled: row.get::<_, i32>(7)? != 0,
             secret_key: row.get(8)?,
+            payment_mode: row.get::<_, Option<String>>(11)?.unwrap_or_else(|| "x402".to_string()),
             created_at: DateTime::parse_from_rfc3339(&created_at_str)
                 .unwrap()
                 .with_timezone(&Utc),

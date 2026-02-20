@@ -9,6 +9,12 @@ const MEMORY_SELECT_COLS: &str =
      identity_id, session_id, entity_type, entity_name,
      source_type, log_date, created_at, updated_at, last_accessed";
 
+/// Table-qualified SELECT columns for JOIN queries (avoids ambiguous column names with FTS)
+const MEMORY_SELECT_COLS_QUALIFIED: &str =
+    "memories.id, memories.memory_type, memories.content, memories.category, memories.tags, memories.importance,
+     memories.identity_id, memories.session_id, memories.entity_type, memories.entity_name,
+     memories.source_type, memories.log_date, memories.created_at, memories.updated_at, memories.last_accessed";
+
 /// A row from the `memories` table
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryRow {
@@ -298,7 +304,7 @@ impl Database {
                      WHERE memories_fts MATCH ?1 AND memories.identity_id = ?2
                      ORDER BY rank
                      LIMIT ?3",
-                    cols = MEMORY_SELECT_COLS
+                    cols = MEMORY_SELECT_COLS_QUALIFIED
                 ),
                 vec![
                     Box::new(query.to_string()) as Box<dyn rusqlite::types::ToSql>,
@@ -314,7 +320,7 @@ impl Database {
                      WHERE memories_fts MATCH ?1
                      ORDER BY rank
                      LIMIT ?2",
-                    cols = MEMORY_SELECT_COLS
+                    cols = MEMORY_SELECT_COLS_QUALIFIED
                 ),
                 vec![
                     Box::new(query.to_string()) as Box<dyn rusqlite::types::ToSql>,
@@ -426,7 +432,7 @@ impl Database {
              WHERE {where_clause}
              ORDER BY rank
              LIMIT ?{idx}",
-            cols = MEMORY_SELECT_COLS,
+            cols = MEMORY_SELECT_COLS_QUALIFIED,
             where_clause = where_clause,
             idx = idx,
         );

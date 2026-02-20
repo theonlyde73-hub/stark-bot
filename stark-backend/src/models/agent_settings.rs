@@ -15,6 +15,8 @@ pub struct AgentSettings {
     pub max_context_tokens: i32,
     pub enabled: bool,
     pub secret_key: Option<String>,
+    /// Payment mode: "none", "credits", "x402", "custom"
+    pub payment_mode: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -38,6 +40,7 @@ impl Default for AgentSettings {
             max_context_tokens: DEFAULT_CONTEXT_TOKENS,
             enabled: true,
             secret_key: None,
+            payment_mode: "none".to_string(),
             created_at: now,
             updated_at: now,
         }
@@ -56,6 +59,7 @@ pub struct AgentSettingsResponse {
     pub max_context_tokens: i32,
     pub enabled: bool,
     pub has_secret_key: bool,
+    pub payment_mode: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -72,6 +76,7 @@ impl From<AgentSettings> for AgentSettingsResponse {
             max_context_tokens: settings.max_context_tokens,
             enabled: settings.enabled,
             has_secret_key: settings.secret_key.is_some(),
+            payment_mode: settings.payment_mode,
             created_at: settings.created_at,
             updated_at: settings.updated_at,
         }
@@ -93,6 +98,8 @@ pub struct UpdateAgentSettingsRequest {
     #[serde(default = "default_max_context_tokens")]
     pub max_context_tokens: i32,
     pub secret_key: Option<String>,
+    /// Payment mode: "none", "credits", "x402", "custom"
+    pub payment_mode: Option<String>,
 }
 
 fn default_archetype() -> String {

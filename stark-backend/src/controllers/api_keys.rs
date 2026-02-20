@@ -1762,6 +1762,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
             log::warn!("Failed to disable existing agent settings for restore: {}", e);
         }
         for entry in &backup_data.agent_settings {
+            let payment_mode = if entry.payment_mode.is_empty() { "x402" } else { &entry.payment_mode };
             match state.db.save_agent_settings(
                 entry.endpoint_name.as_deref(),
                 &entry.endpoint,
@@ -1770,6 +1771,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                 entry.max_response_tokens,
                 entry.max_context_tokens,
                 entry.secret_key.as_deref(),
+                payment_mode,
             ) {
                 Ok(saved) => {
                     // save_agent_settings enables the last one saved; if the backup entry was

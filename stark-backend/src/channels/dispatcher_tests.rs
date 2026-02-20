@@ -64,6 +64,7 @@ impl TestHarness {
             4096,
             100_000,
             None,
+            "x402",
         )
         .expect("save agent settings");
 
@@ -149,6 +150,7 @@ impl TestHarness {
             4096,
             100_000,
             None,
+            "x402",
         )
         .expect("save agent settings");
 
@@ -858,6 +860,7 @@ async fn swap_flow_realistic() {
         4096,
         100_000,
         secret.as_deref(),
+        "x402",
     )
     .expect("save agent settings");
 
@@ -1590,6 +1593,7 @@ async fn build_tool_list_harness() -> MessageDispatcher {
         4096,
         100_000,
         None,
+        "x402",
     )
     .expect("save agent settings");
 
