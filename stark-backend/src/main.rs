@@ -178,14 +178,14 @@ async fn auto_retrieve_from_keystore(
                             }
                         };
                         match restore_backup_data(db, &encryption_key, &encrypted_data).await {
-                            Ok((key_count, node_count)) => {
-                                log::info!("[Keystore] Auto-sync restored {} keys, {} nodes", key_count, node_count);
+                            Ok(restore_result) => {
+                                log::info!("[Keystore] Auto-sync: {}", restore_result.summary());
                                 let _ = db.record_auto_sync_result(
                                     &wallet_address,
                                     "success",
-                                    &format!("Restored {} API keys and {} impulse map nodes", key_count, node_count),
-                                    Some(key_count as i32),
-                                    Some(node_count as i32),
+                                    &restore_result.summary(),
+                                    Some(restore_result.api_keys as i32),
+                                    Some(restore_result.impulse_nodes as i32),
                                 );
                             }
                             Err(e) => {
@@ -250,13 +250,62 @@ async fn auto_retrieve_from_keystore(
     let _ = db.record_auto_sync_result(&wallet_address, status, &message, None, None);
 }
 
+/// Result of restoring backup data, with counts for each category.
+#[derive(Default)]
+struct RestoreResult {
+    api_keys: usize,
+    impulse_nodes: usize,
+    impulse_connections: usize,
+    channels: usize,
+    channel_settings: usize,
+    cron_jobs: usize,
+    skills: usize,
+    agent_settings: usize,
+    agent_subtypes: usize,
+    special_roles: usize,
+    special_role_assignments: usize,
+    x402_limits: usize,
+    bot_settings: bool,
+    heartbeat_config: bool,
+    soul_document: bool,
+    agent_identity: bool,
+}
+
+impl RestoreResult {
+    fn summary(&self) -> String {
+        let mut parts = Vec::new();
+        if self.api_keys > 0 { parts.push(format!("{} API keys", self.api_keys)); }
+        if self.channels > 0 { parts.push(format!("{} channels", self.channels)); }
+        if self.skills > 0 { parts.push(format!("{} skills", self.skills)); }
+        if self.cron_jobs > 0 { parts.push(format!("{} cron jobs", self.cron_jobs)); }
+        if self.agent_settings > 0 { parts.push(format!("{} agent settings", self.agent_settings)); }
+        if self.agent_subtypes > 0 { parts.push(format!("{} agent subtypes", self.agent_subtypes)); }
+        if self.impulse_nodes > 0 { parts.push(format!("{} impulse map nodes", self.impulse_nodes)); }
+        if self.impulse_connections > 0 { parts.push(format!("{} impulse connections", self.impulse_connections)); }
+        if self.channel_settings > 0 { parts.push(format!("{} channel settings", self.channel_settings)); }
+        if self.special_roles > 0 { parts.push(format!("{} special roles", self.special_roles)); }
+        if self.special_role_assignments > 0 { parts.push(format!("{} role assignments", self.special_role_assignments)); }
+        if self.x402_limits > 0 { parts.push(format!("{} x402 payment limits", self.x402_limits)); }
+        if self.bot_settings { parts.push("bot settings".to_string()); }
+        if self.heartbeat_config { parts.push("heartbeat config".to_string()); }
+        if self.soul_document { parts.push("soul document".to_string()); }
+        if self.agent_identity { parts.push("agent identity".to_string()); }
+
+        if parts.is_empty() {
+            "No data restored".to_string()
+        } else {
+            format!("Restored {}", parts.join(", "))
+        }
+    }
+}
+
 /// Restore backup data from encrypted payload (used by both auto-retrieval and manual restore)
-/// Returns (key_count, node_count) on success
 async fn restore_backup_data(
     db: &std::sync::Arc<db::Database>,
     private_key: &str,
     encrypted_data: &str,
-) -> Result<(usize, usize), String> {
+) -> Result<RestoreResult, String> {
+    let mut result = RestoreResult::default();
     let mut backup_data = keystore_client::decrypt_backup_data(private_key, encrypted_data)?;
 
     log::info!(
@@ -267,16 +316,15 @@ async fn restore_backup_data(
     );
 
     // Restore API keys
-    let mut restored_keys = 0;
     for key in &backup_data.api_keys {
         if let Err(e) = db.upsert_api_key(&key.key_name, &key.key_value) {
             log::warn!("[Keystore] Failed to restore key {}: {}", key.key_name, e);
         } else {
-            restored_keys += 1;
+            result.api_keys += 1;
         }
     }
-    if restored_keys > 0 {
-        log::info!("[Keystore] Restored {} API keys", restored_keys);
+    if result.api_keys > 0 {
+        log::info!("[Keystore] Restored {} API keys", result.api_keys);
     }
 
     // Clear existing impulse nodes and connections before restore
@@ -291,7 +339,6 @@ async fn restore_backup_data(
 
     // Restore impulse map nodes (create ID mapping for connections)
     let mut old_to_new_id: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
-    let mut restored_nodes = 0;
 
     // First, get or create trunk and map backup trunk ID to it
     let current_trunk = db.get_or_create_trunk_node().ok();
@@ -326,24 +373,23 @@ async fn restore_backup_data(
         match db.create_impulse_node(&request) {
             Ok(new_node) => {
                 old_to_new_id.insert(node.id, new_node.id);
-                restored_nodes += 1;
+                result.impulse_nodes += 1;
             }
             Err(e) => log::warn!("[Keystore] Failed to restore impulse node: {}", e),
         }
     }
-    if restored_nodes > 0 {
-        log::info!("[Keystore] Restored {} impulse map nodes", restored_nodes);
+    if result.impulse_nodes > 0 {
+        log::info!("[Keystore] Restored {} impulse map nodes", result.impulse_nodes);
     }
 
     // Restore impulse map connections using ID mapping
-    let mut restored_connections = 0;
     for conn in &backup_data.impulse_map_connections {
         if let (Some(&parent_id), Some(&child_id)) = (
             old_to_new_id.get(&conn.parent_id),
             old_to_new_id.get(&conn.child_id),
         ) {
             match db.create_impulse_node_connection(parent_id, child_id) {
-                Ok(_) => restored_connections += 1,
+                Ok(_) => result.impulse_connections += 1,
                 Err(e) => {
                     if !e.to_string().contains("UNIQUE constraint") {
                         log::warn!("[Keystore] Failed to restore connection: {}", e);
@@ -352,8 +398,8 @@ async fn restore_backup_data(
             }
         }
     }
-    if restored_connections > 0 {
-        log::info!("[Keystore] Restored {} impulse map connections", restored_connections);
+    if result.impulse_connections > 0 {
+        log::info!("[Keystore] Restored {} impulse map connections", result.impulse_connections);
     }
 
     // Restore bot settings if present
@@ -379,14 +425,13 @@ async fn restore_backup_data(
             settings.whisper_server_url.as_deref(),
             settings.embeddings_server_url.as_deref(),
         ) {
-            Ok(_) => log::info!("[Keystore] Restored bot settings"),
+            Ok(_) => { result.bot_settings = true; log::info!("[Keystore] Restored bot settings"); }
             Err(e) => log::warn!("[Keystore] Failed to restore bot settings: {}", e),
         }
     }
 
     // Restore channels FIRST (with bot tokens) - need ID mapping for cron jobs, heartbeat, and channel settings
     let mut old_channel_to_new_id: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
-    let mut restored_channels = 0;
     for channel in &backup_data.channels {
         match db.create_channel(&channel.channel_type, &channel.name, &channel.bot_token, channel.app_token.as_deref()) {
             Ok(new_channel) => {
@@ -408,7 +453,7 @@ async fn restore_backup_data(
                         let _ = db.set_channel_setting(new_channel.id, "slack_app_token", app_token);
                     }
                 }
-                restored_channels += 1;
+                result.channels += 1;
             }
             Err(e) => {
                 // Channel might already exist with same name/token - try to find it
@@ -423,22 +468,21 @@ async fn restore_backup_data(
             }
         }
     }
-    if restored_channels > 0 {
-        log::info!("[Keystore] Restored {} channels", restored_channels);
+    if result.channels > 0 {
+        log::info!("[Keystore] Restored {} channels", result.channels);
     }
 
     // Restore channel settings using channel ID mapping
-    let mut restored_channel_settings = 0;
     for setting in &backup_data.channel_settings {
         if let Some(&new_channel_id) = old_channel_to_new_id.get(&setting.channel_id) {
             match db.set_channel_setting(new_channel_id, &setting.setting_key, &setting.setting_value) {
-                Ok(_) => restored_channel_settings += 1,
+                Ok(_) => result.channel_settings += 1,
                 Err(e) => log::warn!("[Keystore] Failed to restore channel setting: {}", e),
             }
         }
     }
-    if restored_channel_settings > 0 {
-        log::info!("[Keystore] Restored {} channel settings", restored_channel_settings);
+    if result.channel_settings > 0 {
+        log::info!("[Keystore] Restored {} channel settings", result.channel_settings);
     }
 
     // Enable channels that have auto_start_on_boot=true (so gateway.start_enabled_channels() will start them)
@@ -464,7 +508,6 @@ async fn restore_backup_data(
     }
 
     // Restore cron jobs (with mapped channel IDs)
-    let mut restored_cron_jobs = 0;
     for job in &backup_data.cron_jobs {
         // Map old channel_id to new channel_id
         let mapped_channel_id = job.channel_id.and_then(|old_id| old_channel_to_new_id.get(&old_id).copied());
@@ -485,12 +528,12 @@ async fn restore_backup_data(
             job.timeout_seconds,
             job.delete_after_run,
         ) {
-            Ok(_) => restored_cron_jobs += 1,
+            Ok(_) => result.cron_jobs += 1,
             Err(e) => log::warn!("[Keystore] Failed to restore cron job {}: {}", job.name, e),
         }
     }
-    if restored_cron_jobs > 0 {
-        log::info!("[Keystore] Restored {} cron jobs", restored_cron_jobs);
+    if result.cron_jobs > 0 {
+        log::info!("[Keystore] Restored {} cron jobs", result.cron_jobs);
     }
 
     // Restore heartbeat config if present (with mapped channel ID)
@@ -511,6 +554,7 @@ async fn restore_backup_data(
                 ) {
                     log::warn!("[Keystore] Failed to restore heartbeat config: {}", e);
                 } else {
+                    result.heartbeat_config = true;
                     log::info!("[Keystore] Restored heartbeat config (enabled={})", hb_config.enabled);
                 }
             }
@@ -530,7 +574,7 @@ async fn restore_backup_data(
             let _ = std::fs::create_dir_all(parent);
         }
         match std::fs::write(&soul_path, soul_content) {
-            Ok(_) => log::info!("[Keystore] Restored soul document from backup (overrides template)"),
+            Ok(_) => { result.soul_document = true; log::info!("[Keystore] Restored soul document from backup (overrides template)"); }
             Err(e) => log::warn!("[Keystore] Failed to restore soul document: {}", e),
         }
     }
@@ -562,19 +606,18 @@ async fn restore_backup_data(
     }
 
     // Restore x402 payment limits
-    let mut restored_x402_limits = 0;
     for limit in &backup_data.x402_payment_limits {
         match db.set_x402_payment_limit(&limit.asset, &limit.max_amount, limit.decimals, &limit.display_name, limit.address.as_deref()) {
             Ok(_) => {
                 // Also update the in-memory global
                 crate::x402::payment_limits::set_limit(&limit.asset, &limit.max_amount, limit.decimals, &limit.display_name, limit.address.as_deref());
-                restored_x402_limits += 1;
+                result.x402_limits += 1;
             }
             Err(e) => log::warn!("[Keystore] Failed to restore x402 payment limit for {}: {}", limit.asset, e),
         }
     }
-    if restored_x402_limits > 0 {
-        log::info!("[Keystore] Restored {} x402 payment limits", restored_x402_limits);
+    if result.x402_limits > 0 {
+        log::info!("[Keystore] Restored {} x402 payment limits", result.x402_limits);
     }
 
     // Restore agent identity from backup (with full metadata)
@@ -598,6 +641,7 @@ async fn restore_backup_data(
                 ai.registration_uri.as_deref(),
             ) {
                 Ok(_) => {
+                    result.agent_identity = true;
                     log::info!(
                         "[Keystore] Restored agent identity (agent_id={}) from backup",
                         ai.agent_id
@@ -653,7 +697,6 @@ async fn restore_backup_data(
     }
 
     // Restore skills (version-aware: won't downgrade bundled skills that have newer versions on disk)
-    let mut restored_skills = 0;
     for skill_entry in &backup_data.skills {
         let now = chrono::Utc::now().to_rfc3339();
         let arguments: std::collections::HashMap<String, skills::types::SkillArgument> =
@@ -696,19 +739,18 @@ async fn restore_backup_data(
                         log::warn!("[Keystore] Failed to restore script '{}' for skill '{}': {}", script.name, skill_entry.name, e);
                     }
                 }
-                restored_skills += 1;
+                result.skills += 1;
             }
             Err(e) => {
                 log::warn!("[Keystore] Failed to restore skill '{}': {}", skill_entry.name, e);
             }
         }
     }
-    if restored_skills > 0 {
-        log::info!("[Keystore] Restored {} skills", restored_skills);
+    if result.skills > 0 {
+        log::info!("[Keystore] Restored {} skills", result.skills);
     }
 
     // Restore agent settings (AI model configurations)
-    let mut restored_agent_settings = 0;
     if !backup_data.agent_settings.is_empty() {
         if let Err(e) = db.disable_agent_settings() {
             log::warn!("[Keystore] Failed to disable existing agent settings for restore: {}", e);
@@ -727,7 +769,7 @@ async fn restore_backup_data(
                     if !entry.enabled {
                         let _ = db.disable_agent_settings();
                     }
-                    restored_agent_settings += 1;
+                    result.agent_settings += 1;
                     log::info!("[Keystore] Restored agent settings: {:?} / {} ({})", saved.endpoint_name, saved.endpoint, saved.model_archetype);
                 }
                 Err(e) => {
@@ -736,12 +778,11 @@ async fn restore_backup_data(
             }
         }
     }
-    if restored_agent_settings > 0 {
-        log::info!("[Keystore] Restored {} agent settings", restored_agent_settings);
+    if result.agent_settings > 0 {
+        log::info!("[Keystore] Restored {} agent settings", result.agent_settings);
     }
 
     // Restore agent subtypes
-    let mut restored_subtypes = 0;
     for entry in &backup_data.agent_subtypes {
         let tool_groups: Vec<String> = serde_json::from_str(&entry.tool_groups_json).unwrap_or_default();
         let skill_tags: Vec<String> = serde_json::from_str(&entry.skill_tags_json).unwrap_or_default();
@@ -764,12 +805,12 @@ async fn restore_backup_data(
             hidden: entry.hidden.unwrap_or(false),
         };
         match db.upsert_agent_subtype(&config) {
-            Ok(_) => restored_subtypes += 1,
+            Ok(_) => result.agent_subtypes += 1,
             Err(e) => log::warn!("[Keystore] Failed to restore agent subtype '{}': {}", entry.key, e),
         }
     }
-    if restored_subtypes > 0 {
-        log::info!("[Keystore] Restored {} agent subtypes", restored_subtypes);
+    if result.agent_subtypes > 0 {
+        log::info!("[Keystore] Restored {} agent subtypes", result.agent_subtypes);
         // Migrate skill tags on restored subtypes (remove deprecated, add new required tags)
         if let Err(e) = db.migrate_agent_subtype_skill_tags() {
             log::warn!("[Keystore] Failed to migrate restored subtype skill tags: {}", e);
@@ -781,7 +822,6 @@ async fn restore_backup_data(
     }
 
     // Restore special roles
-    let mut restored_special_roles = 0;
     for entry in &backup_data.special_roles {
         let role = models::SpecialRole {
             name: entry.name.clone(),
@@ -792,34 +832,33 @@ async fn restore_backup_data(
             updated_at: String::new(),
         };
         match db.upsert_special_role(&role) {
-            Ok(_) => restored_special_roles += 1,
+            Ok(_) => result.special_roles += 1,
             Err(e) => log::warn!("[Keystore] Failed to restore special role '{}': {}", entry.name, e),
         }
     }
-    if restored_special_roles > 0 {
-        log::info!("[Keystore] Restored {} special roles", restored_special_roles);
+    if result.special_roles > 0 {
+        log::info!("[Keystore] Restored {} special roles", result.special_roles);
     }
 
     // Restore special role assignments (roles must exist first)
-    let mut restored_assignments = 0;
     for entry in &backup_data.special_role_assignments {
         match db.create_special_role_assignment(&entry.channel_type, &entry.user_id, &entry.special_role_name, entry.label.as_deref()) {
-            Ok(_) => restored_assignments += 1,
+            Ok(_) => result.special_role_assignments += 1,
             Err(e) => log::warn!(
                 "[Keystore] Failed to restore special role assignment ({}/{} -> {}): {}",
                 entry.channel_type, entry.user_id, entry.special_role_name, e
             ),
         }
     }
-    if restored_assignments > 0 {
-        log::info!("[Keystore] Restored {} special role assignments", restored_assignments);
+    if result.special_role_assignments > 0 {
+        log::info!("[Keystore] Restored {} special role assignments", result.special_role_assignments);
     }
 
     // Restore tool config directories (gog CLI tokens, etc.)
     restore_tool_configs(&backup_data);
 
     log::info!("[Keystore] Restore complete");
-    Ok((restored_keys, restored_nodes))
+    Ok(result)
 }
 
 /// Restore tool config directories from backup (e.g. gogcli auth tokens).
