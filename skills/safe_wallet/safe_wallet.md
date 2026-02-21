@@ -1,19 +1,23 @@
 ---
 name: safe_wallet
-description: "Create and manage Safe{Wallet} multi-sig wallets — deploy Safes, query info, propose/sign/execute multi-sig transactions, manage signers."
-version: 1.0.0
+description: "Create and manage Safe{Wallet} multi-sig wallets — deploy Safes, query info, send ETH/tokens, propose/sign/execute multi-sig transactions, manage signers."
+version: 1.1.0
 author: starkbot
 homepage: https://safe.global
 metadata: {"requires_auth": false, "clawdbot":{"emoji":"🔐"}}
-requires_tools: [set_address, web3_function_call, web3_preset_function_call, web_fetch, broadcast_web3_tx, verify_tx_broadcast, select_web3_network, define_tasks]
+requires_tools: [set_address, web3_function_call, web3_preset_function_call, web_fetch, broadcast_web3_tx, verify_tx_broadcast, select_web3_network, define_tasks, api_keys_check, token_lookup, to_raw_amount]
 tags: [crypto, defi, safe, gnosis, multisig, wallet, security]
+requires_api_keys:
+  GNOSIS_SAFE_ADDRESS:
+    description: "Safe (Gnosis) wallet address"
+    secret: false
 abis: [safe, safe_proxy_factory]
 presets_file: presets.ron
 ---
 
 # Safe{Wallet} Multi-Sig Skill
 
-Create, manage, and transact with Safe (Gnosis Safe) multi-sig wallets. Supports deploying new Safes, querying Safe info, proposing multi-sig transactions, signing, and executing.
+Create, manage, and transact with Safe (Gnosis Safe) multi-sig wallets. Supports deploying new Safes, querying Safe info, sending ETH and ERC-20 tokens, proposing multi-sig transactions, signing, and executing.
 
 ## CRITICAL RULES
 
@@ -22,6 +26,20 @@ Create, manage, and transact with Safe (Gnosis Safe) multi-sig wallets. Supports
 3. **Sequential tool calls only.** Never call two tools in parallel when the second depends on the first.
 4. **Always confirm destructive operations** (adding/removing owners, executing transactions) with the user before proceeding.
 5. **On-chain signing only.** We use `approveHash()` for signing — no off-chain EIP-712 signatures.
+6. **NEVER use the `erc20_transfer` preset for Safe transactions.** That preset sends tokens directly from the bot's wallet, NOT from the Safe. For Safe token transfers, you must build the ERC-20 `transfer` calldata manually and pass it through `execTransaction`. See Operation E.
+7. **NEVER use `web3_preset_function_call` with `erc20_transfer` or `send_eth` presets** when operating through a Safe. Those are for direct wallet transfers only.
+8. **Minimize RPC calls.** If one call fails with rate limiting (402/429), wait a moment before retrying. Do not spam retries.
+
+## Default Safe Address
+
+**First, check if `GNOSIS_SAFE_ADDRESS` is configured:**
+```tool:api_keys_check
+key_name: GNOSIS_SAFE_ADDRESS
+```
+
+If configured, use this address as the default Safe address for all operations (no need to ask the user which Safe). If the user explicitly provides a different Safe address, use that instead.
+
+If NOT configured, ask the user for the Safe address, and suggest they configure `GNOSIS_SAFE_ADDRESS` in Settings > API Keys so it's remembered for next time.
 
 ## Key Addresses (Same on All Chains)
 
@@ -40,6 +58,16 @@ Create, manage, and transact with Safe (Gnosis Safe) multi-sig wallets. Supports
 | Arbitrum | `https://safe-transaction-arbitrum.safe.global` |
 | Optimism | `https://safe-transaction-optimism.safe.global` |
 | Polygon | `https://safe-transaction-polygon.safe.global` |
+
+## Common Tokens
+
+| Token | Base Address | Decimals |
+|-------|-------------|----------|
+| USDC | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | 6 |
+| WETH | `0x4200000000000000000000000000000000000006` | 18 |
+| DAI | `0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb` | 18 |
+
+Use `token_lookup` for other tokens or other networks.
 
 ---
 
@@ -261,9 +289,275 @@ Parse the response and report:
 
 ---
 
-## Operation E: Propose Multi-Sig Transaction
+## Operation E: Send ERC-20 Tokens from Safe
 
-Build a Safe transaction, sign it on-chain via `approveHash`, and POST to the Transaction Service for other signers.
+**USE THIS for sending tokens (USDC, WETH, DAI, etc.) from the Safe.**
+
+This builds the ERC-20 `transfer` calldata and wraps it in a Safe transaction. The Safe calls the token contract's `transfer` function on behalf of itself.
+
+**IMPORTANT: Do NOT use the `erc20_transfer` preset here. That sends from the bot's wallet, not from the Safe.**
+
+### Define tasks
+
+```json
+{"tool": "define_tasks", "tasks": [
+  "TASK 1 — Prepare: select network, set safe address, look up token, build transfer calldata, get nonce. See safe_wallet skill 'ERC-20 Transfer Task 1'.",
+  "TASK 2 — Approve and execute: compute Safe tx hash, approveHash, then execTransaction (for 1-of-1) or POST to TX Service (for multi-sig). See safe_wallet skill 'ERC-20 Transfer Task 2'."
+]}
+```
+
+### ERC-20 Transfer Task 1: Prepare
+
+#### 1a. Select network and set Safe address
+
+```json
+{"tool": "select_web3_network", "network": "<chain>"}
+```
+
+```json
+{"tool": "set_address", "register": "safe_address", "address": "<safe_address>"}
+```
+
+#### 1b. Look up token
+
+```json
+{"tool": "token_lookup", "symbol": "<TOKEN_SYMBOL>", "network": "<chain>"}
+```
+
+This sets the `token_address` and `token_decimals` registers.
+
+#### 1c. Convert amount to raw units
+
+```json
+{"tool": "to_raw_amount", "amount": "<human_amount>", "decimals": <token_decimals>}
+```
+
+This returns the raw amount (e.g., 0.1 USDC with 6 decimals = 100000).
+
+#### 1d. Build ERC-20 transfer calldata
+
+The ERC-20 `transfer(address,uint256)` function selector is `0xa9059cbb`.
+
+Build the calldata manually:
+
+```
+0xa9059cbb
+000000000000000000000000<RECIPIENT_NO_0x>
+<RAW_AMOUNT_AS_HEX_PADDED_TO_32_BYTES>
+```
+
+**How to convert the raw amount to hex:**
+- Take the raw amount (e.g., `100000` for 0.1 USDC)
+- Convert to hex (e.g., `100000` decimal = `186a0` hex)
+- Left-pad with zeros to 64 characters: `00000000000000000000000000000000000000000000000000000000000186a0`
+
+**Example for sending 0.1 USDC to 0x3cB5b94Ae8ae5bF209e8e36b7197a29A2Ef2A8F2:**
+```
+0xa9059cbb
+0000000000000000000000003cb5b94ae8ae5bf209e8e36b7197a29a2ef2a8f2
+00000000000000000000000000000000000000000000000000000000000186a0
+```
+
+Concatenate into a single hex string (no spaces/newlines):
+`0xa9059cbb0000000000000000000000003cb5b94ae8ae5bf209e8e36b7197a29a2ef2a8f200000000000000000000000000000000000000000000000000000000000186a0`
+
+Save this as `<transfer_calldata>`.
+
+#### 1e. Get Safe nonce
+
+```json
+{"tool": "web3_preset_function_call", "preset": "safe_nonce", "network": "<chain>", "call_only": true}
+```
+
+#### 1f. Confirm with user
+
+Report the transaction details:
+- Safe address
+- Token and amount (human-readable)
+- Recipient address
+- Network
+
+Complete with `finished_task: true`.
+
+### ERC-20 Transfer Task 2: Approve and Execute
+
+The Safe transaction parameters for an ERC-20 transfer:
+- **`to`**: the TOKEN CONTRACT address (e.g., USDC contract), NOT the recipient
+- **`value`**: `"0"` (not sending ETH)
+- **`data`**: the transfer calldata from Task 1
+- **`operation`**: `0` (Call)
+
+#### 2a. Compute the Safe transaction hash
+
+```json
+{"tool": "web3_function_call", "abi": "safe", "contract": "<safe_address>", "function": "getTransactionHash", "params": ["<token_contract_address>", "0", "<transfer_calldata>", "0", "0", "0", "0", "0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000", "<nonce>"], "call_only": true}
+```
+
+Save the returned bytes32 hash as `<safe_tx_hash>`.
+
+#### 2b. Approve the hash on-chain
+
+```json
+{"tool": "web3_function_call", "abi": "safe", "contract": "<safe_address>", "function": "approveHash", "params": ["<safe_tx_hash>"]}
+```
+
+```json
+{"tool": "broadcast_web3_tx", "uuid": "<uuid>"}
+```
+
+Wait for confirmation.
+
+#### 2c. Execute immediately (for 1-of-1 Safe)
+
+If the Safe is 1-of-1 (threshold = 1 and we are the only owner), execute immediately after approving:
+
+Build the packed signature for a single on-chain approval:
+```
+0x000000000000000000000000<OUR_WALLET_NO_0x>000000000000000000000000000000000000000000000000000000000000000001
+```
+
+That's: `r` = our address padded to 32 bytes + `s` = 32 zero bytes + `v` = `01`.
+
+```json
+{"tool": "web3_function_call", "abi": "safe", "contract": "<safe_address>", "function": "execTransaction", "params": ["<token_contract_address>", "0", "<transfer_calldata>", "0", "0", "0", "0", "0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000", "<packed_signature>"]}
+```
+
+```json
+{"tool": "broadcast_web3_tx", "uuid": "<uuid>"}
+```
+
+```json
+{"tool": "verify_tx_broadcast"}
+```
+
+Report success to user. Complete the task.
+
+#### 2d. POST to TX Service (for multi-sig Safes only)
+
+If the Safe has threshold > 1, POST to the Transaction Service instead of executing:
+
+```json
+{
+  "tool": "web_fetch",
+  "url": "https://safe-transaction-<chain>.safe.global/api/v1/safes/<safe_address>/multisig-transactions/",
+  "method": "POST",
+  "headers": {"Content-Type": "application/json"},
+  "body": {
+    "to": "<token_contract_address>",
+    "value": "0",
+    "data": "<transfer_calldata>",
+    "operation": 0,
+    "safeTxGas": "0",
+    "baseGas": "0",
+    "gasPrice": "0",
+    "gasToken": "0x0000000000000000000000000000000000000000",
+    "refundReceiver": "0x0000000000000000000000000000000000000000",
+    "nonce": <nonce>,
+    "contractTransactionHash": "<safe_tx_hash>",
+    "sender": "<our_wallet_address>",
+    "signature": null,
+    "origin": "starkbot"
+  },
+  "extract_mode": "raw"
+}
+```
+
+Report that the transaction is posted for other signers. Complete the task.
+
+---
+
+## Operation F: Send ETH from Safe
+
+**USE THIS for sending native ETH from the Safe.**
+
+### Define tasks
+
+```json
+{"tool": "define_tasks", "tasks": [
+  "TASK 1 — Prepare: select network, set safe, get nonce, confirm ETH amount and recipient. See safe_wallet skill 'Send ETH Task 1'.",
+  "TASK 2 — Approve and execute: compute Safe tx hash, approveHash, then execTransaction or POST to TX Service. See safe_wallet skill 'Send ETH Task 2'."
+]}
+```
+
+### Send ETH Task 1: Prepare
+
+#### 1a. Select network and set Safe address
+
+```json
+{"tool": "select_web3_network", "network": "<chain>"}
+```
+
+```json
+{"tool": "set_address", "register": "safe_address", "address": "<safe_address>"}
+```
+
+#### 1b. Convert ETH amount to wei
+
+```json
+{"tool": "to_raw_amount", "amount": "<eth_amount>", "decimals": 18}
+```
+
+Save the result as `<value_in_wei>`.
+
+#### 1c. Get Safe nonce
+
+```json
+{"tool": "web3_preset_function_call", "preset": "safe_nonce", "network": "<chain>", "call_only": true}
+```
+
+#### 1d. Confirm with user
+
+Report: Safe address, ETH amount, recipient, network. Complete with `finished_task: true`.
+
+### Send ETH Task 2: Approve and Execute
+
+For ETH transfers, the Safe transaction parameters are:
+- **`to`**: the RECIPIENT address
+- **`value`**: amount in wei
+- **`data`**: `"0x"` (empty — plain ETH transfer)
+- **`operation`**: `0` (Call)
+
+#### 2a. Compute the Safe transaction hash
+
+```json
+{"tool": "web3_function_call", "abi": "safe", "contract": "<safe_address>", "function": "getTransactionHash", "params": ["<recipient_address>", "<value_in_wei>", "0x", "0", "0", "0", "0", "0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000", "<nonce>"], "call_only": true}
+```
+
+#### 2b. Approve the hash on-chain
+
+```json
+{"tool": "web3_function_call", "abi": "safe", "contract": "<safe_address>", "function": "approveHash", "params": ["<safe_tx_hash>"]}
+```
+
+```json
+{"tool": "broadcast_web3_tx", "uuid": "<uuid>"}
+```
+
+#### 2c. Execute (1-of-1) or POST to TX Service (multi-sig)
+
+**For 1-of-1 Safe** — execute immediately (same as Operation E step 2c, but with `to` = recipient, `value` = wei amount, `data` = `"0x"`):
+
+```json
+{"tool": "web3_function_call", "abi": "safe", "contract": "<safe_address>", "function": "execTransaction", "params": ["<recipient_address>", "<value_in_wei>", "0x", "0", "0", "0", "0", "0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000", "<packed_signature>"]}
+```
+
+**IMPORTANT**: The `value` parameter on the `web3_function_call` tool itself should be `"0"`. The `<value_in_wei>` goes only as a function parameter inside `execTransaction`. The Safe holds and sends the ETH internally.
+
+```json
+{"tool": "broadcast_web3_tx", "uuid": "<uuid>"}
+```
+
+```json
+{"tool": "verify_tx_broadcast"}
+```
+
+**For multi-sig** — POST to TX Service as in Operation E step 2d, with `to` = recipient, `value` = wei amount, `data` = null or `"0x"`.
+
+---
+
+## Operation G: Propose Generic Multi-Sig Transaction
+
+Build a Safe transaction with arbitrary calldata, sign it on-chain via `approveHash`, and POST to the Transaction Service for other signers.
 
 ### Define tasks
 
@@ -375,7 +669,7 @@ Report success. The transaction is now visible in the Safe UI for other signers.
 
 ---
 
-## Operation F: Confirm/Sign a Pending Transaction
+## Operation H: Confirm/Sign a Pending Transaction
 
 List pending transactions and approve one on-chain.
 
@@ -423,7 +717,7 @@ Report success. If this was the final required confirmation, tell the user the t
 
 ---
 
-## Operation G: Execute a Confirmed Transaction
+## Operation I: Execute a Confirmed Transaction
 
 Execute a transaction that has enough approvals.
 
@@ -459,6 +753,11 @@ v = 1 (indicates approved hash)
 
 Sort signers by address (ascending, case-insensitive). Concatenate their 65-byte blocks. Prefix with `0x`.
 
+Example for 1 signer:
+```
+0x000000000000000000000000<addr_no_0x>000000000000000000000000000000000000000000000000000000000000000001
+```
+
 Example for 2 signers (addr1 < addr2):
 ```
 0x
@@ -473,10 +772,10 @@ Example for 2 signers (addr1 < addr2):
 #### 2b. Call execTransaction
 
 ```json
-{"tool": "web3_function_call", "abi": "safe", "contract": "<safe_address>", "function": "execTransaction", "params": ["<to>", "<value>", "<data>", "0", "0", "0", "0", "0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000", "<packed_signatures>"], "value": "<value_if_sending_eth_or_0>"}
+{"tool": "web3_function_call", "abi": "safe", "contract": "<safe_address>", "function": "execTransaction", "params": ["<to>", "<value>", "<data>", "0", "0", "0", "0", "0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000", "<packed_signatures>"]}
 ```
 
-Note: The `value` field on the tool call should be "0" — the Safe itself holds and sends the ETH via `to`/`value` in its internal transaction. Only set the tool-level `value` if the Safe requires ETH sent to it (rare).
+Note: The `value` parameter on the tool call itself should be `"0"`. The Safe itself holds and sends the ETH via `to`/`value` in its internal transaction.
 
 #### 2c. Broadcast
 
@@ -494,7 +793,7 @@ Report result. Complete the task.
 
 ---
 
-## Operation H: Add a Signer
+## Operation J: Add a Signer
 
 Add a new owner to the Safe. This is a self-call: the Safe calls `addOwnerWithThreshold` on itself via `execTransaction`.
 
@@ -559,11 +858,11 @@ Complete with `finished_task: true`.
 
 ### Add Signer Task 3: Execute
 
-If this is a 1-of-1 Safe (or enough approvals), execute immediately using Operation G Execute Task 2 steps. Otherwise tell the user to have other signers approve first.
+If this is a 1-of-1 Safe (or enough approvals), execute immediately using Operation I Execute Task 2 steps. Otherwise tell the user to have other signers approve first.
 
 ---
 
-## Operation I: Remove a Signer
+## Operation K: Remove a Signer
 
 Remove an owner from the Safe. This is a self-call using `removeOwner`.
 
@@ -608,16 +907,34 @@ Same as Add Signer Task 3. Execute if threshold is met.
 
 ---
 
+## Choosing the Right Operation
+
+| User wants to... | Use Operation |
+|-------------------|---------------|
+| Check Safe info (owners, threshold) | **A** — Query Safe Info |
+| Check Safe balances | **D** — Check Safe Balances |
+| Send USDC, WETH, or other ERC-20 tokens | **E** — Send ERC-20 Tokens |
+| Send ETH | **F** — Send ETH |
+| Propose arbitrary transaction (contract call) | **G** — Propose Generic Transaction |
+| Sign a pending transaction | **H** — Confirm/Sign |
+| Execute a fully-signed transaction | **I** — Execute |
+| Create a new Safe | **B** (1-of-1) or **C** (multi-owner) |
+| Add/remove signers | **J** / **K** |
+
+---
+
 ## Error Handling
 
 | Error | Cause | Solution |
 |-------|-------|----------|
+| 402 Payment Required / 429 Rate Limit | RPC rate limiting | Wait 5-10 seconds, then retry once. Do not spam. |
 | Insufficient gas | Not enough ETH for gas | Need native token for gas |
 | Threshold not met | Not enough approvals to execute | Wait for more signers to approve |
 | Not an owner | Caller is not a Safe owner | Only owners can approve/execute |
 | Invalid prevOwner | Wrong linked-list pointer for removeOwner | Re-query owners and find correct prevOwner |
 | Nonce mismatch | Stale nonce value | Re-query nonce before building tx |
 | TX Service 422 | Invalid transaction data | Check all parameters match on-chain state |
+| `erc20_transfer` preset error | Wrong approach for Safe | Use Operation E instead — build calldata manually |
 
 ---
 
@@ -634,3 +951,4 @@ Key concepts:
 - **Nonce**: Sequential counter preventing replay attacks
 - **On-chain approval**: `approveHash(hash)` records approval in contract storage — visible to all, no key management needed
 - **Packed signatures**: For on-chain approvals, each signature is `r=address, s=0, v=1` — sorted by signer address ascending
+- **ERC-20 via Safe**: The Safe calls the token contract. `to` = token contract, `value` = 0, `data` = ABI-encoded `transfer(recipient, amount)`. The Safe is the `msg.sender` to the token contract, so tokens move from the Safe's balance.
