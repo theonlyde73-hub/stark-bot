@@ -8,6 +8,7 @@
 workspace/
 journal/
 soul/
+agents/
 /memory/
 stark-backend/memory.migrated/
 stark-backend/skills/

@@ -39,6 +39,7 @@ struct MemoryMeta {
     entity_name: Option<String>,
     log_date: Option<String>,
     superseded_by: Option<i64>,
+    agent_subtype: Option<String>,
 }
 
 // ── Common stopwords to skip during entity extraction ──
@@ -335,7 +336,14 @@ fn classify_association_type(source: &MemoryMeta, target: &MemoryMeta) -> &'stat
         }
     }
 
-    // 7. Default: related by embedding similarity
+    // 7. Same agent_subtype = agent_subtype (co-locality within the same agent)
+    if let (Some(s_sub), Some(t_sub)) = (source.agent_subtype.as_deref(), target.agent_subtype.as_deref()) {
+        if !s_sub.is_empty() && s_sub.eq_ignore_ascii_case(t_sub) {
+            return "agent_subtype";
+        }
+    }
+
+    // 8. Default: related by embedding similarity
     "related"
 }
 
@@ -781,10 +789,11 @@ fn create_metadata_based_associations(
 ) -> Result<HashMap<&'static str, usize>, String> {
     let mut type_counts: HashMap<&str, usize> = HashMap::new();
 
-    // Build indexes: group memory IDs by entity_name, category, log_date
+    // Build indexes: group memory IDs by entity_name, category, log_date, agent_subtype
     let mut by_entity: HashMap<String, Vec<i64>> = HashMap::new();
     let mut by_category: HashMap<String, Vec<i64>> = HashMap::new();
     let mut by_date: HashMap<String, Vec<i64>> = HashMap::new();
+    let mut by_subtype: HashMap<String, Vec<i64>> = HashMap::new();
 
     for m in metas {
         if let Some(ref entity) = m.entity_name {
@@ -802,6 +811,12 @@ fn create_metadata_based_associations(
         if let Some(ref date) = m.log_date {
             if !date.is_empty() {
                 by_date.entry(date.clone()).or_default().push(m.id);
+            }
+        }
+        if let Some(ref subtype) = m.agent_subtype {
+            let key = subtype.to_lowercase();
+            if !key.is_empty() {
+                by_subtype.entry(key).or_default().push(m.id);
             }
         }
     }
@@ -859,6 +874,19 @@ fn create_metadata_based_associations(
         }
     }
 
+    // Same agent_subtype → "agent_subtype" (localization signal, strength 0.3)
+    // Only link recent memories within the same subtype (window of 30 to avoid O(n^2))
+    for ids in by_subtype.values() {
+        if ids.len() < 2 { continue; }
+        let window = ids.len().min(30);
+        let start = ids.len().saturating_sub(window);
+        for i in start..ids.len() {
+            for j in (i + 1)..ids.len() {
+                let _ = try_create(ids[i], ids[j], "agent_subtype", 0.3);
+            }
+        }
+    }
+
     Ok(type_counts)
 }
 
@@ -868,7 +896,7 @@ fn load_all_memory_metas(db: &Database) -> Result<Vec<MemoryMeta>, String> {
 
     let mut stmt = conn
         .prepare(
-            "SELECT id, content, memory_type, category, entity_type, entity_name, log_date, superseded_by
+            "SELECT id, content, memory_type, category, entity_type, entity_name, log_date, superseded_by, agent_subtype
              FROM memories",
         )
         .map_err(|e| format!("Failed to prepare memory metadata query: {}", e))?;
@@ -884,6 +912,7 @@ fn load_all_memory_metas(db: &Database) -> Result<Vec<MemoryMeta>, String> {
                 entity_name: row.get::<_, Option<String>>(5).unwrap_or(None),
                 log_date: row.get::<_, Option<String>>(6).unwrap_or(None),
                 superseded_by: row.get::<_, Option<i64>>(7).unwrap_or(None),
+                agent_subtype: row.get::<_, Option<String>>(8).unwrap_or(None),
             })
         })
         .map_err(|e| format!("Failed to query memory metadata: {}", e))?

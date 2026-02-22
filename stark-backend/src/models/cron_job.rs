@@ -248,8 +248,6 @@ pub struct HeartbeatConfig {
     pub current_impulse_node_id: Option<i64>,
     /// Last heartbeat session ID (for context continuity)
     pub last_session_id: Option<i64>,
-    /// Whether to run impulse evolver after each heartbeat
-    pub impulse_evolver: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -269,8 +267,6 @@ pub struct UpdateHeartbeatConfigRequest {
     pub active_days: Option<String>,
     #[serde(default)]
     pub enabled: Option<bool>,
-    #[serde(default)]
-    pub impulse_evolver: Option<bool>,
 }
 
 /// Response for heartbeat config operations

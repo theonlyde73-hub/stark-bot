@@ -136,10 +136,15 @@ impl Tool for MemorySearchTool {
             context.identity_id.as_deref()
         };
 
+        // Extract agent_subtype from tool context for search boost
+        let agent_subtype: Option<String> = context.extra.get("agent_subtype")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         // Hybrid mode: use combined FTS + vector + graph search
         if params.mode == "hybrid" {
             if let Some(ref hybrid_engine) = context.hybrid_search {
-                match hybrid_engine.search(&params.query, result_limit as usize).await {
+                match hybrid_engine.search(&params.query, result_limit as usize, agent_subtype.as_deref()).await {
                     Ok(results) => {
                         // In safe mode, filter to safemode identity
                         // (hybrid engine doesn't have identity filtering, so we filter here)

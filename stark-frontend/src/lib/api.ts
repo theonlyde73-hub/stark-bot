@@ -1148,7 +1148,6 @@ export interface HeartbeatConfigInfo {
   active_hours_end?: string;
   active_days?: string;
   enabled: boolean;
-  impulse_evolver?: boolean;
   last_beat_at?: string;
   next_beat_at?: string;
   created_at: string;
@@ -1173,7 +1172,6 @@ export async function updateHeartbeatConfig(data: {
   active_hours_end?: string;
   active_days?: string;
   enabled?: boolean;
-  impulse_evolver?: boolean;
 }): Promise<HeartbeatConfigInfo> {
   const response = await apiFetch<HeartbeatConfigResponse>('/heartbeat/config', {
     method: 'PUT',
@@ -1897,6 +1895,7 @@ export interface AgentSubtypeInfo {
   max_iterations: number;
   skip_task_planner: boolean;
   aliases?: string[];
+  preferred_ai_model?: string | null;
 }
 
 export async function getAgentSubtypes(): Promise<AgentSubtypeInfo[]> {

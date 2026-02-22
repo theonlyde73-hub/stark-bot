@@ -66,6 +66,10 @@ fn default_endpoints() -> HashMap<String, AiEndpointPreset> {
     endpoints
 }
 
+pub fn get_ai_endpoint(key: &str) -> Option<AiEndpointPreset> {
+    AI_ENDPOINTS.get().and_then(|endpoints| endpoints.get(key).cloned())
+}
+
 pub fn list_ai_endpoints() -> Vec<(String, AiEndpointPreset)> {
     AI_ENDPOINTS
         .get()

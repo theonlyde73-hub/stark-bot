@@ -26,6 +26,7 @@ impl MessageDispatcher {
         user_input: &str,
         bot_response: &str,
         is_safe_mode: bool,
+        agent_subtype: Option<&str>,
     ) {
         let enabled = self.db.get_bot_settings()
             .map(|s| s.chat_session_memory_generation)
@@ -68,6 +69,7 @@ impl MessageDispatcher {
             None,
             Some("session_completion"),
             Some(&today),
+            agent_subtype,
         ) {
             log::error!("[SESSION_MEMORY] Failed to insert daily log memory: {}", e);
         }
@@ -174,10 +176,13 @@ impl MessageDispatcher {
                 } else {
                     final_summary
                 };
+                let subtype = orchestrator.current_subtype_key();
+                let subtype_opt = if subtype.is_empty() { None } else { Some(subtype) };
                 self.save_session_completion_memory(
                     &original_message.text,
                     memory_content,
                     is_safe_mode,
+                    subtype_opt,
                 );
             }
         }

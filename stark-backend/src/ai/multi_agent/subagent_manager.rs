@@ -536,6 +536,16 @@ impl SubAgentManager {
             );
         }
 
+        // Pass parent's agent_subtype to sub-agent tool context for memory localization
+        if let Some(ref subtype) = context.agent_subtype {
+            if !subtype.is_empty() {
+                tool_context.extra.insert(
+                    "agent_subtype".to_string(),
+                    serde_json::json!(subtype),
+                );
+            }
+        }
+
         // Get tool configuration — enforce safe mode and read_only restrictions
         let mut tool_config = db
             .get_effective_tool_config(Some(context.parent_channel_id))

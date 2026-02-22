@@ -80,6 +80,8 @@ struct MemoryItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     source_type: Option<String>,
     created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_subtype: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -177,6 +179,7 @@ struct SearchQuery {
     #[serde(default = "default_search_limit")]
     limit: i32,
     identity_id: Option<String>,
+    agent_subtype: Option<String>,
 }
 
 fn default_search_limit() -> i32 {
@@ -209,6 +212,7 @@ struct ListQuery {
 struct AppendBody {
     content: String,
     identity_id: Option<String>,
+    agent_subtype: Option<String>,
 }
 
 // ============================================================================
@@ -361,6 +365,7 @@ fn rows_to_items(rows: Vec<crate::db::tables::memories::MemoryRow>) -> Vec<Memor
             log_date: m.log_date,
             source_type: m.source_type,
             created_at: m.created_at,
+            agent_subtype: m.agent_subtype,
         })
         .collect()
 }
@@ -481,7 +486,7 @@ async fn append_daily_log(
         "daily_log",
         &body.content,
         None, None, 5, identity_id, None, None, None,
-        Some("api"), Some(&today),
+        Some("api"), Some(&today), body.agent_subtype.as_deref(),
     ) {
         Ok(id) => {
             // Check for consolidation hints if hybrid search is available
@@ -528,7 +533,7 @@ async fn append_long_term(
         "long_term",
         &body.content,
         None, None, 5, identity_id, None, None, None,
-        Some("api"), None,
+        Some("api"), None, body.agent_subtype.as_deref(),
     ) {
         Ok(id) => {
             // Check for consolidation hints if hybrid search is available
@@ -724,6 +729,7 @@ struct HybridSearchQuery {
     query: String,
     #[serde(default = "default_search_limit")]
     limit: i32,
+    agent_subtype: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -986,7 +992,7 @@ async fn hybrid_search(
 
     let limit = query.limit.clamp(1, 50) as usize;
 
-    match engine.search(&query.query, limit).await {
+    match engine.search(&query.query, limit, query.agent_subtype.as_deref()).await {
         Ok(results) => {
             let items: Vec<HybridSearchItem> = results
                 .into_iter()
@@ -1247,6 +1253,8 @@ struct MemoryExportEntry {
     source_type: Option<String>,
     log_date: Option<String>,
     created_at: String,
+    #[serde(default)]
+    agent_subtype: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1414,6 +1422,7 @@ async fn export_memories(
             source_type: m.source_type,
             log_date: m.log_date,
             created_at: m.created_at,
+            agent_subtype: m.agent_subtype,
         })
         .collect();
 
@@ -1492,6 +1501,7 @@ async fn import_memories(
             entry.entity_name.as_deref(),
             entry.source_type.as_deref(),
             entry.log_date.as_deref(),
+            entry.agent_subtype.as_deref(),
         ) {
             Ok(new_id) => {
                 id_mapping.insert(entry.original_id, new_id);

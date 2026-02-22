@@ -420,6 +420,7 @@ impl ContextManager {
         client: &AiClient,
         identity_id: Option<&str>,
         messages_to_compact: &[SessionMessage],
+        agent_subtype: Option<&str>,
     ) -> Result<usize, String> {
         if messages_to_compact.is_empty() {
             return Ok(0);
@@ -506,7 +507,7 @@ impl ContextManager {
                     "long_term",
                     long_term_content.trim(),
                     None, None, 5, identity_id, None, None, None,
-                    Some("pre_compaction_flush"), None,
+                    Some("pre_compaction_flush"), None, agent_subtype,
                 ) {
                     log::error!("[PRE_FLUSH] Failed to write long-term memory: {}", e);
                 } else {
@@ -529,7 +530,7 @@ impl ContextManager {
                     "daily_log",
                     daily_content.trim(),
                     None, None, 5, identity_id, None, None, None,
-                    Some("pre_compaction_flush"), Some(&today),
+                    Some("pre_compaction_flush"), Some(&today), agent_subtype,
                 ) {
                     log::error!("[PRE_FLUSH] Failed to write daily log: {}", e);
                 } else {
@@ -556,6 +557,7 @@ impl ContextManager {
         session_id: i64,
         client: &AiClient,
         identity_id: Option<&str>,
+        agent_subtype: Option<&str>,
     ) -> Result<i32, String> {
         // Get messages to compact (all except recent ones)
         let messages_to_compact = self.db.get_messages_for_compaction(session_id, self.keep_recent_messages)
@@ -621,7 +623,7 @@ impl ContextManager {
                 "daily_log",
                 &summary_entry,
                 None, None, 5, identity_id, Some(session_id), None, None,
-                Some("compaction_summary"), Some(&today),
+                Some("compaction_summary"), Some(&today), agent_subtype,
             ) {
                 log::error!("[COMPACTION] Failed to write session summary to daily log: {}", e);
             }
@@ -828,6 +830,7 @@ impl ContextManager {
         session_id: i64,
         client: &crate::ai::AiClient,
         identity_id: Option<&str>,
+        agent_subtype: Option<&str>,
     ) -> Result<CompactionLevel, String> {
         let level = self.check_compaction_level(session_id);
 
@@ -839,7 +842,7 @@ impl ContextManager {
             }
             CompactionLevel::Aggressive | CompactionLevel::Background => {
                 // Use existing compaction methods for non-emergency levels
-                if let Err(e) = self.compact_session(session_id, client, identity_id).await {
+                if let Err(e) = self.compact_session(session_id, client, identity_id, agent_subtype).await {
                     log::error!("[COMPACTION] {} compaction failed: {}, trying emergency", level, e);
                     self.compact_emergency(session_id)?;
                     Ok(CompactionLevel::Emergency)
@@ -859,6 +862,7 @@ pub async fn save_session_memory(
     session_id: i64,
     identity_id: Option<&str>,
     message_limit: i32,
+    agent_subtype: Option<&str>,
 ) -> Result<(), String> {
     // Get recent messages from the session
     let messages = db.get_recent_session_messages(session_id, message_limit)
@@ -922,7 +926,7 @@ pub async fn save_session_memory(
         "daily_log",
         &content,
         None, None, 5, identity_id, Some(session_id), None, None,
-        Some("session_reset"), Some(&today),
+        Some("session_reset"), Some(&today), agent_subtype,
     ).map_err(|e| format!("Failed to write session summary: {}", e))?;
     log::info!("[SESSION_MEMORY] Saved session summary to daily log: {}", title);
 

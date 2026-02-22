@@ -59,26 +59,41 @@ impl HybridSearchEngine {
     }
 
     /// Run a full hybrid search combining FTS5, vector similarity, and graph associations.
+    /// If `agent_subtype` is provided, same-subtype memories get a 1.25x score boost.
     pub async fn search(
         &self,
         query: &str,
         limit: usize,
+        agent_subtype: Option<&str>,
     ) -> Result<Vec<HybridSearchResult>, String> {
         // 1. FTS5 search
         let fts_results = self.fts_search(query)?;
+        log::debug!("[HYBRID_SEARCH] FTS returned {} results for query: {:?}", fts_results.len(), query);
 
         // 2. Vector search
         let vector_results = self.vector_search(query).await;
+        log::debug!("[HYBRID_SEARCH] Vector returned {} results", vector_results.len());
 
         // 3. Graph search: expand from FTS/vector hits to find their neighbors
         let seed_ids: Vec<i64> = fts_results.iter().map(|(id, _)| *id)
             .chain(vector_results.iter().map(|(id, _)| *id))
             .collect();
         let graph_results = self.graph_expand(&seed_ids)?;
+        log::debug!("[HYBRID_SEARCH] Graph expanded to {} neighbors from {} seeds", graph_results.len(), seed_ids.len());
 
         // 4. RRF merge
-        let merged = self.rrf_merge(&fts_results, &vector_results, &graph_results, limit);
+        let mut merged = self.rrf_merge(&fts_results, &vector_results, &graph_results, limit * 2);
 
+        // 5. Apply subtype boost: 1.25x for same-subtype memories
+        if let Some(subtype) = agent_subtype {
+            if !subtype.is_empty() {
+                self.apply_subtype_boost(&mut merged, subtype);
+                // Re-sort after boost
+                merged.sort_by(|a, b| b.rrf_score.partial_cmp(&a.rrf_score).unwrap_or(std::cmp::Ordering::Equal));
+            }
+        }
+
+        merged.truncate(limit);
         Ok(merged)
     }
 
@@ -87,13 +102,23 @@ impl HybridSearchEngine {
         &self,
         query: &str,
         limit: usize,
+        agent_subtype: Option<&str>,
     ) -> Result<Vec<HybridSearchResult>, String> {
         let fts_results = self.fts_search(query)?;
 
         let empty_vec: Vec<(i64, f32)> = Vec::new();
         let empty_graph: Vec<(i64, i32)> = Vec::new();
-        let merged = self.rrf_merge(&fts_results, &empty_vec, &empty_graph, limit);
+        let mut merged = self.rrf_merge(&fts_results, &empty_vec, &empty_graph, limit * 2);
 
+        // Apply subtype boost
+        if let Some(subtype) = agent_subtype {
+            if !subtype.is_empty() {
+                self.apply_subtype_boost(&mut merged, subtype);
+                merged.sort_by(|a, b| b.rrf_score.partial_cmp(&a.rrf_score).unwrap_or(std::cmp::Ordering::Equal));
+            }
+        }
+
+        merged.truncate(limit);
         Ok(merged)
     }
 
@@ -125,11 +150,11 @@ impl HybridSearchEngine {
 
         let mut stmt = conn
             .prepare(
-                "SELECT m.id, fts.rank
-                 FROM memories_fts fts
-                 JOIN memories m ON m.id = fts.rowid
+                "SELECT m.id, bm25(memories_fts) as rank
+                 FROM memories_fts
+                 JOIN memories m ON m.id = memories_fts.rowid
                  WHERE memories_fts MATCH ?1
-                 ORDER BY fts.rank
+                 ORDER BY rank
                  LIMIT 100",
             )
             .map_err(|e| format!("Failed to prepare FTS query: {}", e))?;
@@ -380,6 +405,28 @@ impl HybridSearchEngine {
 
         log::info!("[BACKFILL] Complete: generated {} embeddings out of {} memories", generated, total);
         Ok(generated)
+    }
+
+    /// Apply a multiplicative score boost to memories whose agent_subtype matches.
+    /// This is a soft preference — cross-subtype memories still appear, just ranked lower.
+    fn apply_subtype_boost(&self, results: &mut [HybridSearchResult], subtype: &str) {
+        let conn = self.db.conn();
+        for result in results.iter_mut() {
+            let mem_subtype: Option<String> = conn
+                .query_row(
+                    "SELECT agent_subtype FROM memories WHERE id = ?1",
+                    rusqlite::params![result.memory_id],
+                    |row| row.get(0),
+                )
+                .ok()
+                .flatten();
+
+            if let Some(ref ms) = mem_subtype {
+                if ms.eq_ignore_ascii_case(subtype) {
+                    result.rrf_score *= 1.25;
+                }
+            }
+        }
     }
 
     /// Merge results from multiple search signals using Reciprocal Rank Fusion.

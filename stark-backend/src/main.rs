@@ -4,6 +4,7 @@ use actix_web::{middleware::Logger, web, App, HttpServer};
 use dotenv::dotenv;
 use std::sync::Arc;
 
+mod agents;
 mod ai;
 mod ai_endpoint_config;
 mod backup;
@@ -554,7 +555,6 @@ async fn restore_backup_data(
                     hb_config.active_hours_end.as_deref(),
                     hb_config.active_days.as_deref(),
                     Some(hb_config.enabled),
-                    Some(hb_config.impulse_evolver),
                 ) {
                     log::warn!("[Keystore] Failed to restore heartbeat config: {}", e);
                 } else {
@@ -803,42 +803,58 @@ async fn restore_backup_data(
         log::info!("[Keystore] Restored {} agent settings", result.agent_settings);
     }
 
-    // Restore agent subtypes
-    for entry in &backup_data.agent_subtypes {
-        let tool_groups: Vec<String> = serde_json::from_str(&entry.tool_groups_json).unwrap_or_default();
-        let skill_tags: Vec<String> = serde_json::from_str(&entry.skill_tags_json).unwrap_or_default();
-        let additional_tools: Vec<String> = serde_json::from_str(&entry.additional_tools_json).unwrap_or_default();
-        let aliases: Vec<String> = serde_json::from_str(&entry.aliases_json).unwrap_or_default();
-        let config = ai::multi_agent::types::AgentSubtypeConfig {
-            key: entry.key.clone(),
-            label: entry.label.clone(),
-            emoji: entry.emoji.clone(),
-            description: entry.description.clone(),
-            tool_groups,
-            skill_tags,
-            additional_tools,
-            prompt: entry.prompt.clone(),
-            sort_order: entry.sort_order,
-            enabled: entry.enabled,
-            max_iterations: entry.max_iterations.unwrap_or(90) as u32,
-            skip_task_planner: entry.skip_task_planner.unwrap_or(false),
-            aliases,
-            hidden: entry.hidden.unwrap_or(false),
-        };
-        match db.upsert_agent_subtype(&config) {
-            Ok(_) => result.agent_subtypes += 1,
-            Err(e) => log::warn!("[Keystore] Failed to restore agent subtype '{}': {}", entry.key, e),
+    // Restore agent subtypes (write to disk, reload registry)
+    {
+        let agents_dir = config::runtime_agents_dir();
+        std::fs::create_dir_all(&agents_dir).ok();
+        for entry in &backup_data.agent_subtypes {
+            if !entry.folder_files.is_empty() {
+                // New format: write folder files directly to disk
+                let agent_folder = agents_dir.join(&entry.key);
+                std::fs::create_dir_all(&agent_folder).ok();
+                for file in &entry.folder_files {
+                    let file_path = agent_folder.join(&file.relative_path);
+                    if let Some(parent) = file_path.parent() {
+                        std::fs::create_dir_all(parent).ok();
+                    }
+                    if let Err(e) = std::fs::write(&file_path, &file.content) {
+                        log::warn!("[Keystore] Failed to write agent file {}/{}: {}", entry.key, file.relative_path, e);
+                    }
+                }
+                result.agent_subtypes += 1;
+            } else {
+                // Legacy format: convert fields to AgentSubtypeConfig and write agent.md
+                let tool_groups: Vec<String> = serde_json::from_str(&entry.tool_groups_json).unwrap_or_default();
+                let skill_tags: Vec<String> = serde_json::from_str(&entry.skill_tags_json).unwrap_or_default();
+                let additional_tools: Vec<String> = serde_json::from_str(&entry.additional_tools_json).unwrap_or_default();
+                let aliases: Vec<String> = serde_json::from_str(&entry.aliases_json).unwrap_or_default();
+                let config = ai::multi_agent::types::AgentSubtypeConfig {
+                    key: entry.key.clone(),
+                    version: String::new(),
+                    label: entry.label.clone(),
+                    emoji: entry.emoji.clone(),
+                    description: entry.description.clone(),
+                    tool_groups,
+                    skill_tags,
+                    additional_tools,
+                    prompt: entry.prompt.clone(),
+                    sort_order: entry.sort_order,
+                    enabled: entry.enabled,
+                    max_iterations: entry.max_iterations.unwrap_or(90) as u32,
+                    skip_task_planner: entry.skip_task_planner.unwrap_or(false),
+                    aliases,
+                    hidden: entry.hidden.unwrap_or(false),
+                    preferred_ai_model: entry.preferred_ai_model.clone(),
+                };
+                match agents::loader::write_agent_folder(&agents_dir, &config) {
+                    Ok(_) => result.agent_subtypes += 1,
+                    Err(e) => log::warn!("[Keystore] Failed to restore agent subtype '{}': {}", entry.key, e),
+                }
+            }
         }
-    }
-    if result.agent_subtypes > 0 {
-        log::info!("[Keystore] Restored {} agent subtypes", result.agent_subtypes);
-        // Migrate skill tags on restored subtypes (remove deprecated, add new required tags)
-        if let Err(e) = db.migrate_agent_subtype_skill_tags() {
-            log::warn!("[Keystore] Failed to migrate restored subtype skill tags: {}", e);
-        }
-        // Reload registry with restored data
-        if let Ok(subtypes) = db.list_agent_subtypes() {
-            ai::multi_agent::types::load_subtype_registry(subtypes);
+        if result.agent_subtypes > 0 {
+            log::info!("[Keystore] Restored {} agent subtypes to disk", result.agent_subtypes);
+            agents::loader::reload_registry_from_disk();
         }
     }
 
@@ -932,6 +948,7 @@ async fn restore_backup_data(
                     mem.source_type.as_deref(),
                     mem.log_date.as_deref(),
                     &mem.created_at,
+                    mem.agent_subtype.as_deref(),
                 )
             } else {
                 db.insert_memory(
@@ -946,6 +963,7 @@ async fn restore_backup_data(
                     mem.entity_name.as_deref(),
                     mem.source_type.as_deref(),
                     mem.log_date.as_deref(),
+                    mem.agent_subtype.as_deref(),
                 )
             };
             match insert_result {
@@ -1275,6 +1293,7 @@ fn migrate_qmd_memories_to_db(
                 None,                         // entity_name
                 Some("qmd_migration"),        // source_type
                 log_date.as_deref(),
+                None,                         // agent_subtype (not available in migration)
             ) {
                 log::warn!("[MIGRATION] Failed to insert entry from {}: {}", rel, e);
             } else {
@@ -1414,20 +1433,17 @@ async fn main() -> std::io::Result<()> {
         Err(e) => log::warn!("Failed to load x402 payment limits from DB: {}", e),
     }
 
-    // Load agent subtypes — always upsert from RON so config changes take effect.
-    // Cloud backup restore can still overwrite later (it runs after this).
+    // Load agent subtypes from agents/ folders (disk-based, no DB).
+    // Seed bundled agents from config/agents/ → stark-backend/agents/ (version-gated).
     {
-        let configs = ai::multi_agent::types::load_default_agent_subtypes_from_file(config_dir);
-        for config in &configs {
-            let _ = db.upsert_agent_subtype(config);
+        if let Err(e) = config::seed_agents() {
+            log::warn!("Failed to seed agents: {}", e);
         }
-        log::info!("Synced {} agent subtypes from defaultagents.ron", configs.len());
-        // Migrate skill tags (remove deprecated, add new required tags)
-        if let Err(e) = db.migrate_agent_subtype_skill_tags() {
-            log::warn!("Failed to migrate agent subtype skill tags: {}", e);
-        }
-        let subtypes = db.list_agent_subtypes().unwrap_or_default();
-        ai::multi_agent::types::load_subtype_registry(subtypes);
+        let agents_dir = config::runtime_agents_dir();
+        std::fs::create_dir_all(&agents_dir).ok();
+        let configs = agents::loader::load_agents_from_directory(&agents_dir)
+            .unwrap_or_else(|e| { log::error!("Failed to load agents: {}", e); vec![] });
+        ai::multi_agent::types::load_subtype_registry(configs);
     }
 
     // Initialize keystore URL (must be before auto-retrieve)

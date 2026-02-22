@@ -11,8 +11,12 @@ import {
   exportAgentSubtype,
   importAgentSubtypes,
   getToolGroups,
+  readIntrinsicFile,
+  writeIntrinsicFile,
+  getAiEndpointPresets,
   AgentSubtypeInfo,
   ToolGroupInfo,
+  AiEndpointPreset,
 } from '@/lib/api';
 
 const MAX_SUBTYPES = 10;
@@ -35,6 +39,7 @@ const EMPTY_SUBTYPE: AgentSubtypeInfo = {
 export default function AgentSubtypes() {
   const [subtypes, setSubtypes] = useState<AgentSubtypeInfo[]>([]);
   const [toolGroups, setToolGroups] = useState<ToolGroupInfo[]>([]);
+  const [endpointPresets, setEndpointPresets] = useState<AiEndpointPreset[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -44,6 +49,14 @@ export default function AgentSubtypes() {
   const [isCreating, setIsCreating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+
+  const [goalsContent, setGoalsContent] = useState<string | null>(null);
+  const [goalsLoading, setGoalsLoading] = useState(false);
+  const [goalsSaving, setGoalsSaving] = useState(false);
+
+  const [heartbeatContent, setHeartbeatContent] = useState<string | null>(null);
+  const [heartbeatLoading, setHeartbeatLoading] = useState(false);
+  const [heartbeatSaving, setHeartbeatSaving] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -64,21 +77,49 @@ export default function AgentSubtypes() {
       const firstKey = subtypes[0].key;
       setSelectedKey(firstKey);
       setEditForm({ ...subtypes[0] });
+      loadGoals(firstKey);
+      loadHeartbeat(firstKey);
     }
   }, [subtypes]);
 
   const loadData = async () => {
     try {
-      const [subtypesData, groupsData] = await Promise.all([
+      const [subtypesData, groupsData, presetsData] = await Promise.all([
         getAgentSubtypes(),
         getToolGroups(),
+        getAiEndpointPresets().catch(() => [] as AiEndpointPreset[]),
       ]);
       setSubtypes(subtypesData);
       setToolGroups(groupsData);
+      setEndpointPresets(presetsData);
     } catch (err) {
       setError('Failed to load agent subtypes');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadGoals = async (key: string) => {
+    setGoalsLoading(true);
+    try {
+      const result = await readIntrinsicFile(`agents/${key}/goals.md`);
+      setGoalsContent(result.content ?? null);
+    } catch {
+      setGoalsContent(null);
+    } finally {
+      setGoalsLoading(false);
+    }
+  };
+
+  const loadHeartbeat = async (key: string) => {
+    setHeartbeatLoading(true);
+    try {
+      const result = await readIntrinsicFile(`agents/${key}/heartbeat.md`);
+      setHeartbeatContent(result.content ?? null);
+    } catch {
+      setHeartbeatContent(null);
+    } finally {
+      setHeartbeatLoading(false);
     }
   };
 
@@ -88,6 +129,8 @@ export default function AgentSubtypes() {
     if (subtype) {
       setSelectedKey(key);
       setEditForm({ ...subtype });
+      loadGoals(key);
+      loadHeartbeat(key);
     }
   };
 
@@ -233,6 +276,56 @@ export default function AgentSubtypes() {
     } finally {
       // Reset input so same file can be re-selected
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleActivateHeartbeat = async () => {
+    if (!selectedKey) return;
+    const defaultContent = '# Heartbeat\n\nDescribe what this agent should do on each heartbeat cycle.\nRespond with HEARTBEAT_OK if no action needed.';
+    try {
+      await writeIntrinsicFile(`agents/${selectedKey}/heartbeat.md`, defaultContent);
+      setHeartbeatContent(defaultContent);
+      setSuccess('Heartbeat activated');
+    } catch {
+      setError('Failed to create heartbeat file');
+    }
+  };
+
+  const handleSaveHeartbeat = async () => {
+    if (!selectedKey || heartbeatContent === null) return;
+    setHeartbeatSaving(true);
+    try {
+      await writeIntrinsicFile(`agents/${selectedKey}/heartbeat.md`, heartbeatContent);
+      setSuccess('Heartbeat saved');
+    } catch {
+      setError('Failed to save heartbeat');
+    } finally {
+      setHeartbeatSaving(false);
+    }
+  };
+
+  const handleActivateGoals = async () => {
+    if (!selectedKey) return;
+    const defaultContent = '# Goals\n\nDefine the overall strategic goals for this agent.\nThese provide awareness context prepended to each heartbeat prompt.';
+    try {
+      await writeIntrinsicFile(`agents/${selectedKey}/goals.md`, defaultContent);
+      setGoalsContent(defaultContent);
+      setSuccess('Goals activated');
+    } catch {
+      setError('Failed to create goals file');
+    }
+  };
+
+  const handleSaveGoals = async () => {
+    if (!selectedKey || goalsContent === null) return;
+    setGoalsSaving(true);
+    try {
+      await writeIntrinsicFile(`agents/${selectedKey}/goals.md`, goalsContent);
+      setSuccess('Goals saved');
+    } catch {
+      setError('Failed to save goals');
+    } finally {
+      setGoalsSaving(false);
     }
   };
 
@@ -419,7 +512,72 @@ export default function AgentSubtypes() {
                   toolGroups={toolGroups}
                   onToolGroupToggle={handleToolGroupToggle}
                   isNew={isCreating}
+                  endpointPresets={endpointPresets}
                 />
+
+                {/* Goals Section */}
+                {!isCreating && selectedKey && (
+                  <div className="mt-6 pt-6 border-t border-slate-700/50">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-xs text-slate-500">
+                        Goals
+                        <span className="text-slate-600 ml-1">— strategic context prepended to each heartbeat prompt</span>
+                      </label>
+                      {goalsContent !== null && (
+                        <Button size="sm" variant="ghost" onClick={handleSaveGoals} isLoading={goalsSaving}>
+                          <Save className="w-3.5 h-3.5 mr-1" /> Save Goals
+                        </Button>
+                      )}
+                    </div>
+                    {goalsLoading ? (
+                      <div className="text-xs text-slate-500">Loading...</div>
+                    ) : goalsContent === null ? (
+                      <Button variant="secondary" size="sm" onClick={handleActivateGoals}>
+                        Activate Goals
+                      </Button>
+                    ) : (
+                      <textarea
+                        value={goalsContent}
+                        onChange={e => setGoalsContent(e.target.value)}
+                        className="w-full h-36 bg-slate-900/50 border border-slate-700 rounded-lg p-3 text-sm text-slate-300 font-mono resize-none focus:outline-none focus:border-stark-500"
+                        spellCheck={false}
+                        placeholder="Overall strategic goals for this agent..."
+                      />
+                    )}
+                  </div>
+                )}
+
+                {/* Heartbeat Section */}
+                {!isCreating && selectedKey && (
+                  <div className="mt-6 pt-6 border-t border-slate-700/50">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-xs text-slate-500">
+                        Heartbeat Prompt
+                        <span className="text-slate-600 ml-1">— runs on each heartbeat cycle if present</span>
+                      </label>
+                      {heartbeatContent !== null && (
+                        <Button size="sm" variant="ghost" onClick={handleSaveHeartbeat} isLoading={heartbeatSaving}>
+                          <Save className="w-3.5 h-3.5 mr-1" /> Save Heartbeat
+                        </Button>
+                      )}
+                    </div>
+                    {heartbeatLoading ? (
+                      <div className="text-xs text-slate-500">Loading...</div>
+                    ) : heartbeatContent === null ? (
+                      <Button variant="secondary" size="sm" onClick={handleActivateHeartbeat}>
+                        Activate Heartbeat
+                      </Button>
+                    ) : (
+                      <textarea
+                        value={heartbeatContent}
+                        onChange={e => setHeartbeatContent(e.target.value)}
+                        className="w-full h-36 bg-slate-900/50 border border-slate-700 rounded-lg p-3 text-sm text-slate-300 font-mono resize-none focus:outline-none focus:border-stark-500"
+                        spellCheck={false}
+                        placeholder="Heartbeat prompt for this agent..."
+                      />
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
@@ -454,9 +612,10 @@ interface SubtypeFormProps {
   toolGroups: ToolGroupInfo[];
   onToolGroupToggle: (group: string) => void;
   isNew?: boolean;
+  endpointPresets?: AiEndpointPreset[];
 }
 
-function SubtypeForm({ form, setForm, toolGroups, onToolGroupToggle, isNew }: SubtypeFormProps) {
+function SubtypeForm({ form, setForm, toolGroups, onToolGroupToggle, isNew, endpointPresets = [] }: SubtypeFormProps) {
   return (
     <div className="space-y-4">
       {/* Row: Key + Label + Emoji */}
@@ -542,6 +701,19 @@ function SubtypeForm({ form, setForm, toolGroups, onToolGroupToggle, isNew }: Su
           >
             {form.skip_task_planner ? 'Yes (skip planning)' : 'No (plan first)'}
           </button>
+        </div>
+        <div>
+          <label className="block text-xs text-slate-500 mb-1">Preferred AI Model</label>
+          <select
+            value={form.preferred_ai_model || ''}
+            onChange={e => setForm({ ...form, preferred_ai_model: e.target.value || null })}
+            className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-stark-500"
+          >
+            <option value="">Global default</option>
+            {endpointPresets.map(p => (
+              <option key={p.id} value={p.id}>{p.display_name}</option>
+            ))}
+          </select>
         </div>
       </div>
 

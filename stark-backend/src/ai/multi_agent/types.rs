@@ -9,10 +9,13 @@ use crate::tools::types::ToolGroup;
 // =====================================================
 
 /// A fully-configurable agent subtype definition.
-/// Stored in DB, loaded from `config/defaultagents.ron` on first boot.
+/// Loaded from `agents/{key}/agent.md` folders on boot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSubtypeConfig {
     pub key: String,
+    /// Semver version string for upgrade detection during seeding
+    #[serde(default)]
+    pub version: String,
     pub label: String,
     pub emoji: String,
     pub description: String,
@@ -41,13 +44,17 @@ pub struct AgentSubtypeConfig {
     /// and the UI picker. They are auto-selected when channel_type matches the subtype key.
     #[serde(default)]
     pub hidden: bool,
+    /// Optional preferred AI model endpoint key (e.g. "minimax", "kimi-k2.5").
+    /// When set, overrides the global agent settings for this subtype's agentic loop.
+    #[serde(default)]
+    pub preferred_ai_model: Option<String>,
 }
 
 fn default_max_iterations() -> u32 {
     90
 }
 
-/// Global registry of agent subtype configs, loaded at startup from DB.
+/// Global registry of agent subtype configs, loaded at startup from agents/ folder.
 static SUBTYPE_REGISTRY: std::sync::OnceLock<parking_lot::RwLock<Vec<AgentSubtypeConfig>>> =
     std::sync::OnceLock::new();
 
@@ -98,26 +105,21 @@ pub fn subtype_registry_loaded() -> bool {
     SUBTYPE_REGISTRY.get().map(|r| !r.read().is_empty()).unwrap_or(false)
 }
 
-/// Load agent subtypes from `config/defaultagents.ron`.
-/// Panics if the file is missing or malformed — the RON config is required.
-pub fn load_default_agent_subtypes_from_file(config_dir: &std::path::Path) -> Vec<AgentSubtypeConfig> {
-    let path = config_dir.join("defaultagents.ron");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("[SUBTYPE] config/defaultagents.ron is required but could not be read: {}", e));
-    let configs: Vec<AgentSubtypeConfig> = ron::from_str(&content)
-        .unwrap_or_else(|e| panic!("[SUBTYPE] Failed to parse {}: {}", path.display(), e));
-    log::info!("[SUBTYPE] Loaded {} subtypes from {}", configs.len(), path.display());
-    configs
-}
-
-/// Load subtypes from the repo's config/defaultagents.ron (for tests).
-/// Walks up from CARGO_MANIFEST_DIR to find the config directory.
+/// Load subtypes from the repo's config/agents/ directory (for tests).
+/// Seeds bundled agents to a temp dir, then loads from there.
 #[cfg(test)]
 pub fn load_test_subtypes() -> Vec<AgentSubtypeConfig> {
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // config/ is at the repo root, one level above stark-backend/
-    let config_dir = manifest_dir.parent().unwrap().join("config");
-    load_default_agent_subtypes_from_file(&config_dir)
+    use crate::agents::loader::load_agents_from_directory;
+
+    // Use the runtime agents dir (seeded at startup from config/agents/)
+    let agents_dir = crate::config::runtime_agents_dir();
+    if agents_dir.exists() {
+        return load_agents_from_directory(&agents_dir).unwrap_or_default();
+    }
+
+    // Fallback: load directly from bundled agents
+    let bundled = crate::config::bundled_agents_dir();
+    load_agents_from_directory(&bundled).unwrap_or_default()
 }
 
 // =====================================================

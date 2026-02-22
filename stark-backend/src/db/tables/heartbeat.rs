@@ -15,7 +15,7 @@ impl Database {
         let existing = if let Some(cid) = channel_id {
             conn.query_row(
                 "SELECT id, channel_id, interval_minutes, target, active_hours_start, active_hours_end,
-                        active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id, impulse_evolver,
+                        active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id,
                         created_at, updated_at
                  FROM heartbeat_configs WHERE channel_id = ?1",
                 [cid],
@@ -24,7 +24,7 @@ impl Database {
         } else {
             conn.query_row(
                 "SELECT id, channel_id, interval_minutes, target, active_hours_start, active_hours_end,
-                        active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id, impulse_evolver,
+                        active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id,
                         created_at, updated_at
                  FROM heartbeat_configs WHERE channel_id IS NULL",
                 [],
@@ -60,7 +60,6 @@ impl Database {
             next_beat_at: None,
             current_impulse_node_id: None,
             last_session_id: None,
-            impulse_evolver: true,
             created_at: now.clone(),
             updated_at: now,
         })
@@ -80,9 +79,8 @@ impl Database {
             next_beat_at: row.get(9)?,
             current_impulse_node_id: row.get(10)?,
             last_session_id: row.get(11)?,
-            impulse_evolver: row.get::<_, i32>(12).unwrap_or(1) != 0,
-            created_at: row.get(13)?,
-            updated_at: row.get(14)?,
+            created_at: row.get(12)?,
+            updated_at: row.get(13)?,
         })
     }
 
@@ -96,7 +94,6 @@ impl Database {
         active_hours_end: Option<&str>,
         active_days: Option<&str>,
         enabled: Option<bool>,
-        impulse_evolver: Option<bool>,
     ) -> SqliteResult<HeartbeatConfig> {
         let conn = self.conn();
         let now = Utc::now().to_rfc3339();
@@ -110,7 +107,6 @@ impl Database {
         if active_hours_end.is_some() { updates.push(format!("active_hours_end = ?{}", param_index)); param_index += 1; }
         if active_days.is_some() { updates.push(format!("active_days = ?{}", param_index)); param_index += 1; }
         if enabled.is_some() { updates.push(format!("enabled = ?{}", param_index)); param_index += 1; }
-        if impulse_evolver.is_some() { updates.push(format!("impulse_evolver = ?{}", param_index)); param_index += 1; }
 
         let query = format!(
             "UPDATE heartbeat_configs SET {} WHERE id = ?{}",
@@ -125,7 +121,6 @@ impl Database {
         if let Some(v) = active_hours_end { params.push(Box::new(v.to_string())); }
         if let Some(v) = active_days { params.push(Box::new(v.to_string())); }
         if let Some(v) = enabled { params.push(Box::new(v as i32)); }
-        if let Some(v) = impulse_evolver { params.push(Box::new(v as i32)); }
         params.push(Box::new(id));
 
         let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
@@ -133,7 +128,7 @@ impl Database {
 
         conn.query_row(
             "SELECT id, channel_id, interval_minutes, target, active_hours_start, active_hours_end,
-                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id, impulse_evolver,
+                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id,
                     created_at, updated_at
              FROM heartbeat_configs WHERE id = ?1",
             [id],
@@ -186,7 +181,7 @@ impl Database {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, channel_id, interval_minutes, target, active_hours_start, active_hours_end,
-                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id, impulse_evolver,
+                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id,
                     created_at, updated_at
              FROM heartbeat_configs ORDER BY id"
         )?;
@@ -205,7 +200,7 @@ impl Database {
 
         conn.query_row(
             "SELECT id, channel_id, interval_minutes, target, active_hours_start, active_hours_end,
-                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id, impulse_evolver,
+                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id,
                     created_at, updated_at
              FROM heartbeat_configs WHERE id = ?1",
             [id],
@@ -220,7 +215,7 @@ impl Database {
 
         let mut stmt = conn.prepare(
             "SELECT id, channel_id, interval_minutes, target, active_hours_start, active_hours_end,
-                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id, impulse_evolver,
+                    active_days, enabled, last_beat_at, next_beat_at, current_impulse_node_id, last_session_id,
                     created_at, updated_at
              FROM heartbeat_configs
              WHERE enabled = 1 AND (next_beat_at IS NULL OR next_beat_at <= ?1)

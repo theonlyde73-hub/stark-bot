@@ -233,7 +233,6 @@ pub struct HeartbeatConfigEntry {
     pub active_hours_end: Option<String>,
     pub active_days: Option<String>,
     pub enabled: bool,
-    pub impulse_evolver: bool,
 }
 
 /// Memory entry in backup
@@ -251,6 +250,8 @@ pub struct MemoryEntry {
     pub source_type: Option<String>,
     pub log_date: Option<String>,
     pub created_at: String,
+    #[serde(default)]
+    pub agent_subtype: Option<String>,
 }
 
 /// Bot settings entry in backup
@@ -429,7 +430,7 @@ pub struct KanbanItemEntry {
     pub updated_at: String,
 }
 
-/// Agent subtype entry in backup
+/// Agent subtype entry in backup (folder-based format)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AgentSubtypeEntry {
@@ -448,6 +449,22 @@ pub struct AgentSubtypeEntry {
     pub aliases_json: String,
     #[serde(default)]
     pub hidden: Option<bool>,
+    #[serde(default)]
+    pub preferred_ai_model: Option<String>,
+    /// All files from the agent folder (new folder-based format).
+    /// When present, restore writes these files directly to disk.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folder_files: Vec<AgentFileEntry>,
+}
+
+/// A single file from an agent folder (for folder-based backup)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentFileEntry {
+    /// Relative path within the agent folder (e.g. "agent.md")
+    pub relative_path: String,
+    /// Full file content
+    pub content: String,
 }
 
 /// Special role entry in backup (enriched safe mode)
@@ -652,7 +669,6 @@ pub async fn collect_backup_data(
                 active_hours_end: config.active_hours_end.clone(),
                 active_days: config.active_days.clone(),
                 enabled: config.enabled,
-                impulse_evolver: config.impulse_evolver,
             });
         }
     }
@@ -675,6 +691,7 @@ pub async fn collect_backup_data(
                         source_type: m.source_type.clone(),
                         log_date: m.log_date.clone(),
                         created_at: m.created_at.clone(),
+                        agent_subtype: m.agent_subtype.clone(),
                     })
                     .collect(),
             );
@@ -883,11 +900,13 @@ pub async fn collect_backup_data(
             .collect();
     }
 
-    // Agent subtypes
-    if let Ok(subtypes) = db.list_agent_subtypes() {
-        backup.agent_subtypes = subtypes
-            .iter()
-            .map(|s| AgentSubtypeEntry {
+    // Agent subtypes — collect from disk (agents/ folder)
+    {
+        let runtime_agents = crate::config::runtime_agents_dir();
+        let subtypes = crate::ai::multi_agent::types::all_subtype_configs_unfiltered();
+        for s in &subtypes {
+            let folder_files = collect_agent_folder_files(&runtime_agents, &s.key);
+            backup.agent_subtypes.push(AgentSubtypeEntry {
                 key: s.key.clone(),
                 label: s.label.clone(),
                 emoji: s.emoji.clone(),
@@ -902,8 +921,13 @@ pub async fn collect_backup_data(
                 skip_task_planner: Some(s.skip_task_planner),
                 aliases_json: serde_json::to_string(&s.aliases).unwrap_or_else(|_| "[]".to_string()),
                 hidden: Some(s.hidden),
-            })
-            .collect();
+                preferred_ai_model: s.preferred_ai_model.clone(),
+                folder_files,
+            });
+        }
+        if !backup.agent_subtypes.is_empty() {
+            log::info!("[Backup] Collected {} agent subtypes from disk", backup.agent_subtypes.len());
+        }
     }
 
     // Special roles
@@ -981,6 +1005,27 @@ fn collect_skill_folder_files(skills_dir: &std::path::Path, skill_name: &str) ->
             // Only include text files (skip binary)
             if let Ok(text) = String::from_utf8(content) {
                 files.push(SkillFileEntry {
+                    relative_path: rel_path,
+                    content: text,
+                });
+            }
+        }
+    }
+    files
+}
+
+/// Collect all files from an agent's disk folder as AgentFileEntry items.
+fn collect_agent_folder_files(agents_dir: &std::path::Path, agent_key: &str) -> Vec<AgentFileEntry> {
+    let agent_dir = agents_dir.join(agent_key);
+    if !agent_dir.is_dir() {
+        return Vec::new();
+    }
+
+    let mut files = Vec::new();
+    if let Ok(entries) = collect_dir_files_recursive(&agent_dir, &agent_dir) {
+        for (rel_path, content) in entries {
+            if let Ok(text) = String::from_utf8(content) {
+                files.push(AgentFileEntry {
                     relative_path: rel_path,
                     content: text,
                 });
@@ -1146,6 +1191,7 @@ mod tests {
             source_type: Some("inferred".to_string()),
             log_date: None,
             created_at: "2025-01-15T10:00:00Z".to_string(),
+            agent_subtype: Some("director".to_string()),
         };
 
         let json = serde_json::to_string(&entry).unwrap();
@@ -1220,6 +1266,7 @@ mod tests {
             Some("andy"),
             Some("inferred"),
             None,
+            None,
         )
         .unwrap();
 
@@ -1235,6 +1282,7 @@ mod tests {
             None,
             Some("api"),
             Some("2025-06-15"),
+            None,
         )
         .unwrap();
 
@@ -1278,13 +1326,13 @@ mod tests {
         let id1 = db.insert_memory(
             "long_term", "Fact A", Some("cat"), Some("t1,t2"), 9,
             Some("id1"), None, Some("entity_t"), Some("entity_n"),
-            Some("inferred"), None,
+            Some("inferred"), None, Some("director"),
         ).unwrap();
 
         let id2 = db.insert_memory(
             "daily_log", "Log B", None, None, 3,
             Some("id1"), None, None, None,
-            Some("api"), Some("2025-03-01"),
+            Some("api"), Some("2025-03-01"), None,
         ).unwrap();
 
         // Also create associations and embeddings (to verify they exist before clear)
@@ -1324,6 +1372,7 @@ mod tests {
                 mem.entity_name.as_deref(),
                 mem.source_type.as_deref(),
                 mem.log_date.as_deref(),
+                mem.agent_subtype.as_deref(),
             ).unwrap();
         }
 
@@ -1356,13 +1405,13 @@ mod tests {
         db.insert_memory(
             "long_term", "Rust is a systems language", Some("knowledge"),
             Some("rust,programming"), 7, Some("default"), None,
-            Some("concept"), Some("rust-lang"), Some("inferred"), None,
+            Some("concept"), Some("rust-lang"), Some("inferred"), None, None,
         ).unwrap();
 
         db.insert_memory(
             "long_term", "Cargo is Rust's build tool", Some("knowledge"),
             Some("rust,tooling"), 6, Some("default"), None,
-            Some("concept"), Some("cargo"), Some("inferred"), None,
+            Some("concept"), Some("cargo"), Some("inferred"), None, None,
         ).unwrap();
 
         // Collect and restore
@@ -1376,6 +1425,7 @@ mod tests {
                 mem.importance.unwrap_or(5) as i64, mem.identity_id.as_deref(),
                 None, mem.entity_type.as_deref(), mem.entity_name.as_deref(),
                 mem.source_type.as_deref(), mem.log_date.as_deref(),
+                mem.agent_subtype.as_deref(),
             ).unwrap();
         }
 

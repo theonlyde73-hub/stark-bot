@@ -15,6 +15,7 @@ pub mod env_vars {
     pub const NOTES_DIR: &str = "STARK_NOTES_DIR";
     pub const NOTES_REINDEX_INTERVAL_SECS: &str = "STARK_NOTES_REINDEX_INTERVAL_SECS";
     pub const SOUL_DIR: &str = "STARK_SOUL_DIR";
+    pub const PUBLIC_DIR: &str = "STARK_PUBLIC_DIR";
     // Disk quota (0 = disabled)
     pub const DISK_QUOTA_MB: &str = "STARK_DISK_QUOTA_MB";
     // QMD Memory configuration (simplified file-based memory system)
@@ -34,6 +35,7 @@ pub mod defaults {
     pub const SKILLS_DIR: &str = "skills";
     pub const NOTES_DIR: &str = "notes";
     pub const SOUL_DIR: &str = "soul";
+    pub const PUBLIC_DIR: &str = "public";
     pub const MEMORY_DIR: &str = "memory";
     pub const DISK_QUOTA_MB: u64 = 1024;
 }
@@ -99,9 +101,162 @@ pub fn runtime_modules_dir() -> PathBuf {
     backend_dir().join("modules")
 }
 
+/// Get the bundled agents directory (config/agents/ — read-only source)
+pub fn bundled_agents_dir() -> PathBuf {
+    repo_root().join("config").join("agents")
+}
+
+/// Get the runtime agents directory (stark-backend/agents/ — mutable working copy)
+pub fn runtime_agents_dir() -> PathBuf {
+    backend_dir().join("agents")
+}
+
+/// Extract the version from an agent directory's agent.md frontmatter.
+fn extract_version_from_agent_dir(dir: &Path) -> Option<String> {
+    let agent_md = dir.join("agent.md");
+    let content = std::fs::read_to_string(&agent_md).ok()?;
+    if !content.starts_with("---") {
+        return None;
+    }
+    for line in content.lines().skip(1) {
+        if line.trim() == "---" {
+            break;
+        }
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("version:") {
+            let version = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+            if !version.is_empty() {
+                return Some(version);
+            }
+        }
+    }
+    None
+}
+
+/// Seed runtime agents directory from bundled agents.
+/// Copies agent folders from bundled_agents_dir() to runtime_agents_dir()
+/// only if the runtime copy is missing or has an older semver version.
+pub fn seed_agents() -> std::io::Result<()> {
+    let bundled = bundled_agents_dir();
+    let runtime = runtime_agents_dir();
+
+    if !bundled.exists() {
+        log::info!("Bundled agents directory {:?} does not exist, skipping seed", bundled);
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(&runtime)?;
+
+    let entries = std::fs::read_dir(&bundled)?;
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                log::warn!("Failed to read bundled agent entry: {}", e);
+                continue;
+            }
+        };
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy().to_string();
+
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(e) => {
+                log::warn!("Failed to get file type for '{}': {}", name_str, e);
+                continue;
+            }
+        };
+        if !file_type.is_dir() || file_type.is_symlink() {
+            continue;
+        }
+        if name_str.starts_with('.') || name_str.starts_with('_') {
+            continue;
+        }
+
+        // Must have agent.md to be a valid agent
+        if !entry.path().join("agent.md").exists() {
+            continue;
+        }
+
+        let runtime_agent = runtime.join(&name);
+
+        let should_copy = if runtime_agent.exists() {
+            let bundled_version = extract_version_from_agent_dir(&entry.path());
+            let runtime_version = extract_version_from_agent_dir(&runtime_agent);
+
+            match (bundled_version, runtime_version) {
+                (Some(bv), Some(rv)) => {
+                    if semver_is_newer(&bv, &rv) {
+                        log::info!(
+                            "Upgrading agent '{}' from v{} to v{} (bundled is newer)",
+                            name_str, rv, bv
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                }
+                (Some(bv), None) => {
+                    log::info!(
+                        "Upgrading agent '{}' (bundled has v{}, runtime has no version)",
+                        name_str, bv
+                    );
+                    true
+                }
+                _ => false,
+            }
+        } else {
+            log::info!("Seeding agent '{}' from bundled", name_str);
+            true
+        };
+
+        if should_copy {
+            if runtime_agent.exists() {
+                let tmp_name = format!(".{}.seed_tmp", name_str);
+                let tmp_dir = runtime.join(&tmp_name);
+                if tmp_dir.exists() {
+                    let _ = std::fs::remove_dir_all(&tmp_dir);
+                }
+                match copy_dir_recursive(&entry.path(), &tmp_dir) {
+                    Ok(()) => {
+                        if let Err(e) = std::fs::remove_dir_all(&runtime_agent) {
+                            log::error!("Failed to remove old agent '{}': {}", name_str, e);
+                            let _ = std::fs::remove_dir_all(&tmp_dir);
+                            continue;
+                        }
+                        if let Err(e) = std::fs::rename(&tmp_dir, &runtime_agent) {
+                            log::error!("Failed to rename temp dir for agent '{}': {}", name_str, e);
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to copy bundled agent '{}': {}", name_str, e);
+                        let _ = std::fs::remove_dir_all(&tmp_dir);
+                        continue;
+                    }
+                }
+            } else {
+                if let Err(e) = copy_dir_recursive(&entry.path(), &runtime_agent) {
+                    log::error!("Failed to seed agent '{}': {}", name_str, e);
+                    let _ = std::fs::remove_dir_all(&runtime_agent);
+                    continue;
+                }
+            }
+        }
+    }
+
+    log::info!("Agent seeding complete (runtime dir: {:?})", runtime);
+    Ok(())
+}
+
 /// Get the notes directory from environment or default
 pub fn notes_dir() -> String {
     resolve_backend_dir(env_vars::NOTES_DIR, defaults::NOTES_DIR)
+}
+
+/// Get the public files directory from environment or default
+pub fn public_dir() -> String {
+    resolve_backend_dir(env_vars::PUBLIC_DIR, defaults::PUBLIC_DIR)
 }
 
 /// Get the soul directory from environment or default

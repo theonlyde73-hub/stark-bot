@@ -1262,6 +1262,7 @@ impl MessageDispatcher {
                                     session.id,
                                     &client,
                                     memory_identity,
+                                    None, // agent_subtype not available in non-orchestrated path
                                 ).await {
                                     log::error!("[COMPACTION] Full compaction also failed: {}", e);
                                 }
@@ -1281,6 +1282,7 @@ impl MessageDispatcher {
                             session.id,
                             &client,
                             memory_identity,
+                            None, // agent_subtype not available in non-orchestrated path
                         ).await {
                             log::error!("[COMPACTION] Failed to compact session: {}", e);
                         }
@@ -1528,6 +1530,55 @@ impl MessageDispatcher {
         // Get the current subtype key
         let subtype_key = orchestrator.current_subtype_key().to_string();
 
+        // Check if subtype has a preferred AI model override
+        let override_client: Option<AiClient>;
+        let mut effective_archetype_id = archetype_id;
+        if let Some(config) = agent_types::get_subtype_config(&subtype_key) {
+            if let Some(ref model_key) = config.preferred_ai_model {
+                if let Some(preset) = crate::ai_endpoint_config::get_ai_endpoint(model_key) {
+                    log::info!(
+                        "[MULTI_AGENT] Subtype '{}' prefers AI model '{}' ({})",
+                        subtype_key, model_key, preset.display_name
+                    );
+                    let override_settings = AgentSettings {
+                        endpoint_name: Some(model_key.clone()),
+                        endpoint: preset.endpoint,
+                        model_archetype: preset.model_archetype,
+                        model: preset.model,
+                        ..AgentSettings::default()
+                    };
+                    effective_archetype_id = AiClient::infer_archetype(&override_settings);
+                    match AiClient::from_settings_with_wallet_provider(
+                        &override_settings, self.wallet_provider.clone()
+                    ) {
+                        Ok(c) => {
+                            override_client = Some(
+                                c.with_broadcaster(Arc::clone(&self.broadcaster), original_message.channel_id)
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[MULTI_AGENT] Failed to create override client for '{}': {}, using global",
+                                model_key, e
+                            );
+                            override_client = None;
+                        }
+                    }
+                } else {
+                    log::warn!(
+                        "[MULTI_AGENT] Preferred AI model '{}' not found in endpoints, using global",
+                        model_key
+                    );
+                    override_client = None;
+                }
+            } else {
+                override_client = None;
+            }
+        } else {
+            override_client = None;
+        }
+        let effective_client = override_client.as_ref().unwrap_or(client);
+
         log::info!(
             "[MULTI_AGENT] Started in {} mode ({} subtype) for request: {}",
             initial_mode,
@@ -1562,7 +1613,7 @@ impl MessageDispatcher {
 
         if tools.is_empty() {
             log::warn!("[TOOL_LOOP] No tools available, falling back to text-only generation");
-            let (content, payment) = client.generate_text_with_events(messages, &self.broadcaster, original_message.channel_id).await?;
+            let (content, payment) = effective_client.generate_text_with_events(messages, &self.broadcaster, original_message.channel_id).await?;
             // Save x402 payment if one was made
             if let Some(ref payment_info) = payment {
                 if let Err(e) = self.db.record_x402_payment(
@@ -1583,7 +1634,7 @@ impl MessageDispatcher {
         }
 
         // Get the archetype for this request
-        let archetype = self.archetype_registry.get(archetype_id)
+        let archetype = self.archetype_registry.get(effective_archetype_id)
             .unwrap_or_else(|| self.archetype_registry.default_archetype());
 
         log::info!(
@@ -1592,15 +1643,25 @@ impl MessageDispatcher {
             archetype.uses_native_tool_calling()
         );
 
+        // Inject current agent_subtype into tool_context for memory tagging and search boosting
+        let mut tool_context = tool_context.clone();
+        let subtype = orchestrator.current_subtype_key();
+        if !subtype.is_empty() {
+            tool_context.extra.insert(
+                "agent_subtype".to_string(),
+                serde_json::json!(subtype),
+            );
+        }
+
         // Branch based on archetype type
         if archetype.uses_native_tool_calling() {
             self.generate_with_native_tools_orchestrated(
-                client, messages, tools, tool_config, tool_context,
+                effective_client, messages, tools, tool_config, &tool_context,
                 original_message, archetype, &mut orchestrator, session_id, is_safe_mode, watchdog
             ).await
         } else {
             self.generate_with_text_tools_orchestrated(
-                client, messages, tools, tool_config, tool_context,
+                effective_client, messages, tools, tool_config, &tool_context,
                 original_message, archetype, &mut orchestrator, session_id, is_safe_mode, watchdog
             ).await
         }

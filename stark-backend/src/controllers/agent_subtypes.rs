@@ -1,6 +1,7 @@
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::Deserialize;
 
+use crate::agents::loader;
 use crate::ai::multi_agent::types::{self, AgentSubtypeConfig};
 use crate::AppState;
 
@@ -39,14 +40,7 @@ fn validate_session_from_request(
     }
 }
 
-/// Reload the global registry from DB.
-fn reload_registry(db: &crate::db::Database) {
-    if let Ok(subtypes) = db.list_agent_subtypes() {
-        types::load_subtype_registry(subtypes);
-    }
-}
-
-/// List all agent subtypes.
+/// List all agent subtypes (from in-memory registry, backed by disk).
 async fn list_subtypes(
     data: web::Data<AppState>,
     req: HttpRequest,
@@ -55,15 +49,7 @@ async fn list_subtypes(
         return resp;
     }
 
-    match data.db.list_agent_subtypes() {
-        Ok(subtypes) => HttpResponse::Ok().json(subtypes),
-        Err(e) => {
-            log::error!("Failed to list agent subtypes: {}", e);
-            HttpResponse::InternalServerError().json(serde_json::json!({
-                "error": format!("Database error: {}", e)
-            }))
-        }
-    }
+    HttpResponse::Ok().json(types::all_subtype_configs_unfiltered())
 }
 
 /// Get a single agent subtype by key.
@@ -77,23 +63,19 @@ async fn get_subtype(
     }
 
     let key = path.into_inner();
-    match data.db.get_agent_subtype(&key) {
-        Ok(Some(subtype)) => HttpResponse::Ok().json(subtype),
-        Ok(None) => HttpResponse::NotFound().json(serde_json::json!({
+    match types::get_subtype_config(&key) {
+        Some(subtype) => HttpResponse::Ok().json(subtype),
+        None => HttpResponse::NotFound().json(serde_json::json!({
             "error": format!("Agent subtype '{}' not found", key)
         })),
-        Err(e) => {
-            log::error!("Failed to get agent subtype: {}", e);
-            HttpResponse::InternalServerError().json(serde_json::json!({
-                "error": format!("Database error: {}", e)
-            }))
-        }
     }
 }
 
 #[derive(Deserialize)]
 struct CreateSubtypeRequest {
     key: String,
+    #[serde(default)]
+    version: Option<String>,
     label: String,
     emoji: String,
     description: String,
@@ -114,13 +96,15 @@ struct CreateSubtypeRequest {
     aliases: Vec<String>,
     #[serde(default)]
     hidden: bool,
+    #[serde(default)]
+    preferred_ai_model: Option<String>,
 }
 
 fn default_true() -> bool {
     true
 }
 
-/// Create a new agent subtype.
+/// Create a new agent subtype (writes to disk).
 async fn create_subtype(
     data: web::Data<AppState>,
     req: HttpRequest,
@@ -131,18 +115,11 @@ async fn create_subtype(
     }
 
     // Check limit
-    match data.db.count_agent_subtypes() {
-        Ok(count) if count >= MAX_SUBTYPES as i64 => {
-            return HttpResponse::BadRequest().json(serde_json::json!({
-                "error": format!("Maximum of {} agent subtypes allowed", MAX_SUBTYPES)
-            }));
-        }
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(serde_json::json!({
-                "error": format!("Database error: {}", e)
-            }));
-        }
-        _ => {}
+    let current_count = types::all_subtype_configs_unfiltered().len();
+    if current_count >= MAX_SUBTYPES {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": format!("Maximum of {} agent subtypes allowed", MAX_SUBTYPES)
+        }));
     }
 
     // Validate key format
@@ -155,6 +132,7 @@ async fn create_subtype(
 
     let config = AgentSubtypeConfig {
         key,
+        version: body.version.clone().unwrap_or_default(),
         label: body.label.clone(),
         emoji: body.emoji.clone(),
         description: body.description.clone(),
@@ -168,17 +146,19 @@ async fn create_subtype(
         skip_task_planner: body.skip_task_planner,
         aliases: body.aliases.clone(),
         hidden: body.hidden,
+        preferred_ai_model: body.preferred_ai_model.clone(),
     };
 
-    match data.db.upsert_agent_subtype(&config) {
+    let agents_dir = crate::config::runtime_agents_dir();
+    match loader::write_agent_folder(&agents_dir, &config) {
         Ok(_) => {
-            reload_registry(&data.db);
+            loader::reload_registry_from_disk();
             HttpResponse::Created().json(config)
         }
         Err(e) => {
             log::error!("Failed to create agent subtype: {}", e);
             HttpResponse::InternalServerError().json(serde_json::json!({
-                "error": format!("Database error: {}", e)
+                "error": format!("Failed to write agent: {}", e)
             }))
         }
     }
@@ -212,9 +192,11 @@ struct UpdateSubtypeRequest {
     aliases: Option<Vec<String>>,
     #[serde(default)]
     hidden: Option<bool>,
+    #[serde(default)]
+    preferred_ai_model: Option<Option<String>>,
 }
 
-/// Update an existing agent subtype.
+/// Update an existing agent subtype (reads from registry, writes to disk).
 async fn update_subtype(
     data: web::Data<AppState>,
     req: HttpRequest,
@@ -227,17 +209,12 @@ async fn update_subtype(
 
     let key = path.into_inner();
 
-    // Get existing
-    let existing = match data.db.get_agent_subtype(&key) {
-        Ok(Some(s)) => s,
-        Ok(None) => {
+    // Get existing from registry
+    let existing = match types::get_subtype_config(&key) {
+        Some(s) => s,
+        None => {
             return HttpResponse::NotFound().json(serde_json::json!({
                 "error": format!("Agent subtype '{}' not found", key)
-            }));
-        }
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(serde_json::json!({
-                "error": format!("Database error: {}", e)
             }));
         }
     };
@@ -245,6 +222,7 @@ async fn update_subtype(
     // Merge updates
     let updated = AgentSubtypeConfig {
         key: existing.key,
+        version: existing.version,
         label: body.label.clone().unwrap_or(existing.label),
         emoji: body.emoji.clone().unwrap_or(existing.emoji),
         description: body.description.clone().unwrap_or(existing.description),
@@ -258,23 +236,25 @@ async fn update_subtype(
         skip_task_planner: body.skip_task_planner.unwrap_or(existing.skip_task_planner),
         aliases: body.aliases.clone().unwrap_or(existing.aliases),
         hidden: body.hidden.unwrap_or(existing.hidden),
+        preferred_ai_model: body.preferred_ai_model.clone().unwrap_or(existing.preferred_ai_model),
     };
 
-    match data.db.upsert_agent_subtype(&updated) {
+    let agents_dir = crate::config::runtime_agents_dir();
+    match loader::write_agent_folder(&agents_dir, &updated) {
         Ok(_) => {
-            reload_registry(&data.db);
+            loader::reload_registry_from_disk();
             HttpResponse::Ok().json(updated)
         }
         Err(e) => {
             log::error!("Failed to update agent subtype: {}", e);
             HttpResponse::InternalServerError().json(serde_json::json!({
-                "error": format!("Database error: {}", e)
+                "error": format!("Failed to write agent: {}", e)
             }))
         }
     }
 }
 
-/// Delete an agent subtype.
+/// Delete an agent subtype (removes folder from disk).
 async fn delete_subtype(
     data: web::Data<AppState>,
     req: HttpRequest,
@@ -286,27 +266,32 @@ async fn delete_subtype(
 
     let key = path.into_inner();
 
-    match data.db.delete_agent_subtype(&key) {
-        Ok(true) => {
-            reload_registry(&data.db);
+    // Check it exists
+    if types::get_subtype_config(&key).is_none() {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "error": format!("Agent subtype '{}' not found", key)
+        }));
+    }
+
+    let agents_dir = crate::config::runtime_agents_dir();
+    match loader::delete_agent_folder(&agents_dir, &key) {
+        Ok(_) => {
+            loader::reload_registry_from_disk();
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
                 "message": format!("Agent subtype '{}' deleted", key)
             }))
         }
-        Ok(false) => HttpResponse::NotFound().json(serde_json::json!({
-            "error": format!("Agent subtype '{}' not found", key)
-        })),
         Err(e) => {
             log::error!("Failed to delete agent subtype: {}", e);
             HttpResponse::InternalServerError().json(serde_json::json!({
-                "error": format!("Database error: {}", e)
+                "error": format!("Failed to delete agent: {}", e)
             }))
         }
     }
 }
 
-/// Reset agent subtypes to defaults from `defaultagents.ron`.
+/// Reset agent subtypes to defaults — re-seed from bundled config/agents/ and reload.
 async fn reset_defaults(
     data: web::Data<AppState>,
     req: HttpRequest,
@@ -315,37 +300,37 @@ async fn reset_defaults(
         return resp;
     }
 
-    // Determine config directory
-    let config_dir = if std::path::Path::new("./config").exists() {
-        std::path::Path::new("./config")
-    } else if std::path::Path::new("../config").exists() {
-        std::path::Path::new("../config")
-    } else {
-        return HttpResponse::InternalServerError().json(serde_json::json!({
-            "error": "Config directory not found"
-        }));
-    };
+    let agents_dir = crate::config::runtime_agents_dir();
 
-    // Delete all existing subtypes
-    let existing = data.db.list_agent_subtypes().unwrap_or_default();
-    for s in &existing {
-        let _ = data.db.delete_agent_subtype(&s.key);
-    }
-
-    // Load and insert defaults
-    let configs = types::load_default_agent_subtypes_from_file(config_dir);
-    for config in &configs {
-        if let Err(e) = data.db.upsert_agent_subtype(config) {
-            log::error!("Failed to insert default subtype '{}': {}", config.key, e);
+    // Delete all existing agent folders
+    if agents_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if !name.starts_with('.') {
+                        let _ = std::fs::remove_dir_all(entry.path());
+                    }
+                }
+            }
         }
     }
 
-    reload_registry(&data.db);
+    // Re-seed from bundled
+    if let Err(e) = crate::config::seed_agents() {
+        log::error!("Failed to re-seed agents: {}", e);
+        return HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": format!("Failed to re-seed agents: {}", e)
+        }));
+    }
 
+    loader::reload_registry_from_disk();
+
+    let count = types::all_subtype_configs_unfiltered().len();
     HttpResponse::Ok().json(serde_json::json!({
         "success": true,
-        "message": format!("Reset to {} default agent subtypes", configs.len()),
-        "count": configs.len()
+        "message": format!("Reset to {} default agent subtypes", count),
+        "count": count
     }))
 }
 
@@ -358,28 +343,19 @@ async fn export_subtypes(
         return resp;
     }
 
-    match data.db.list_agent_subtypes() {
-        Ok(subtypes) => {
-            let pretty = ron::ser::PrettyConfig::new()
-                .depth_limit(3)
-                .separate_tuple_members(true)
-                .enumerate_arrays(false);
-            match ron::ser::to_string_pretty(&subtypes, pretty) {
-                Ok(ron_str) => HttpResponse::Ok()
-                    .content_type("application/ron")
-                    .insert_header(("Content-Disposition", "attachment; filename=\"agent_subtypes.ron\""))
-                    .body(ron_str),
-                Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
-                    "error": format!("Failed to serialize: {}", e)
-                })),
-            }
-        }
-        Err(e) => {
-            log::error!("Failed to export agent subtypes: {}", e);
-            HttpResponse::InternalServerError().json(serde_json::json!({
-                "error": format!("Database error: {}", e)
-            }))
-        }
+    let subtypes = types::all_subtype_configs_unfiltered();
+    let pretty = ron::ser::PrettyConfig::new()
+        .depth_limit(3)
+        .separate_tuple_members(true)
+        .enumerate_arrays(false);
+    match ron::ser::to_string_pretty(&subtypes, pretty) {
+        Ok(ron_str) => HttpResponse::Ok()
+            .content_type("application/ron")
+            .insert_header(("Content-Disposition", "attachment; filename=\"agent_subtypes.ron\""))
+            .body(ron_str),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": format!("Failed to serialize: {}", e)
+        })),
     }
 }
 
@@ -394,8 +370,8 @@ async fn export_single_subtype(
     }
 
     let key = path.into_inner();
-    match data.db.get_agent_subtype(&key) {
-        Ok(Some(subtype)) => {
+    match types::get_subtype_config(&key) {
+        Some(subtype) => {
             let pretty = ron::ser::PrettyConfig::new()
                 .depth_limit(3)
                 .separate_tuple_members(true)
@@ -411,15 +387,9 @@ async fn export_single_subtype(
                 })),
             }
         }
-        Ok(None) => HttpResponse::NotFound().json(serde_json::json!({
+        None => HttpResponse::NotFound().json(serde_json::json!({
             "error": format!("Agent subtype '{}' not found", key)
         })),
-        Err(e) => {
-            log::error!("Failed to export agent subtype '{}': {}", key, e);
-            HttpResponse::InternalServerError().json(serde_json::json!({
-                "error": format!("Database error: {}", e)
-            }))
-        }
     }
 }
 
@@ -431,7 +401,7 @@ struct ImportRequest {
     replace: bool,
 }
 
-/// Import agent subtypes from RON.
+/// Import agent subtypes from RON (writes to disk).
 async fn import_subtypes(
     data: web::Data<AppState>,
     req: HttpRequest,
@@ -457,9 +427,11 @@ async fn import_subtypes(
         }));
     }
 
+    let agents_dir = crate::config::runtime_agents_dir();
+
     // Check limit
     if !body.replace {
-        let existing_count = data.db.count_agent_subtypes().unwrap_or(0) as usize;
+        let existing_count = types::all_subtype_configs_unfiltered().len();
         if existing_count + configs.len() > MAX_SUBTYPES {
             return HttpResponse::BadRequest().json(serde_json::json!({
                 "error": format!(
@@ -472,28 +444,35 @@ async fn import_subtypes(
 
     // If replace mode, delete all existing first
     if body.replace {
-        let existing = data.db.list_agent_subtypes().unwrap_or_default();
-        for s in &existing {
-            let _ = data.db.delete_agent_subtype(&s.key);
+        if agents_dir.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+                for entry in entries.flatten() {
+                    if entry.path().is_dir() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if !name.starts_with('.') {
+                            let _ = std::fs::remove_dir_all(entry.path());
+                        }
+                    }
+                }
+            }
         }
     }
 
-    // Insert imported subtypes
+    // Write imported subtypes to disk
     let mut imported = 0;
     let mut errors = Vec::new();
     for config in &configs {
-        // Validate key
         if config.key.is_empty() || !config.key.chars().all(|c| c.is_alphanumeric() || c == '_') {
             errors.push(format!("Invalid key: '{}'", config.key));
             continue;
         }
-        match data.db.upsert_agent_subtype(config) {
+        match loader::write_agent_folder(&agents_dir, config) {
             Ok(_) => imported += 1,
             Err(e) => errors.push(format!("Failed to import '{}': {}", config.key, e)),
         }
     }
 
-    reload_registry(&data.db);
+    loader::reload_registry_from_disk();
 
     let mut response = serde_json::json!({
         "success": true,

@@ -141,6 +141,16 @@ async fn list_intrinsic(
         size: None,
     });
 
+    // Add virtual agents/ directory
+    files.push(IntrinsicFileInfo {
+        name: "agents".to_string(),
+        description: "Agent subtype configurations".to_string(),
+        writable: true,
+        deletable: false,
+        is_dir: Some(true),
+        size: None,
+    });
+
     HttpResponse::Ok().json(ListIntrinsicResponse {
         success: true,
         files,
@@ -212,6 +222,11 @@ async fn read_by_path(
     // Check if this is a modules/* path
     if segments[0] == "modules" {
         return handle_modules_path_read(&data, &segments[1..]).await;
+    }
+
+    // Check if this is an agents/* path
+    if segments[0] == "agents" {
+        return handle_agents_path_read(&data, &segments[1..]).await;
     }
 
     // Classic intrinsic file
@@ -518,6 +533,128 @@ async fn handle_modules_path_read(_data: &web::Data<AppState>, segments: &[&str]
     }
 }
 
+/// Handle GET requests under agents/ path
+async fn handle_agents_path_read(_data: &web::Data<AppState>, segments: &[&str]) -> HttpResponse {
+    let runtime_dir = crate::config::runtime_agents_dir();
+
+    if segments.is_empty() {
+        // List agent subfolders
+        let mut entries = Vec::new();
+        if let Ok(dir) = std::fs::read_dir(&runtime_dir) {
+            for entry in dir.flatten() {
+                if entry.path().is_dir() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with('.') || name.starts_with('_') {
+                        continue;
+                    }
+                    entries.push(IntrinsicFileInfo {
+                        name,
+                        description: String::new(),
+                        writable: true,
+                        deletable: true,
+                        is_dir: Some(true),
+                        size: None,
+                    });
+                }
+            }
+        }
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        return HttpResponse::Ok().json(ListIntrinsicResponse {
+            success: true,
+            files: entries,
+        });
+    }
+
+    let agent_name = segments[0];
+    let agent_dir = runtime_dir.join(agent_name);
+
+    if !agent_dir.is_dir() {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "success": false,
+            "error": format!("Agent folder '{}' not found", agent_name)
+        }));
+    }
+
+    if segments.len() == 1 {
+        // List files in agent folder
+        let mut entries = Vec::new();
+        if let Ok(items) = list_dir_entries(&agent_dir, &agent_dir) {
+            entries = items;
+        }
+        entries.sort_by(|a, b| {
+            let a_dir = a.is_dir.unwrap_or(false);
+            let b_dir = b.is_dir.unwrap_or(false);
+            b_dir.cmp(&a_dir).then(a.name.cmp(&b.name))
+        });
+        return HttpResponse::Ok().json(ListIntrinsicResponse {
+            success: true,
+            files: entries,
+        });
+    }
+
+    // Read a specific file within the agent folder
+    let relative = segments[1..].join("/");
+    let file_path = agent_dir.join(&relative);
+
+    if !file_path.starts_with(&agent_dir) {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "error": "Path traversal not allowed"
+        }));
+    }
+
+    if file_path.is_dir() {
+        let mut entries = Vec::new();
+        if let Ok(items) = list_dir_entries(&file_path, &agent_dir) {
+            entries = items;
+        }
+        entries.sort_by(|a, b| {
+            let a_dir = a.is_dir.unwrap_or(false);
+            let b_dir = b.is_dir.unwrap_or(false);
+            b_dir.cmp(&a_dir).then(a.name.cmp(&b.name))
+        });
+        return HttpResponse::Ok().json(ListIntrinsicResponse {
+            success: true,
+            files: entries,
+        });
+    }
+
+    if !file_path.is_file() {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "success": false,
+            "error": format!("File not found: {}", relative)
+        }));
+    }
+
+    match fs::read(&file_path).await {
+        Ok(bytes) => {
+            match String::from_utf8(bytes) {
+                Ok(content) => HttpResponse::Ok().json(ReadIntrinsicResponse {
+                    success: true,
+                    name: relative,
+                    content: Some(content),
+                    writable: true,
+                    error: None,
+                }),
+                Err(_) => HttpResponse::BadRequest().json(ReadIntrinsicResponse {
+                    success: false,
+                    name: relative,
+                    content: None,
+                    writable: false,
+                    error: Some("File is binary and cannot be displayed as text".to_string()),
+                }),
+            }
+        }
+        Err(e) => HttpResponse::InternalServerError().json(ReadIntrinsicResponse {
+            success: false,
+            name: relative,
+            content: None,
+            writable: true,
+            error: Some(format!("Failed to read file: {}", e)),
+        }),
+    }
+}
+
 /// List entries in a directory, returning IntrinsicFileInfo items
 fn list_dir_entries(dir: &std::path::Path, _base: &std::path::Path) -> Result<Vec<IntrinsicFileInfo>, std::io::Error> {
     let mut entries = Vec::new();
@@ -607,6 +744,52 @@ async fn write_by_path(
         }
 
         log::info!("Updated skill file: {}/{}", skill_name, relative);
+        return HttpResponse::Ok().json(WriteIntrinsicResponse {
+            success: true,
+            error: None,
+        });
+    }
+
+    // Check if this is an agents/* path
+    if segments.len() >= 3 && segments[0] == "agents" {
+        let runtime_dir = crate::config::runtime_agents_dir();
+        let agent_name = segments[1];
+        let relative = segments[2..].join("/");
+        let file_path = runtime_dir.join(agent_name).join(&relative);
+
+        // Safety check
+        if !file_path.starts_with(runtime_dir.join(agent_name)) {
+            return HttpResponse::BadRequest().json(WriteIntrinsicResponse {
+                success: false,
+                error: Some("Path traversal not allowed".to_string()),
+            });
+        }
+
+        // Ensure parent directory exists
+        if let Some(parent) = file_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return HttpResponse::InternalServerError().json(WriteIntrinsicResponse {
+                    success: false,
+                    error: Some(format!("Failed to create directory: {}", e)),
+                });
+            }
+        }
+
+        if let Err(e) = fs::write(&file_path, &body.content).await {
+            log::error!("Failed to write agent file {}/{}: {}", agent_name, relative, e);
+            return HttpResponse::InternalServerError().json(WriteIntrinsicResponse {
+                success: false,
+                error: Some(format!("Failed to write file: {}", e)),
+            });
+        }
+
+        // When agent.md is saved, reload the subtype registry
+        let file_name = segments.last().unwrap_or(&"");
+        if *file_name == "agent.md" {
+            crate::agents::loader::reload_registry_from_disk();
+        }
+
+        log::info!("Updated agent file: {}/{}", agent_name, relative);
         return HttpResponse::Ok().json(WriteIntrinsicResponse {
             success: true,
             error: None,
@@ -762,6 +945,67 @@ async fn delete_by_path(
                     success: false,
                     error: Some(format!("Failed to delete file: {}", e)),
                 });
+            }
+        } else if file_path.is_dir() {
+            if let Err(e) = std::fs::remove_dir_all(&file_path) {
+                return HttpResponse::InternalServerError().json(WriteIntrinsicResponse {
+                    success: false,
+                    error: Some(format!("Failed to delete directory: {}", e)),
+                });
+            }
+        }
+
+        return HttpResponse::Ok().json(WriteIntrinsicResponse {
+            success: true,
+            error: None,
+        });
+    }
+
+    // Check if this is an agents/* path
+    if segments.len() >= 2 && segments[0] == "agents" {
+        let runtime_dir = crate::config::runtime_agents_dir();
+        let agent_name = segments[1];
+
+        if segments.len() == 2 {
+            // Delete entire agent folder
+            let agent_dir = runtime_dir.join(agent_name);
+            if agent_dir.is_dir() {
+                if let Err(e) = std::fs::remove_dir_all(&agent_dir) {
+                    return HttpResponse::InternalServerError().json(WriteIntrinsicResponse {
+                        success: false,
+                        error: Some(format!("Failed to delete agent folder: {}", e)),
+                    });
+                }
+                crate::agents::loader::reload_registry_from_disk();
+                log::info!("Deleted agent folder: {}", agent_name);
+            }
+            return HttpResponse::Ok().json(WriteIntrinsicResponse {
+                success: true,
+                error: None,
+            });
+        }
+
+        // Delete a specific file within an agent folder
+        let relative = segments[2..].join("/");
+        let file_path = runtime_dir.join(agent_name).join(&relative);
+        if !file_path.starts_with(runtime_dir.join(agent_name)) {
+            return HttpResponse::BadRequest().json(WriteIntrinsicResponse {
+                success: false,
+                error: Some("Path traversal not allowed".to_string()),
+            });
+        }
+
+        if file_path.is_file() {
+            if let Err(e) = fs::remove_file(&file_path).await {
+                return HttpResponse::InternalServerError().json(WriteIntrinsicResponse {
+                    success: false,
+                    error: Some(format!("Failed to delete file: {}", e)),
+                });
+            }
+            // Reload if agent.md was deleted
+            let file_name = segments.last().unwrap_or(&"");
+            if *file_name == "agent.md" {
+                crate::agents::loader::reload_registry_from_disk();
             }
         } else if file_path.is_dir() {
             if let Err(e) = std::fs::remove_dir_all(&file_path) {

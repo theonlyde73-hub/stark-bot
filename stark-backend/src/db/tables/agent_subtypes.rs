@@ -11,7 +11,7 @@ impl Database {
     pub fn list_agent_subtypes(&self) -> SqliteResult<Vec<AgentSubtypeConfig>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT key, label, emoji, description, tool_groups_json, skill_tags_json, prompt, sort_order, enabled, max_iterations, additional_tools_json, skip_task_planner, aliases_json, hidden
+            "SELECT key, label, emoji, description, tool_groups_json, skill_tags_json, prompt, sort_order, enabled, max_iterations, additional_tools_json, skip_task_planner, aliases_json, hidden, preferred_ai_model
              FROM agent_subtypes ORDER BY sort_order, key"
         )?;
 
@@ -23,6 +23,7 @@ impl Database {
                 let aliases_str: String = row.get::<_, String>(12).unwrap_or_else(|_| "[]".to_string());
                 Ok(AgentSubtypeConfig {
                     key: row.get(0)?,
+                    version: String::new(),
                     label: row.get(1)?,
                     emoji: row.get(2)?,
                     description: row.get(3)?,
@@ -36,6 +37,7 @@ impl Database {
                     skip_task_planner: row.get::<_, i32>(11).unwrap_or(0) != 0,
                     aliases: serde_json::from_str(&aliases_str).unwrap_or_default(),
                     hidden: row.get::<_, i32>(13).unwrap_or(0) != 0,
+                    preferred_ai_model: row.get::<_, Option<String>>(14).unwrap_or(None),
                 })
             })?
             .filter_map(|r| r.ok())
@@ -48,7 +50,7 @@ impl Database {
     pub fn get_agent_subtype(&self, key: &str) -> SqliteResult<Option<AgentSubtypeConfig>> {
         let conn = self.conn();
         let result = conn.query_row(
-            "SELECT key, label, emoji, description, tool_groups_json, skill_tags_json, prompt, sort_order, enabled, max_iterations, additional_tools_json, skip_task_planner, aliases_json, hidden
+            "SELECT key, label, emoji, description, tool_groups_json, skill_tags_json, prompt, sort_order, enabled, max_iterations, additional_tools_json, skip_task_planner, aliases_json, hidden, preferred_ai_model
              FROM agent_subtypes WHERE key = ?1",
             [key],
             |row| {
@@ -58,6 +60,7 @@ impl Database {
                 let aliases_str: String = row.get::<_, String>(12).unwrap_or_else(|_| "[]".to_string());
                 Ok(AgentSubtypeConfig {
                     key: row.get(0)?,
+                    version: String::new(),
                     label: row.get(1)?,
                     emoji: row.get(2)?,
                     description: row.get(3)?,
@@ -71,6 +74,7 @@ impl Database {
                     skip_task_planner: row.get::<_, i32>(11).unwrap_or(0) != 0,
                     aliases: serde_json::from_str(&aliases_str).unwrap_or_default(),
                     hidden: row.get::<_, i32>(13).unwrap_or(0) != 0,
+                    preferred_ai_model: row.get::<_, Option<String>>(14).unwrap_or(None),
                 })
             },
         );
@@ -91,8 +95,8 @@ impl Database {
         let aliases_json = serde_json::to_string(&config.aliases).unwrap_or_else(|_| "[]".to_string());
 
         conn.execute(
-            "INSERT INTO agent_subtypes (key, label, emoji, description, tool_groups_json, skill_tags_json, additional_tools_json, prompt, sort_order, enabled, max_iterations, skip_task_planner, aliases_json, hidden, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)
+            "INSERT INTO agent_subtypes (key, label, emoji, description, tool_groups_json, skill_tags_json, additional_tools_json, prompt, sort_order, enabled, max_iterations, skip_task_planner, aliases_json, hidden, preferred_ai_model, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)
              ON CONFLICT(key) DO UPDATE SET
                 label = excluded.label,
                 emoji = excluded.emoji,
@@ -107,6 +111,7 @@ impl Database {
                 skip_task_planner = excluded.skip_task_planner,
                 aliases_json = excluded.aliases_json,
                 hidden = excluded.hidden,
+                preferred_ai_model = excluded.preferred_ai_model,
                 updated_at = excluded.updated_at",
             rusqlite::params![
                 config.key,
@@ -123,6 +128,7 @@ impl Database {
                 config.skip_task_planner as i32,
                 aliases_json,
                 config.hidden as i32,
+                config.preferred_ai_model,
                 now,
             ],
         )?;

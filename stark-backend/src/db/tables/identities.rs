@@ -89,13 +89,6 @@ impl Database {
         })
     }
 
-    /// Get or create the singleton heartbeat identity
-    /// This ensures there is always exactly ONE heartbeat identity across all heartbeat operations
-    pub fn get_or_create_heartbeat_identity(&self) -> SqliteResult<IdentityLink> {
-        use crate::scheduler::runner::{HEARTBEAT_CHANNEL_TYPE, HEARTBEAT_USER_ID, HEARTBEAT_USER_NAME};
-        self.get_or_create_identity(HEARTBEAT_CHANNEL_TYPE, HEARTBEAT_USER_ID, Some(HEARTBEAT_USER_NAME))
-    }
-
     /// Get identity by platform credentials
     pub fn get_identity_by_platform(&self, channel_type: &str, platform_user_id: &str) -> SqliteResult<Option<IdentityLink>> {
         let conn = self.conn();

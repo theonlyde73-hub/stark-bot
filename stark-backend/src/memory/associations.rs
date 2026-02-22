@@ -13,6 +13,7 @@ pub enum AssociationType {
     PartOf,
     References,
     Temporal,
+    AgentSubtype,
     Custom(String),
 }
 
@@ -26,6 +27,7 @@ impl fmt::Display for AssociationType {
             AssociationType::PartOf => write!(f, "part_of"),
             AssociationType::References => write!(f, "references"),
             AssociationType::Temporal => write!(f, "temporal"),
+            AssociationType::AgentSubtype => write!(f, "agent_subtype"),
             AssociationType::Custom(value) => write!(f, "custom:{}", value),
         }
     }
@@ -43,6 +45,7 @@ impl FromStr for AssociationType {
             "part_of" => Ok(AssociationType::PartOf),
             "references" => Ok(AssociationType::References),
             "temporal" => Ok(AssociationType::Temporal),
+            "agent_subtype" => Ok(AssociationType::AgentSubtype),
             other => {
                 if let Some(value) = other.strip_prefix("custom:") {
                     Ok(AssociationType::Custom(value.to_string()))

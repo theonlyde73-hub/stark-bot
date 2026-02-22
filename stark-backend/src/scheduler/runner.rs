@@ -1,34 +1,21 @@
 use crate::channels::dispatcher::MessageDispatcher;
 use crate::channels::types::NormalizedMessage;
 use crate::db::Database;
-use crate::execution::ExecutionTracker;
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
-use crate::models::{CronJob, HeartbeatConfig, JobStatus, ScheduleType};
-use crate::tools::ToolRegistry;
+use crate::models::{CronJob, HeartbeatConfig, ScheduleType};
 use crate::wallet;
 use chrono::{DateTime, Duration, Local, NaiveTime, Utc, Weekday, Datelike, Timelike};
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio::time::{interval, timeout, Duration as TokioDuration};
 
-/// Constants for heartbeat identity - ensures only ONE identity ever exists
-pub const HEARTBEAT_CHANNEL_TYPE: &str = "heartbeat";
-pub const HEARTBEAT_USER_ID: &str = "heartbeat-system";
-pub const HEARTBEAT_USER_NAME: &str = "Heartbeat";
-/// Fixed chat_id ensures we reuse the same session (no timestamp suffix)
-pub const HEARTBEAT_CHAT_ID: &str = "heartbeat:global";
-/// Dedicated channel ID for heartbeat - NEVER use channel 0 (web UI)
-/// Using -999 to avoid collision with real channels and cron job negative IDs
+/// Dedicated channel ID for heartbeat concurrency guard
+/// Used to prevent overlapping heartbeat cycles via ExecutionTracker
 pub const HEARTBEAT_CHANNEL_ID: i64 = -999;
 
-/// Constants for the impulse evolver sub-system
-pub const EVOLVER_CHANNEL_ID: i64 = -998;
-pub const EVOLVER_CHANNEL_TYPE: &str = "impulse_evolver";
-pub const EVOLVER_USER_ID: &str = "impulse-evolver";
-pub const EVOLVER_USER_NAME: &str = "Impulse Evolver";
-pub const EVOLVER_CHAT_ID: &str = "impulse-evolver:global";
-const EVOLVER_TIMEOUT_SECS: u64 = 120;
+/// Timeout for per-agent heartbeat sessions
+const AGENT_HEARTBEAT_TIMEOUT_SECS: u64 = 120;
 
 /// Scheduler configuration
 #[derive(Debug, Clone)]
@@ -50,9 +37,6 @@ impl Default for SchedulerConfig {
         }
     }
 }
-
-/// Maximum time for a heartbeat execution before timeout (60 seconds)
-const HEARTBEAT_TIMEOUT_SECS: u64 = 60;
 
 /// Default timeout for cron job execution (10 minutes)
 const DEFAULT_CRON_JOB_TIMEOUT_SECS: u64 = 10 * 60;
@@ -703,7 +687,7 @@ impl Scheduler {
         true
     }
 
-    /// Execute a heartbeat check - now with impulse map meandering
+    /// Execute a heartbeat — runs all per-agent heartbeat sessions
     async fn execute_heartbeat(&self, config: &HeartbeatConfig) -> Result<(), String> {
         let now = Utc::now();
         let now_str = now.to_rfc3339();
@@ -717,103 +701,21 @@ impl Scheduler {
             log::error!("Failed to update heartbeat next_beat_at: {}", e);
         }
 
-        // === IMPULSE MAP MEANDERING ===
-        // Get the next node to visit (starts at trunk, then meanders)
-        let next_node = self.db.get_next_heartbeat_node(config.current_impulse_node_id)
-            .map_err(|e| format!("Failed to get next heartbeat node: {}", e))?;
-
-        let node_depth = self.db.get_impulse_node_depth(next_node.id).unwrap_or(0);
-
-        log::info!(
-            "Heartbeat visiting impulse node {} (depth: {}, is_trunk: {}, body_len: {})",
-            next_node.id, node_depth, next_node.is_trunk, next_node.body.len()
-        );
-
-        // Broadcast heartbeat start event with node info
+        // Broadcast heartbeat start event
         self.broadcaster.broadcast(GatewayEvent::custom(
             "heartbeat_started",
             serde_json::json!({
                 "config_id": config.id,
                 "channel_id": config.channel_id,
-                "impulse_node_id": next_node.id,
-                "impulse_node_depth": node_depth,
-                "is_trunk": next_node.is_trunk,
             }),
         ));
 
-        // === BUILD HEARTBEAT MESSAGE ===
-        let node_content = if next_node.body.is_empty() {
-            if next_node.is_trunk {
-                "This is the trunk node (root of your impulse map). It's currently empty.".to_string()
-            } else {
-                "This node is currently empty.".to_string()
-            }
-        } else {
-            next_node.body.clone()
-        };
+        // Run per-agent heartbeats (scans agent folders for heartbeat.md)
+        self.run_agent_heartbeats().await;
 
-        let message_text = format!(
-            "[HEARTBEAT - Impulse Map Reflection]\n\
-            Current Position: Node #{} (depth: {}{})\n\
-            Node Content: {}\n\n\
-            Instructions:\n\
-            - Reflect on this node's content in the context of your impulse map\n\
-            - Consider connections to other thoughts and ideas\n\
-            - If the node is empty, consider what thoughts belong here\n\
-            - You may update this node's content or create new connected nodes\n\
-            - Review any pending tasks or items that relate to this area\n\
-            - Respond with HEARTBEAT_OK if no action needed",
-            next_node.id,
-            node_depth,
-            if next_node.is_trunk { ", trunk" } else { "" },
-            node_content
-        );
-
-        // Use fixed constants for heartbeat identity, but isolated session mode
-        // to prevent session state corruption from breaking other functionality
-        // IMPORTANT: Always use HEARTBEAT_CHANNEL_ID (-999) to avoid polluting web UI (channel 0)
-        let normalized = NormalizedMessage {
-            channel_id: HEARTBEAT_CHANNEL_ID,
-            channel_type: HEARTBEAT_CHANNEL_TYPE.to_string(),
-            chat_id: HEARTBEAT_CHAT_ID.to_string(),
-            chat_name: None,
-            user_id: HEARTBEAT_USER_ID.to_string(),
-            user_name: HEARTBEAT_USER_NAME.to_string(),
-            text: message_text,
-            message_id: Some(format!("heartbeat-{}", now.timestamp())),
-            session_mode: Some("isolated".to_string()), // Isolated to prevent state corruption
-            selected_network: None,
-            force_safe_mode: false,
-        };
-
-        // Execute the heartbeat
-        let result = self.dispatcher.dispatch_safe(normalized).await;
-
-        // === GET SESSION ID ===
-        // Query the session using the fixed heartbeat session key
-        let session_key = format!("{}:{}:{}", HEARTBEAT_CHANNEL_TYPE, HEARTBEAT_CHANNEL_ID, HEARTBEAT_CHAT_ID);
-        let new_session_id = self.db.get_chat_session_by_key(&session_key)
-            .ok()
-            .flatten()
-            .map(|s| s.id);
-
-        // Update heartbeat config with new impulse map position and session ID
-        if let Err(e) = self.db.update_heartbeat_mind_position(
-            config.id,
-            Some(next_node.id),
-            new_session_id,
-        ) {
-            log::error!("Failed to update heartbeat impulse map position: {}", e);
-        }
-
-        // Update last_beat_at only (next_beat_at was already set at the start to prevent race conditions)
+        // Update last_beat_at (next_beat_at was already set at the start to prevent race conditions)
         if let Err(e) = self.db.update_heartbeat_last_beat_only(config.id, &now_str) {
             log::error!("Failed to update heartbeat last_beat_at: {}", e);
-        }
-
-        // Check for HEARTBEAT_OK suppression
-        if result.response.contains("HEARTBEAT_OK") {
-            log::debug!("Heartbeat response contains HEARTBEAT_OK, suppressing output");
         }
 
         // Broadcast heartbeat completion event
@@ -822,47 +724,10 @@ impl Scheduler {
             serde_json::json!({
                 "config_id": config.id,
                 "channel_id": config.channel_id,
-                "impulse_node_id": next_node.id,
-                "success": result.error.is_none(),
             }),
         ));
 
-        log::info!(
-            "Heartbeat completed (config_id: {}, visited node: {})",
-            config.id, next_node.id
-        );
-
-        // Spawn impulse evolver if enabled — runs as a separate session
-        // with the `impulse_evolver` agent subtype (registered in defaultagents.ron)
-        if config.impulse_evolver {
-            let dispatcher = Arc::clone(&self.dispatcher);
-            tokio::spawn(async move {
-                log::info!("[EVOLVER] Spawning impulse evolver session");
-                let now = Utc::now();
-                let normalized = NormalizedMessage {
-                    channel_id: EVOLVER_CHANNEL_ID,
-                    channel_type: EVOLVER_CHANNEL_TYPE.to_string(),
-                    chat_id: EVOLVER_CHAT_ID.to_string(),
-                    chat_name: None,
-                    user_id: EVOLVER_USER_ID.to_string(),
-                    user_name: EVOLVER_USER_NAME.to_string(),
-                    text: "[Impulse Evolver] Review and evolve the impulse map.".to_string(),
-                    message_id: Some(format!("evolver-{}", now.timestamp())),
-                    session_mode: Some("isolated".to_string()),
-                    selected_network: None,
-                    force_safe_mode: false,
-                };
-                let result = timeout(
-                    TokioDuration::from_secs(EVOLVER_TIMEOUT_SECS),
-                    dispatcher.dispatch_safe(normalized),
-                ).await;
-                match result {
-                    Ok(r) if r.error.is_some() => log::warn!("[EVOLVER] Failed: {:?}", r.error),
-                    Err(_) => log::warn!("[EVOLVER] Timed out after {}s", EVOLVER_TIMEOUT_SECS),
-                    _ => log::info!("[EVOLVER] Completed successfully"),
-                }
-            });
-        }
+        log::info!("Heartbeat completed (config_id: {})", config.id);
 
         Ok(())
     }
@@ -880,6 +745,110 @@ impl Scheduler {
         Ok(format!("Job '{}' executed successfully", job.name))
     }
 
+    /// Scan all agent folders for heartbeat.md and spawn a session for each
+    async fn run_agent_heartbeats(&self) {
+        let agents_dir = crate::config::runtime_agents_dir();
+        let entries = match std::fs::read_dir(&agents_dir) {
+            Ok(e) => e,
+            Err(e) => {
+                log::warn!("[HEARTBEAT] Failed to read agents dir: {}", e);
+                return;
+            }
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let key = entry.file_name().to_string_lossy().to_string();
+            let heartbeat_path = path.join("heartbeat.md");
+
+            if !heartbeat_path.is_file() {
+                continue;
+            }
+
+            let heartbeat_text = match std::fs::read_to_string(&heartbeat_path) {
+                Ok(c) => c.trim().to_string(),
+                Err(e) => {
+                    log::warn!(
+                        "[HEARTBEAT] Failed to read {}: {}",
+                        heartbeat_path.display(),
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            if heartbeat_text.is_empty() {
+                continue;
+            }
+
+            // Optionally prepend goals.md content if it exists
+            let goals_path = path.join("goals.md");
+            let prompt = match std::fs::read_to_string(&goals_path) {
+                Ok(g) => {
+                    let goals = g.trim();
+                    if goals.is_empty() {
+                        heartbeat_text
+                    } else {
+                        format!("## Overall Goals ##\n{}\n\n{}", goals, heartbeat_text)
+                    }
+                }
+                Err(_) => heartbeat_text,
+            };
+
+            log::info!(
+                "[HEARTBEAT] Spawning heartbeat session for agent '{}'",
+                key
+            );
+
+            // Each agent heartbeat uses a deterministic negative channel ID
+            // channel_type = agent key (enables hidden subtype auto-selection)
+            let channel_id = -(900 + hash_to_channel_offset(&key));
+            let dispatcher = Arc::clone(&self.dispatcher);
+            let key_clone = key.clone();
+
+            tokio::spawn(async move {
+                let now = Utc::now();
+                let normalized = NormalizedMessage {
+                    channel_id,
+                    channel_type: key_clone.clone(),
+                    chat_id: format!("heartbeat:{}:global", key_clone),
+                    chat_name: None,
+                    user_id: format!("heartbeat-{}", key_clone),
+                    user_name: format!("Heartbeat({})", key_clone),
+                    text: prompt,
+                    message_id: Some(format!(
+                        "heartbeat-{}-{}",
+                        key_clone,
+                        now.timestamp()
+                    )),
+                    session_mode: Some("isolated".to_string()),
+                    selected_network: None,
+                    force_safe_mode: false,
+                };
+                let result = timeout(
+                    TokioDuration::from_secs(AGENT_HEARTBEAT_TIMEOUT_SECS),
+                    dispatcher.dispatch_safe(normalized),
+                )
+                .await;
+                match result {
+                    Ok(r) if r.error.is_some() => {
+                        log::warn!("[HEARTBEAT:{}] Failed: {:?}", key_clone, r.error)
+                    }
+                    Err(_) => log::warn!(
+                        "[HEARTBEAT:{}] Timed out after {}s",
+                        key_clone,
+                        AGENT_HEARTBEAT_TIMEOUT_SECS
+                    ),
+                    _ => log::info!("[HEARTBEAT:{}] Completed successfully", key_clone),
+                }
+            });
+        }
+    }
+
     /// Trigger a heartbeat pulse (fire and forget, like a channel message)
     ///
     /// Returns immediately after spawning the background task.
@@ -891,59 +860,33 @@ impl Scheduler {
             .map_err(|e| format!("Database error: {}", e))?
             .ok_or_else(|| format!("Heartbeat config not found: {}", config_id))?;
 
-        // Clone what we need for the background task
-        let db = Arc::clone(&self.db);
-        let broadcaster = Arc::clone(&self.broadcaster);
-        let wallet_provider_clone = self.wallet_provider.clone();
-        let skill_registry_clone = self.skill_registry.clone();
+        let scheduler = Arc::clone(self);
 
         // Spawn the heartbeat in a background task
         tokio::spawn(async move {
             log::info!("[HEARTBEAT] Starting pulse for config_id={}", config_id);
 
             // Broadcast start event
-            broadcaster.broadcast(GatewayEvent::custom(
+            scheduler.broadcaster.broadcast(GatewayEvent::custom(
                 "heartbeat_pulse_started",
                 serde_json::json!({ "config_id": config_id }),
             ));
 
-            // Create dispatcher for this task (uses shared db pool)
-            let tracker = Arc::new(ExecutionTracker::new(broadcaster.clone()));
-            let tool_registry = Arc::new(ToolRegistry::new());
-
-            let dispatcher = Arc::new(MessageDispatcher::new_with_wallet_and_skills(
-                db.clone(),
-                broadcaster.clone(),
-                tool_registry,
-                tracker,
-                wallet_provider_clone.clone(),
-                skill_registry_clone,
-            ));
-
-            // Execute with timeout
-            let result = timeout(
-                TokioDuration::from_secs(HEARTBEAT_TIMEOUT_SECS),
-                execute_heartbeat_isolated(&db, &dispatcher, &broadcaster, &config)
-            ).await;
+            let result = scheduler.execute_heartbeat(&config).await;
 
             let (success, error) = match result {
-                Ok(Ok(())) => {
+                Ok(()) => {
                     log::info!("[HEARTBEAT] Pulse completed successfully");
                     (true, None)
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     log::error!("[HEARTBEAT] Pulse failed: {}", e);
                     (false, Some(e))
-                }
-                Err(_) => {
-                    let msg = format!("Heartbeat timed out after {} seconds", HEARTBEAT_TIMEOUT_SECS);
-                    log::error!("[HEARTBEAT] {}", msg);
-                    (false, Some(msg))
                 }
             };
 
             // Always broadcast completion event so frontend knows we're done
-            broadcaster.broadcast(GatewayEvent::custom(
+            scheduler.broadcaster.broadcast(GatewayEvent::custom(
                 "heartbeat_pulse_completed",
                 serde_json::json!({
                     "config_id": config_id,
@@ -957,172 +900,13 @@ impl Scheduler {
     }
 }
 
-/// Execute heartbeat with isolated DB and dispatcher (doesn't block main server)
-/// Updates position and creates session IMMEDIATELY, then defers AI call to background
-async fn execute_heartbeat_isolated(
-    db: &Arc<Database>,
-    dispatcher: &Arc<MessageDispatcher>,
-    broadcaster: &Arc<EventBroadcaster>,
-    config: &HeartbeatConfig,
-) -> Result<(), String> {
-    let now = Utc::now();
-    let now_str = now.to_rfc3339();
 
-    log::info!("[HEARTBEAT-ISOLATED] Executing heartbeat (config_id: {})", config.id);
-    log::info!("[HEARTBEAT-ISOLATED] current_impulse_node_id: {:?}", config.current_impulse_node_id);
-
-    // Calculate and set next_beat_at BEFORE execution
-    let next_beat = now + Duration::minutes(config.interval_minutes as i64);
-    let next_beat_str = next_beat.to_rfc3339();
-    log::info!("[HEARTBEAT-ISOLATED] Updating next_beat_at...");
-    if let Err(e) = db.update_heartbeat_next_beat(config.id, &next_beat_str) {
-        log::error!("[HEARTBEAT-ISOLATED] Failed to update next_beat_at: {}", e);
+/// Deterministic hash of an agent key to a channel offset (0..99)
+fn hash_to_channel_offset(key: &str) -> i64 {
+    let mut hash: u64 = 5381;
+    for b in key.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(b as u64);
     }
-
-    // Get the next node to visit
-    log::info!("[HEARTBEAT-ISOLATED] Getting next heartbeat node...");
-    let next_node = match db.get_next_heartbeat_node(config.current_impulse_node_id) {
-        Ok(node) => {
-            log::info!("[HEARTBEAT-ISOLATED] Got next node: id={}", node.id);
-            node
-        }
-        Err(e) => {
-            log::error!("[HEARTBEAT-ISOLATED] Failed to get next node: {}", e);
-            return Err(format!("Failed to get next heartbeat node: {}", e));
-        }
-    };
-
-    // Calculate depth using iterative BFS (safe from cycles)
-    let node_depth = db.get_impulse_node_depth(next_node.id).unwrap_or(0);
-
-    log::info!(
-        "[HEARTBEAT-ISOLATED] Visiting impulse node {} (is_trunk: {})",
-        next_node.id, next_node.is_trunk
-    );
-
-    // === IMMEDIATE UPDATES (before AI call) ===
-
-    // Update heartbeat config with new position immediately
-    if let Err(e) = db.update_heartbeat_mind_position(config.id, Some(next_node.id), None) {
-        log::error!("[HEARTBEAT-ISOLATED] Failed to update impulse map position: {}", e);
-    }
-
-    // Update last_beat_at only (next_beat_at was already set above)
-    if let Err(e) = db.update_heartbeat_last_beat_only(config.id, &now_str) {
-        log::error!("[HEARTBEAT-ISOLATED] Failed to update last_beat_at: {}", e);
-    }
-
-    // Broadcast heartbeat start event with node info (UI can animate now)
-    broadcaster.broadcast(GatewayEvent::custom(
-        "heartbeat_started",
-        serde_json::json!({
-            "config_id": config.id,
-            "channel_id": config.channel_id,
-            "impulse_node_id": next_node.id,
-            "impulse_node_depth": node_depth,
-            "is_trunk": next_node.is_trunk,
-        }),
-    ));
-
-    // Build heartbeat message
-    let node_content = if next_node.body.is_empty() {
-        if next_node.is_trunk {
-            "This is the trunk node (root of your impulse map). It's currently empty.".to_string()
-        } else {
-            "This node is currently empty.".to_string()
-        }
-    } else {
-        next_node.body.clone()
-    };
-
-    let message_text = format!(
-        "[HEARTBEAT - Impulse Map Reflection]\n\
-        Current Position: Node #{} (depth: {}{})\n\
-        Node Content: {}\n\n\
-        Instructions:\n\
-        - Reflect on this node's content in the context of your impulse map\n\
-        - Consider connections to other thoughts and ideas\n\
-        - If the node is empty, consider what thoughts belong here\n\
-        - You may update this node's content or create new connected nodes\n\
-        - Review any pending tasks or items that relate to this area\n\
-        - Respond with HEARTBEAT_OK if no action needed",
-        next_node.id,
-        node_depth,
-        if next_node.is_trunk { ", trunk" } else { "" },
-        node_content
-    );
-
-    // IMPORTANT: Always use HEARTBEAT_CHANNEL_ID (-999) to avoid polluting web UI (channel 0)
-    let normalized = NormalizedMessage {
-        channel_id: HEARTBEAT_CHANNEL_ID,
-        channel_type: HEARTBEAT_CHANNEL_TYPE.to_string(),
-        chat_id: HEARTBEAT_CHAT_ID.to_string(),
-        chat_name: None,
-        user_id: HEARTBEAT_USER_ID.to_string(),
-        user_name: HEARTBEAT_USER_NAME.to_string(),
-        text: message_text,
-        message_id: Some(format!("heartbeat-{}", now.timestamp())),
-        session_mode: Some("isolated".to_string()),
-        selected_network: None,
-        force_safe_mode: false,
-    };
-
-    // === DEFERRED AI CALL (fire and forget) ===
-    let dispatcher = Arc::clone(dispatcher);
-    let broadcaster = Arc::clone(broadcaster);
-    let config_id = config.id;
-    let config_channel_id = config.channel_id; // Keep for broadcast events only
-    let node_id = next_node.id;
-    let db = Arc::clone(db);
-
-    tokio::spawn(async move {
-        log::info!("[HEARTBEAT-AI] Starting dispatch task for node {}", node_id);
-        log::info!("[HEARTBEAT-AI] channel_type={}, channel_id={}, chat_id={}",
-            HEARTBEAT_CHANNEL_TYPE, HEARTBEAT_CHANNEL_ID, HEARTBEAT_CHAT_ID);
-
-        let result = dispatcher.dispatch_safe(normalized).await;
-
-        log::info!("[HEARTBEAT-AI] Dispatch returned. Response len: {}, Error: {:?}",
-            result.response.len(), result.error);
-
-        if let Some(ref err) = result.error {
-            log::error!("[HEARTBEAT-AI] Dispatch failed: {}", err);
-        } else {
-            log::info!("[HEARTBEAT-AI] Dispatch completed successfully");
-        }
-
-        // Update session ID after dispatch (session created during dispatch)
-        let session_key = format!("{}:{}:{}", HEARTBEAT_CHANNEL_TYPE, HEARTBEAT_CHANNEL_ID, HEARTBEAT_CHAT_ID);
-        log::info!("[HEARTBEAT-AI] Looking for session with key: {}", session_key);
-
-        match db.get_chat_session_by_key(&session_key) {
-            Ok(Some(session)) => {
-                log::info!("[HEARTBEAT-AI] Found session id={}, updating heartbeat config", session.id);
-                let _ = db.update_heartbeat_mind_position(config_id, Some(node_id), Some(session.id));
-            }
-            Ok(None) => {
-                log::warn!("[HEARTBEAT-AI] No session found with key: {}", session_key);
-            }
-            Err(e) => {
-                log::error!("[HEARTBEAT-AI] Error looking up session: {}", e);
-            }
-        }
-
-        // Broadcast completion
-        broadcaster.broadcast(GatewayEvent::custom(
-            "heartbeat_completed",
-            serde_json::json!({
-                "config_id": config_id,
-                "channel_id": config_channel_id,
-                "impulse_node_id": node_id,
-                "success": result.error.is_none(),
-                "error": result.error,
-            }),
-        ));
-    });
-
-    log::info!("[HEARTBEAT-ISOLATED] Position updated, AI call deferred (node: {})", next_node.id);
-
-    Ok(())
+    (hash % 100) as i64
 }
 

@@ -608,6 +608,7 @@ impl Database {
         let _ = conn.execute("ALTER TABLE memories ADD COLUMN last_accessed TEXT", []);
         let _ = conn.execute("ALTER TABLE memories ADD COLUMN valid_from TEXT", []);
         let _ = conn.execute("ALTER TABLE memories ADD COLUMN valid_until TEXT", []);
+        let _ = conn.execute("ALTER TABLE memories ADD COLUMN agent_subtype TEXT", []);
 
         // FTS5 virtual table for full-text search on memories
         conn.execute(
@@ -1504,6 +1505,12 @@ impl Database {
         // Migration: add hidden column (hidden subtypes are system-only, not shown in UI/director)
         let _ = conn.execute(
             "ALTER TABLE agent_subtypes ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+
+        // Migration: add preferred_ai_model column (endpoint key override per subtype)
+        let _ = conn.execute(
+            "ALTER TABLE agent_subtypes ADD COLUMN preferred_ai_model TEXT",
             [],
         );
 

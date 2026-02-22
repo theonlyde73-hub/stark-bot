@@ -113,7 +113,6 @@ async fn update_heartbeat_config(
         body.active_hours_end.as_deref(),
         body.active_days.as_deref(),
         body.enabled,
-        body.impulse_evolver,
     ) {
         Ok(updated) => {
             log::info!("[HEARTBEAT] Config updated successfully, enabled={}", updated.enabled);
@@ -193,7 +192,6 @@ async fn update_channel_heartbeat_config(
         body.active_hours_end.as_deref(),
         body.active_days.as_deref(),
         body.enabled,
-        body.impulse_evolver,
     ) {
         Ok(updated) => HttpResponse::Ok().json(HeartbeatConfigResponse {
             success: true,

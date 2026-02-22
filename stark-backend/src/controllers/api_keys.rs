@@ -1504,7 +1504,6 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                     hb_config.active_hours_end.as_deref(),
                     hb_config.active_days.as_deref(),
                     Some(hb_config.enabled),
-                    Some(hb_config.impulse_evolver),
                 ) {
                     log::warn!("Failed to restore heartbeat config: {}", e);
                 }
@@ -1543,6 +1542,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                     mem.source_type.as_deref(),
                     mem.log_date.as_deref(),
                     &mem.created_at,
+                    mem.agent_subtype.as_deref(),
                 )
             } else {
                 state.db.insert_memory(
@@ -1557,6 +1557,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                     mem.entity_name.as_deref(),
                     mem.source_type.as_deref(),
                     mem.log_date.as_deref(),
+                    mem.agent_subtype.as_deref(),
                 )
             };
             match result {

@@ -7,13 +7,13 @@ use crate::db::Database;
 const MEMORY_SELECT_COLS: &str =
     "id, memory_type, content, category, tags, importance,
      identity_id, session_id, entity_type, entity_name,
-     source_type, log_date, created_at, updated_at, last_accessed";
+     source_type, log_date, created_at, updated_at, last_accessed, agent_subtype";
 
 /// Table-qualified SELECT columns for JOIN queries (avoids ambiguous column names with FTS)
 const MEMORY_SELECT_COLS_QUALIFIED: &str =
     "memories.id, memories.memory_type, memories.content, memories.category, memories.tags, memories.importance,
      memories.identity_id, memories.session_id, memories.entity_type, memories.entity_name,
-     memories.source_type, memories.log_date, memories.created_at, memories.updated_at, memories.last_accessed";
+     memories.source_type, memories.log_date, memories.created_at, memories.updated_at, memories.last_accessed, memories.agent_subtype";
 
 /// A row from the `memories` table
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -33,6 +33,7 @@ pub struct MemoryRow {
     pub created_at: String,
     pub updated_at: String,
     pub last_accessed: Option<String>,
+    pub agent_subtype: Option<String>,
 }
 
 /// Parse a MemoryRow from a rusqlite::Row using the standard column order.
@@ -53,6 +54,7 @@ fn row_to_memory(row: &rusqlite::Row) -> rusqlite::Result<MemoryRow> {
         created_at: row.get(12)?,
         updated_at: row.get(13)?,
         last_accessed: row.get(14)?,
+        agent_subtype: row.get(15)?,
     })
 }
 
@@ -73,6 +75,7 @@ impl Database {
         entity_name: Option<&str>,
         source_type: Option<&str>,
         log_date: Option<&str>,
+        agent_subtype: Option<&str>,
     ) -> Result<i64, rusqlite::Error> {
         // Redact secrets/PII before persisting
         let redaction = crate::memory::redaction::redact_content(content);
@@ -90,16 +93,16 @@ impl Database {
             "INSERT INTO memories (
                 memory_type, content, category, tags, importance,
                 identity_id, session_id, entity_type, entity_name,
-                source_type, log_date, created_at, updated_at, last_accessed
+                source_type, log_date, agent_subtype, created_at, updated_at, last_accessed
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5,
                 ?6, ?7, ?8, ?9,
-                ?10, ?11, datetime('now'), datetime('now'), datetime('now')
+                ?10, ?11, ?12, datetime('now'), datetime('now'), datetime('now')
             )",
             rusqlite::params![
                 memory_type, content, category, tags, importance,
                 identity_id, session_id, entity_type, entity_name,
-                source_type, log_date,
+                source_type, log_date, agent_subtype,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -121,22 +124,23 @@ impl Database {
         source_type: Option<&str>,
         log_date: Option<&str>,
         created_at: &str,
+        agent_subtype: Option<&str>,
     ) -> Result<i64, rusqlite::Error> {
         let conn = self.conn();
         conn.execute(
             "INSERT INTO memories (
                 memory_type, content, category, tags, importance,
                 identity_id, session_id, entity_type, entity_name,
-                source_type, log_date, created_at, updated_at, last_accessed
+                source_type, log_date, agent_subtype, created_at, updated_at, last_accessed
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5,
                 ?6, ?7, ?8, ?9,
-                ?10, ?11, ?12, datetime('now'), datetime('now')
+                ?10, ?11, ?12, ?13, datetime('now'), datetime('now')
             )",
             rusqlite::params![
                 memory_type, content, category, tags, importance,
                 identity_id, session_id, entity_type, entity_name,
-                source_type, log_date, created_at,
+                source_type, log_date, agent_subtype, created_at,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -332,7 +336,7 @@ impl Database {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(param_refs.as_slice(), |row| {
             let memory = row_to_memory(row)?;
-            let rank: f64 = row.get(15)?; // rank is after the 15 standard columns
+            let rank: f64 = row.get(16)?; // rank is after the 16 standard columns
             Ok((memory, rank))
         })?;
         rows.collect()
@@ -442,7 +446,7 @@ impl Database {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(param_refs.as_slice(), |row| {
             let memory = row_to_memory(row)?;
-            let rank: f64 = row.get(15)?;
+            let rank: f64 = row.get(16)?;
             Ok((memory, rank))
         })?;
         rows.collect()
@@ -516,6 +520,7 @@ impl Database {
             newer.entity_name.as_deref(),
             Some("merge"),
             newer.log_date.as_deref(),
+            newer.agent_subtype.as_deref(),
         )?;
 
         let conn = self.conn();
