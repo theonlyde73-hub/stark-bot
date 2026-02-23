@@ -32,6 +32,7 @@ pub struct RestoreResult {
     pub memories: usize,
     pub notes: usize,
     pub kanban_items: usize,
+    pub kv_entries: usize,
     pub bot_settings: bool,
     pub heartbeat_config: bool,
     pub soul_document: bool,
@@ -57,6 +58,7 @@ impl RestoreResult {
         if self.memories > 0 { parts.push(format!("{} memories", self.memories)); }
         if self.notes > 0 { parts.push(format!("{} notes", self.notes)); }
         if self.kanban_items > 0 { parts.push(format!("{} kanban items", self.kanban_items)); }
+        if self.kv_entries > 0 { parts.push(format!("{} kv entries", self.kv_entries)); }
         if self.bot_settings { parts.push("bot settings".to_string()); }
         if self.heartbeat_config { parts.push("heartbeat config".to_string()); }
         if self.soul_document { parts.push("soul document".to_string()); }
@@ -83,6 +85,18 @@ pub async fn restore_all(
     skill_registry: Option<&Arc<SkillRegistry>>,
     channel_manager: Option<&Arc<ChannelManager>>,
     notes_store: Option<&Arc<NoteStore>>,
+) -> Result<RestoreResult, String> {
+    restore_all_with_kv(db, backup_data, skill_registry, channel_manager, notes_store, None).await
+}
+
+/// Full restore including optional KV store.
+pub async fn restore_all_with_kv(
+    db: &Arc<Database>,
+    backup_data: &mut BackupData,
+    skill_registry: Option<&Arc<SkillRegistry>>,
+    channel_manager: Option<&Arc<ChannelManager>>,
+    notes_store: Option<&Arc<NoteStore>>,
+    kv_store: Option<&crate::kv_store::KvStore>,
 ) -> Result<RestoreResult, String> {
     let mut result = RestoreResult::default();
 
@@ -846,10 +860,30 @@ pub async fn restore_all(
         }
     }
 
-    // ── 21. Tool configs (gogcli etc.) ──────────────────────────────────
+    // ── 21. KV store entries ────────────────────────────────────────────
+    if !backup_data.kv_entries.is_empty() {
+        if let Some(kv) = kv_store {
+            let entries: Vec<(String, String)> = backup_data
+                .kv_entries
+                .iter()
+                .map(|e| (e.key.clone(), e.value.clone()))
+                .collect();
+            match kv.load_all(&entries).await {
+                Ok(()) => {
+                    result.kv_entries = entries.len();
+                    log::info!("[Restore] Restored {} KV store entries to Redis", result.kv_entries);
+                }
+                Err(e) => log::warn!("[Restore] Failed to restore KV store entries: {}", e),
+            }
+        } else {
+            log::warn!("[Restore] KV store entries in backup but Redis not available — skipping");
+        }
+    }
+
+    // ── 22. Tool configs (gogcli etc.) ──────────────────────────────────
     restore_tool_configs(backup_data);
 
-    // ── 22. Auto-start channels ─────────────────────────────────────────
+    // ── 23. Auto-start channels ─────────────────────────────────────────
     if let Some(cm) = channel_manager {
         let mut auto_started = 0;
         for (_old_id, &new_id) in &old_channel_to_new_id {

@@ -48,6 +48,8 @@ pub enum ApiKeyId {
     AlchemyApiKey,
     #[strum(serialize = "XAI_API_KEY")]
     XaiApiKey,
+    #[strum(serialize = "ZEROX_API_KEY")]
+    ZeroxApiKey,
 }
 
 impl ApiKeyId {
@@ -63,6 +65,7 @@ impl ApiKeyId {
             Self::SupabaseAccessToken => "SUPABASE_ACCESS_TOKEN",
             Self::AlchemyApiKey => "ALCHEMY_API_KEY",
             Self::XaiApiKey => "XAI_API_KEY",
+            Self::ZeroxApiKey => "ZEROX_API_KEY",
         }
     }
 
@@ -77,6 +80,7 @@ impl ApiKeyId {
             Self::SupabaseAccessToken => Some(&["SUPABASE_ACCESS_TOKEN"]),
             Self::AlchemyApiKey => Some(&["ALCHEMY_API_KEY"]),
             Self::XaiApiKey => Some(&["XAI_API_KEY"]),
+            Self::ZeroxApiKey => Some(&["ZEROX_API_KEY"]),
         }
     }
 
@@ -189,6 +193,17 @@ pub fn get_service_configs() -> Vec<ServiceConfig> {
                     secret: true,
                 },
             ],
+        },
+        ServiceConfig {
+            group: "zerox".into(),
+            label: "0x (Swap API)".into(),
+            description: "API key for direct 0x swap quotes. Free tier available. Falls back to paid x402 relay if not set.".into(),
+            url: "https://dashboard.0x.org/".into(),
+            keys: vec![KeyConfig {
+                name: "ZEROX_API_KEY".into(),
+                label: "API Key".into(),
+                secret: true,
+            }],
         },
         ServiceConfig {
             group: "xai".into(),
@@ -759,7 +774,11 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
     };
 
     // Build BackupData with all user data
-    let backup = crate::backup::collect_backup_data(&state.db, wallet_address).await;
+    let backup = crate::backup::collect_backup_data_with_kv(
+        &state.db,
+        wallet_address,
+        state.kv_store.as_deref(),
+    ).await;
 
     // Check if there's anything to backup
     if backup.is_empty() {
@@ -1254,12 +1273,13 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
 
     // Unified restore
     let notes_store = state.dispatcher.notes_store();
-    let restore_result = crate::backup::restore::restore_all(
+    let restore_result = crate::backup::restore::restore_all_with_kv(
         &state.db,
         &mut backup_data,
         Some(&state.skill_registry),
         Some(&state.channel_manager),
         notes_store.as_ref(),
+        state.kv_store.as_deref(),
     ).await;
 
     let restore_result = match restore_result {

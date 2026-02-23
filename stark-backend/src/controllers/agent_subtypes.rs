@@ -492,6 +492,231 @@ async fn import_subtypes(
     HttpResponse::Ok().json(response)
 }
 
+// --- StarkHub featured/install ---
+
+/// GET /api/agent-subtypes/featured_remote — get featured agent subtypes from StarkHub
+async fn featured_remote(
+    _data: web::Data<AppState>,
+    _req: HttpRequest,
+) -> impl Responder {
+    let client = crate::integrations::starkhub_client::StarkHubClient::new();
+    let featured = match client.list_agent_subtypes().await {
+        Ok(f) => f,
+        Err(e) => {
+            log::error!("[AGENTS] Failed to fetch agent subtypes from StarkHub: {}", e);
+            return HttpResponse::BadGateway().json(serde_json::json!({
+                "error": format!("Failed to fetch from StarkHub: {}", e)
+            }));
+        }
+    };
+
+    // Filter out already-installed agent subtypes
+    let existing = types::all_subtype_configs_unfiltered();
+    let existing_keys: std::collections::HashSet<String> =
+        existing.iter().map(|c| c.key.clone()).collect();
+
+    let filtered: Vec<_> = featured
+        .into_iter()
+        .filter(|a| !existing_keys.contains(&a.key))
+        .collect();
+
+    HttpResponse::Ok().json(filtered)
+}
+
+// --- StarkHub publish/install ---
+
+#[derive(Deserialize)]
+struct InstallFromHubRequest {
+    username: String,
+    slug: String,
+}
+
+/// POST /api/agent-subtypes/publish/{key} — publish an agent subtype to StarkHub
+async fn publish_to_hub(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<String>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    let key = path.into_inner();
+
+    // Read the auth token from the request
+    let auth_token = match req
+        .headers()
+        .get("X-StarkHub-Token")
+        .and_then(|h| h.to_str().ok())
+    {
+        Some(t) => t.to_string(),
+        None => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "X-StarkHub-Token header required for publishing"
+            }));
+        }
+    };
+
+    let agents_dir = crate::config::runtime_agents_dir();
+    let agent_folder = agents_dir.join(&key);
+
+    if !agent_folder.is_dir() {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "error": format!("Agent subtype '{}' not found on disk", key)
+        }));
+    }
+
+    // Read agent.md
+    let agent_md_path = agent_folder.join("agent.md");
+    let raw_agent_md = match std::fs::read_to_string(&agent_md_path) {
+        Ok(content) => content,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Failed to read agent.md: {}", e)
+            }));
+        }
+    };
+
+    let client = crate::integrations::starkhub_client::StarkHubClient::new();
+
+    // Publish agent.md as the main record
+    let result = match client.publish_agent_subtype(&raw_agent_md, &auth_token).await {
+        Ok(r) => r,
+        Err(e) => {
+            return HttpResponse::BadGateway().json(serde_json::json!({
+                "error": format!("Failed to publish to StarkHub: {}", e)
+            }));
+        }
+    };
+
+    let username = result["username"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
+    let slug = result["slug"].as_str().unwrap_or(&key).to_string();
+
+    // Upload additional files (everything except agent.md)
+    let mut uploaded_files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&agent_folder) {
+        for entry in entries.flatten() {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if file_name == "agent.md" || !entry.path().is_file() {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                match client
+                    .upload_agent_subtype_file(&username, &slug, &file_name, &content, &auth_token)
+                    .await
+                {
+                    Ok(_) => uploaded_files.push(file_name),
+                    Err(e) => {
+                        log::warn!("Failed to upload file '{}': {}", file_name, e);
+                    }
+                }
+            }
+        }
+    }
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "slug": slug,
+        "username": username,
+        "uploaded_files": uploaded_files,
+        "message": result.get("message").and_then(|m| m.as_str()).unwrap_or("Published"),
+    }))
+}
+
+/// POST /api/agent-subtypes/install — install an agent subtype from StarkHub
+async fn install_from_hub(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    body: web::Json<InstallFromHubRequest>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    let auth_token = req
+        .headers()
+        .get("X-StarkHub-Token")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let client = crate::integrations::starkhub_client::StarkHubClient::new();
+
+    // Download raw agent.md
+    let raw_agent_md = match client
+        .download_agent_subtype(&body.username, &body.slug, &auth_token)
+        .await
+    {
+        Ok(md) => md,
+        Err(e) => {
+            return HttpResponse::BadGateway().json(serde_json::json!({
+                "error": format!("Failed to download from StarkHub: {}", e)
+            }));
+        }
+    };
+
+    // Parse agent.md to get the key
+    let config = match loader::parse_agent_file(&raw_agent_md) {
+        Ok(c) => c,
+        Err(e) => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": format!("Failed to parse downloaded agent.md: {}", e)
+            }));
+        }
+    };
+
+    let agents_dir = crate::config::runtime_agents_dir();
+    let agent_folder = agents_dir.join(&config.key);
+
+    // Create folder and write agent.md
+    if let Err(e) = std::fs::create_dir_all(&agent_folder) {
+        return HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": format!("Failed to create agent folder: {}", e)
+        }));
+    }
+
+    if let Err(e) = std::fs::write(agent_folder.join("agent.md"), &raw_agent_md) {
+        return HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": format!("Failed to write agent.md: {}", e)
+        }));
+    }
+
+    // Download additional files
+    let mut downloaded_files = vec!["agent.md".to_string()];
+    if let Ok(files) = client
+        .list_agent_subtype_files(&body.username, &body.slug)
+        .await
+    {
+        for file_summary in &files {
+            if let Ok(file_detail) = client
+                .get_agent_subtype_file(&body.username, &body.slug, &file_summary.file_name)
+                .await
+            {
+                let file_path = agent_folder.join(&file_detail.file_name);
+                if let Err(e) = std::fs::write(&file_path, &file_detail.content) {
+                    log::warn!("Failed to write file '{}': {}", file_detail.file_name, e);
+                } else {
+                    downloaded_files.push(file_detail.file_name);
+                }
+            }
+        }
+    }
+
+    // Reload registry
+    loader::reload_registry_from_disk();
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "key": config.key,
+        "label": config.label,
+        "files": downloaded_files,
+        "message": format!("Installed agent subtype '{}' from @{}/{}", config.key, body.username, body.slug),
+    }))
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api/agent-subtypes")
@@ -499,6 +724,9 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("/reset-defaults", web::post().to(reset_defaults))
             .route("/export", web::get().to(export_subtypes))
             .route("/import", web::post().to(import_subtypes))
+            .route("/featured_remote", web::get().to(featured_remote))
+            .route("/install", web::post().to(install_from_hub))
+            .route("/publish/{key}", web::post().to(publish_to_hub))
             .route("/{key}/export", web::get().to(export_single_subtype))
             .route("/{key}", web::get().to(get_subtype))
             .route("", web::post().to(create_subtype))

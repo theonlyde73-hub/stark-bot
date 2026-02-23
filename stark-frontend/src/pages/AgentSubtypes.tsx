@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Bot, Plus, Trash2, RotateCcw, Save, X, Download, Upload } from 'lucide-react';
+import { Bot, Plus, Trash2, RotateCcw, Save, X, Download, Upload, Star, ExternalLink } from 'lucide-react';
 import Card, { CardContent } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import {
@@ -10,12 +10,15 @@ import {
   resetAgentSubtypeDefaults,
   exportAgentSubtype,
   importAgentSubtypes,
+  getFeaturedAgentSubtypes,
+  installAgentSubtypeFromHub,
   getToolGroups,
   readIntrinsicFile,
   writeIntrinsicFile,
   getAiEndpointPresets,
   deleteIntrinsicFile,
   AgentSubtypeInfo,
+  FeaturedAgentSubtype,
   ToolGroupInfo,
   AiEndpointPreset,
 } from '@/lib/api';
@@ -59,10 +62,15 @@ export default function AgentSubtypes() {
   const [heartbeatLoading, setHeartbeatLoading] = useState(false);
   const [heartbeatSaving, setHeartbeatSaving] = useState(false);
 
+  const [featuredSubtypes, setFeaturedSubtypes] = useState<FeaturedAgentSubtype[]>([]);
+  const [featuredLoading, setFeaturedLoading] = useState(true);
+  const [fetchingRemote, setFetchingRemote] = useState<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     loadData();
+    loadFeatured();
   }, []);
 
   useEffect(() => {
@@ -97,6 +105,39 @@ export default function AgentSubtypes() {
       setError('Failed to load agent subtypes');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadFeatured = async () => {
+    setFeaturedLoading(true);
+    try {
+      const data = await getFeaturedAgentSubtypes();
+      setFeaturedSubtypes(Array.isArray(data) ? data : []);
+    } catch {
+      setFeaturedSubtypes([]);
+    } finally {
+      setFeaturedLoading(false);
+    }
+  };
+
+  const fetchRemoteSubtype = async (subtype: FeaturedAgentSubtype) => {
+    const username = subtype.author_username;
+    if (!username) {
+      setError('Author has no username — cannot fetch.');
+      return;
+    }
+    setFetchingRemote(subtype.slug);
+    setError(null);
+    try {
+      const result = await installAgentSubtypeFromHub(username, subtype.slug);
+      setSuccess(result.message || `Installed "${subtype.label}"`);
+      setFeaturedSubtypes((prev) => prev.filter((s) => s.slug !== subtype.slug));
+      await loadData();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to fetch agent subtype';
+      setError(msg);
+    } finally {
+      setFetchingRemote(null);
     }
   };
 
@@ -635,6 +676,71 @@ export default function AgentSubtypes() {
           </CardContent>
         </Card>
       )}
+
+      {/* Featured Agent Subtypes from StarkHub */}
+      {!featuredLoading && featuredSubtypes.length > 0 && (
+        <div className="mt-10">
+          <div className="flex items-center gap-2 mb-4">
+            <Star className="w-5 h-5 text-yellow-400" />
+            <h2 className="text-xl font-bold text-white">Featured Personas</h2>
+            <span className="text-xs text-slate-500 bg-slate-700 px-2 py-0.5 rounded">
+              from StarkHub
+            </span>
+          </div>
+          <div className="space-y-3">
+            {featuredSubtypes.map((sub) => (
+              <Card key={sub.id} variant="elevated">
+                <CardContent>
+                  <div className="flex items-center justify-between gap-4 py-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-3 mb-1">
+                        <span className="text-lg">{sub.emoji}</span>
+                        <h3 className="text-base font-semibold text-white">{sub.label}</h3>
+                        <span className="text-xs text-slate-500 bg-slate-700 px-2 py-0.5 rounded">
+                          v{sub.version}
+                        </span>
+                        <span className="text-xs text-green-400 bg-green-500/20 px-2 py-0.5 rounded">
+                          Free
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-400 mb-2">{sub.description}</p>
+                      <div className="flex gap-3 text-xs text-slate-500">
+                        <span>
+                          {sub.author_username ? `@${sub.author_username}` : sub.author_address.slice(0, 10)}
+                        </span>
+                        <span>{sub.install_count} installs</span>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={fetchingRemote !== null}
+                      isLoading={fetchingRemote === sub.slug}
+                      onClick={() => fetchRemoteSubtype(sub)}
+                    >
+                      <Download className="w-4 h-4 mr-1" />
+                      Fetch
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* StarkHub link */}
+      <div className="mt-8 text-center">
+        <a
+          href="https://hub.starkbot.ai"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm text-slate-400 hover:text-stark-400 bg-slate-800/50 hover:bg-slate-800 border border-slate-700 hover:border-stark-500/50 rounded-lg transition-colors"
+        >
+          <ExternalLink className="w-4 h-4" />
+          Find more personas on StarkHub
+        </a>
+      </div>
     </div>
   );
 }

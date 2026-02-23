@@ -1950,6 +1950,54 @@ export async function exportAgentSubtype(key: string): Promise<string> {
   return response.text();
 }
 
+// StarkHub integration for Agent Subtypes
+export interface FeaturedAgentSubtype {
+  id: string;
+  slug: string;
+  key: string;
+  label: string;
+  emoji: string;
+  description: string;
+  version: string;
+  author_username: string | null;
+  author_address: string;
+  install_count: number;
+  status: string;
+}
+
+export async function getFeaturedAgentSubtypes(): Promise<FeaturedAgentSubtype[]> {
+  return apiFetch('/agent-subtypes/featured_remote');
+}
+
+export async function installAgentSubtypeFromHub(
+  username: string,
+  slug: string
+): Promise<{ success: boolean; key: string; label: string; files: string[]; message: string }> {
+  return apiFetch('/agent-subtypes/install', {
+    method: 'POST',
+    body: JSON.stringify({ username, slug }),
+  });
+}
+
+export async function publishAgentSubtype(
+  key: string,
+  starkHubToken: string
+): Promise<{ success: boolean; slug: string; username: string; message: string }> {
+  const token = localStorage.getItem('stark_token');
+  const response = await fetch(`${API_BASE}/agent-subtypes/publish/${encodeURIComponent(key)}`, {
+    method: 'POST',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'X-StarkHub-Token': starkHubToken,
+    },
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(body.error || 'Failed to publish');
+  }
+  return response.json();
+}
+
 export async function importAgentSubtypes(ron: string, replace: boolean): Promise<{
   success: boolean;
   imported: number;

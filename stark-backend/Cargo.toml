@@ -1,6 +1,6 @@
 [package]
 name = "stark-backend"
-version = "0.5.64"
+version = "0.5.65"
 edition = "2024"
 default-run = "stark-backend"
 
@@ -97,6 +97,9 @@ toml = "0.8"
 # Module archive extraction (for StarkHub remote install)
 flate2 = "1"
 tar = "0.4"
+
+# Redis key/value store (agent state tracking)
+redis = { version = "0.27", features = ["tokio-comp"] }
 
 # Polymarket CLOB client (rs-clob-client)
 # Full-featured SDK for trading on Polymarket prediction markets

@@ -49,6 +49,7 @@ fn register_all_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(builtin::InstallApiKeyTool::new()));
     registry.register(Arc::new(builtin::HeartbeatConfigTool::new()));
     registry.register(Arc::new(builtin::ImpulseMapManageTool::new()));
+    registry.register(Arc::new(builtin::KvStoreTool::new()));
 
     // Special roles (enriched safe mode management)
     registry.register(Arc::new(builtin::ModifySpecialRoleTool::new()));

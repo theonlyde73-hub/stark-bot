@@ -113,6 +113,126 @@ fn extract_field(value: &Value, path: &str) -> Result<Value, String> {
     Ok(current.clone())
 }
 
+// ─── Direct 0x API fetch (bypasses x402 when user has their own key) ────────────
+
+/// Fetch a swap quote directly from the 0x API using the user's own API key.
+/// Returns the same jq-filtered shape as the x402 preset path.
+async fn fetch_zerox_quote_direct(
+    api_key: &str,
+    network: &str,
+    context: &ToolContext,
+) -> Result<Value, String> {
+    let chain_id = get_chain_id(network);
+
+    // Build query params from registers (same as the preset path)
+    let register_params: &[(&str, &str)] = &[
+        ("wallet_address", "taker"),
+        ("sell_token", "sellToken"),
+        ("buy_token", "buyToken"),
+        ("sell_amount", "sellAmount"),
+    ];
+
+    let mut url_params: Vec<String> = vec![format!("chainId={}", chain_id)];
+    for (reg_key, param_name) in register_params {
+        let value = match context.registers.get(*reg_key) {
+            Some(v) => match v.as_str() {
+                Some(s) => s.to_string(),
+                None => v.to_string().trim_matches('"').to_string(),
+            },
+            None => {
+                return Err(format!(
+                    "Direct 0x fetch requires register '{}' but it was not found. Available: {:?}",
+                    reg_key,
+                    context.registers.keys()
+                ));
+            }
+        };
+        url_params.push(format!("{}={}", param_name, value));
+    }
+
+    let url = format!(
+        "https://api.0x.org/swap/allowance-holder/quote?{}",
+        url_params.join("&")
+    );
+    log::info!("[fetch_zerox_direct] Direct 0x API call: {}", url);
+
+    let client = crate::http::shared_client();
+    let jq_filter = "{to: .transaction.to, data: .transaction.data, value: .transaction.value, gas: .transaction.gas, buyAmount: .buyAmount, issues: .issues}";
+
+    // Retry logic: 3 retries, 5s delay (same as x402 preset for swap_quote)
+    let max_retries: u32 = 3;
+    let retry_delay_secs: u64 = 5;
+    let mut last_error: Option<String> = None;
+
+    for attempt in 1..=max_retries {
+        if attempt > 1 {
+            log::info!(
+                "[fetch_zerox_direct] Retry {}/{} after {}s",
+                attempt,
+                max_retries,
+                retry_delay_secs
+            );
+            tokio::time::sleep(tokio::time::Duration::from_secs(retry_delay_secs)).await;
+        }
+
+        let resp = client
+            .get(&url)
+            .header("0x-api-key", api_key)
+            .header("0x-version", "v2")
+            .send()
+            .await;
+
+        match resp {
+            Ok(r) => {
+                let status = r.status();
+                if status.is_success() {
+                    let body = r
+                        .text()
+                        .await
+                        .map_err(|e| format!("Failed to read 0x response: {}", e))?;
+                    let json_value: Value = serde_json::from_str(&body)
+                        .map_err(|_| format!("0x response is not valid JSON: {}", body))?;
+                    log::info!("[fetch_zerox_direct] Success on attempt {}", attempt);
+                    return apply_jq_filter(&json_value, jq_filter);
+                }
+
+                let body = r.text().await.unwrap_or_default();
+                let error_msg = format!("0x API HTTP {}: {}", status, body);
+
+                if attempt < max_retries {
+                    log::warn!(
+                        "[fetch_zerox_direct] Retryable error on attempt {}: {}",
+                        attempt,
+                        error_msg
+                    );
+                    last_error = Some(error_msg);
+                    continue;
+                }
+                return Err(error_msg);
+            }
+            Err(e) => {
+                let error_msg = format!("0x API request failed: {}", e);
+                if attempt < max_retries {
+                    log::warn!(
+                        "[fetch_zerox_direct] Network error on attempt {}: {}",
+                        attempt,
+                        error_msg
+                    );
+                    last_error = Some(error_msg);
+                    continue;
+                }
+                return Err(error_msg);
+            }
+        }
+    }
+
+    Err(format!(
+        "0x API failed after {} retries: {}",
+        max_retries,
+        last_error.unwrap_or_else(|| "Unknown error".to_string())
+    ))
+}
+
 // ─── Standalone fetch function (for composite tools) ───────────────────────────
 
 /// Create an X402 client from the tool context
@@ -137,6 +257,25 @@ pub async fn fetch_x402_preset(
     network: &str,
     context: &ToolContext,
 ) -> Result<Value, String> {
+    // Try direct 0x API first for swap_quote if user has their own key
+    if preset_name == "swap_quote" {
+        if let Some(api_key) = context.get_api_key("ZEROX_API_KEY") {
+            log::info!("[fetch_x402_preset] ZEROX_API_KEY found, trying direct 0x API first");
+            match fetch_zerox_quote_direct(&api_key, network, context).await {
+                Ok(result) => {
+                    log::info!("[fetch_x402_preset] Direct 0x API succeeded, skipping x402 path");
+                    return Ok(result);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[fetch_x402_preset] Direct 0x API failed, falling back to x402: {}",
+                        e
+                    );
+                }
+            }
+        }
+    }
+
     let preset = get_fetch_preset(preset_name)
         .ok_or_else(|| format!(
             "Unknown preset: '{}'. Available: {}",
@@ -337,6 +476,47 @@ impl Tool for X402FetchTool {
             "[x402_preset_fetch] Stored network info: name={}, chain_id={}",
             network_name, chain_id
         );
+
+        // Try direct 0x API first for swap_quote if user has their own key
+        if params.preset == "swap_quote" {
+            if let Some(api_key) = context.get_api_key("ZEROX_API_KEY") {
+                log::info!("[x402_preset_fetch] ZEROX_API_KEY found, trying direct 0x API first");
+                match fetch_zerox_quote_direct(&api_key, &params.network, context).await {
+                    Ok(filtered) => {
+                        log::info!("[x402_preset_fetch] Direct 0x API succeeded, skipping x402 path");
+                        let result_content = serde_json::to_string_pretty(&filtered)
+                            .unwrap_or_else(|_| filtered.to_string());
+
+                        // Cache result in register if cache_as is specified
+                        if let Some(ref register_name) = params.cache_as {
+                            context.set_register(register_name, filtered.clone(), "x402_preset_fetch");
+                            log::info!(
+                                "[x402_preset_fetch] Cached direct 0x result in register '{}'",
+                                register_name,
+                            );
+                        }
+
+                        let mut metadata = json!({
+                            "preset": params.preset,
+                            "network": params.network,
+                            "status": 200,
+                            "source": "direct_0x",
+                        });
+                        if let Some(ref register_name) = params.cache_as {
+                            metadata["cached_in_register"] = json!(register_name);
+                        }
+
+                        return ToolResult::success(result_content).with_metadata(metadata);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[x402_preset_fetch] Direct 0x API failed, falling back to x402: {}",
+                            e
+                        );
+                    }
+                }
+            }
+        }
 
         // Build URL from registers
         let mut url_params: Vec<String> = Vec::new();

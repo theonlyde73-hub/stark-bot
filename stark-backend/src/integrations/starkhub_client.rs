@@ -80,6 +80,62 @@ pub struct PaginationMeta {
     pub total_pages: i64,
 }
 
+// --- Agent Subtype types ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSubtypeSummary {
+    pub id: String,
+    pub slug: String,
+    pub key: String,
+    pub label: String,
+    pub emoji: String,
+    pub description: String,
+    pub version: String,
+    pub author_username: Option<String>,
+    pub author_address: String,
+    pub install_count: i32,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSubtypeDetail {
+    pub id: String,
+    pub slug: String,
+    pub key: String,
+    pub label: String,
+    pub emoji: String,
+    pub description: String,
+    pub version: String,
+    pub author: AgentSubtypeAuthor,
+    pub raw_agent_md: String,
+    pub prompt: String,
+    pub metadata: serde_json::Value,
+    pub install_count: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSubtypeAuthor {
+    pub wallet_address: String,
+    pub username: Option<String>,
+    pub display_name: Option<String>,
+    pub verified: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSubtypeFileSummary {
+    pub file_name: String,
+    pub file_size: i64,
+    pub sha256_checksum: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSubtypeFileDetail {
+    pub file_name: String,
+    pub content: String,
+    pub file_size: i64,
+    pub sha256_checksum: String,
+}
+
 impl StarkHubClient {
     pub fn new() -> Self {
         let base_url = std::env::var("STARKHUB_API_URL")
@@ -199,6 +255,211 @@ impl StarkHubClient {
             .await
             .map(|b| b.to_vec())
             .map_err(|e| format!("Failed to read binary data: {}", e))
+    }
+
+    // --- Agent Subtype methods ---
+
+    /// List agent subtypes from StarkHub.
+    pub async fn list_agent_subtypes(&self) -> Result<Vec<AgentSubtypeSummary>, String> {
+        let url = format!("{}/agent-subtypes", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to connect to StarkHub: {}", e))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("StarkHub returned HTTP {}", resp.status()));
+        }
+
+        let paginated: PaginatedResponse<AgentSubtypeSummary> = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+        Ok(paginated.data)
+    }
+
+    /// Get agent subtype detail by @username/slug.
+    pub async fn get_agent_subtype(
+        &self,
+        username: &str,
+        slug: &str,
+    ) -> Result<AgentSubtypeDetail, String> {
+        let url = format!("{}/agent-subtypes/@{}/{}", self.base_url, username, slug);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to connect to StarkHub: {}", e))?;
+
+        if resp.status().as_u16() == 404 {
+            return Err(format!(
+                "Agent subtype @{}/{} not found on StarkHub",
+                username, slug
+            ));
+        }
+        if !resp.status().is_success() {
+            return Err(format!("StarkHub returned HTTP {}", resp.status()));
+        }
+
+        resp.json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    }
+
+    /// Download the raw agent.md content for an agent subtype.
+    pub async fn download_agent_subtype(
+        &self,
+        username: &str,
+        slug: &str,
+        auth_token: &str,
+    ) -> Result<String, String> {
+        let url = format!(
+            "{}/agent-subtypes/@{}/{}/download",
+            self.base_url, username, slug
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", auth_token))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to connect to StarkHub: {}", e))?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Download failed: {}", body));
+        }
+
+        resp.text()
+            .await
+            .map_err(|e| format!("Failed to read response: {}", e))
+    }
+
+    /// List files for an agent subtype.
+    pub async fn list_agent_subtype_files(
+        &self,
+        username: &str,
+        slug: &str,
+    ) -> Result<Vec<AgentSubtypeFileSummary>, String> {
+        let url = format!(
+            "{}/agent-subtypes/@{}/{}/files",
+            self.base_url, username, slug
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to connect to StarkHub: {}", e))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("StarkHub returned HTTP {}", resp.status()));
+        }
+
+        let result: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+        let files: Vec<AgentSubtypeFileSummary> =
+            serde_json::from_value(result["files"].clone()).unwrap_or_default();
+
+        Ok(files)
+    }
+
+    /// Get a single file's content for an agent subtype.
+    pub async fn get_agent_subtype_file(
+        &self,
+        username: &str,
+        slug: &str,
+        filename: &str,
+    ) -> Result<AgentSubtypeFileDetail, String> {
+        let url = format!(
+            "{}/agent-subtypes/@{}/{}/files/{}",
+            self.base_url, username, slug, filename
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to connect to StarkHub: {}", e))?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Failed to get file: {}", body));
+        }
+
+        resp.json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    }
+
+    /// Publish an agent subtype (agent.md) to StarkHub.
+    pub async fn publish_agent_subtype(
+        &self,
+        raw_agent_md: &str,
+        auth_token: &str,
+    ) -> Result<serde_json::Value, String> {
+        let url = format!("{}/agent-subtypes", self.base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", auth_token))
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({ "raw_agent_md": raw_agent_md }))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to connect to StarkHub: {}", e))?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Publish failed: {}", body));
+        }
+
+        resp.json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    }
+
+    /// Upload a file for an agent subtype.
+    pub async fn upload_agent_subtype_file(
+        &self,
+        username: &str,
+        slug: &str,
+        file_name: &str,
+        content: &str,
+        auth_token: &str,
+    ) -> Result<serde_json::Value, String> {
+        let url = format!(
+            "{}/agent-subtypes/@{}/{}/files",
+            self.base_url, username, slug
+        );
+        let resp = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", auth_token))
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "file_name": file_name,
+                "content": content,
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to connect to StarkHub: {}", e))?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("File upload failed: {}", body));
+        }
+
+        resp.json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     /// Publish a module manifest to StarkHub.

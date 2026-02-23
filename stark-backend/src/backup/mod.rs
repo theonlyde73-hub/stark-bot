@@ -92,6 +92,9 @@ pub struct BackupData {
     /// Installed modules (folder files + install/enable state)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modules: Vec<ModuleBackupEntry>,
+    /// Redis key/value store entries
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kv_entries: Vec<KvEntry>,
 }
 
 /// Manual Default because DateTime<Utc> doesn't derive Default
@@ -125,6 +128,7 @@ impl Default for BackupData {
             tool_configs: HashMap::new(),
             notes: Vec::new(),
             modules: Vec::new(),
+            kv_entries: Vec::new(),
         }
     }
 }
@@ -170,6 +174,7 @@ impl BackupData {
             + self.special_role_assignments.len()
             + self.notes.len()
             + self.modules.len()
+            + self.kv_entries.len()
     }
 }
 
@@ -523,6 +528,14 @@ pub struct ModuleFileEntry {
     pub content: String,
 }
 
+/// Redis key/value entry in backup
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KvEntry {
+    pub key: String,
+    pub value: String,
+}
+
 /// A file from a tool's config directory, stored as base64
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -571,6 +584,15 @@ impl BackupOptions {
 pub async fn collect_backup_data(
     db: &crate::db::Database,
     wallet_address: String,
+) -> BackupData {
+    collect_backup_data_with_kv(db, wallet_address, None).await
+}
+
+/// Collect backup data, optionally including Redis KV store entries.
+pub async fn collect_backup_data_with_kv(
+    db: &crate::db::Database,
+    wallet_address: String,
+    kv_store: Option<&crate::kv_store::KvStore>,
 ) -> BackupData {
     let mut backup = BackupData::new(wallet_address);
 
@@ -982,6 +1004,22 @@ pub async fn collect_backup_data(
                     log::info!("[Backup] Collected {} note files", backup.notes.len());
                 }
             }
+        }
+    }
+
+    // Redis KV store entries
+    if let Some(kv) = kv_store {
+        match kv.dump_all().await {
+            Ok(entries) => {
+                if !entries.is_empty() {
+                    log::info!("[Backup] Collected {} KV store entries from Redis", entries.len());
+                    backup.kv_entries = entries
+                        .into_iter()
+                        .map(|(key, value)| KvEntry { key, value })
+                        .collect();
+                }
+            }
+            Err(e) => log::warn!("[Backup] Failed to dump KV store: {}", e),
         }
     }
 
