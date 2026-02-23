@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
-import { Calendar, Trash2, MessageSquare, Download, ChevronLeft, User, Bot, Wrench, CheckCircle, XCircle, AlertCircle, Play, Pause, RefreshCw, Loader2, Terminal } from 'lucide-react';
+import { Calendar, Trash2, MessageSquare, Download, ChevronLeft, User, Bot, Wrench, CheckCircle, XCircle, AlertCircle, Play, Pause, RefreshCw, Loader2, Terminal, Zap } from 'lucide-react';
 import Card, { CardContent } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import { getSessions, getSession, deleteSession, deleteAllSessions, getSessionTranscript, SessionMessage, getCronJobs, CronJobInfo, stopSession, resumeSession } from '@/lib/api';
@@ -20,6 +20,7 @@ interface Session {
   initial_query?: string;
   safe_mode?: boolean;
   special_role_name?: string;
+  scope?: string;
 }
 
 function isValidStatus(status: string | undefined): status is CompletionStatus {
@@ -372,7 +373,8 @@ export default function Sessions() {
     return sessions.filter(session => {
       if (typeFilter !== 'all' && session.channel_type.toLowerCase() !== typeFilter) return false;
       if (modeFilter === 'safe' && session.safe_mode !== true) return false;
-      if (modeFilter === 'standard' && session.safe_mode === true) return false;
+      if (modeFilter === 'standard' && (session.safe_mode === true || session.scope === 'cron')) return false;
+      if (modeFilter === 'hook' && session.scope !== 'cron') return false;
       return true;
     });
   }, [sessions, typeFilter, modeFilter]);
@@ -453,6 +455,12 @@ export default function Sessions() {
                   <span className="text-xs px-2 py-1 bg-purple-500/20 text-purple-400 rounded-full flex items-center gap-1">
                     <Terminal className="w-3 h-3" />
                     Dev Chat
+                  </span>
+                )}
+                {selectedSession.scope === 'cron' && (
+                  <span className="text-xs px-2 py-1 bg-yellow-500/20 text-yellow-400 rounded-full flex items-center gap-1">
+                    <Zap className="w-3 h-3" />
+                    Hook
                   </span>
                 )}
                 {selectedSession.safe_mode && (
@@ -658,7 +666,7 @@ export default function Sessions() {
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm text-slate-400">Mode:</span>
-              {(['all', 'standard', 'safe'] as const).map((mode) => (
+              {(['all', 'standard', 'safe', 'hook'] as const).map((mode) => (
                 <button
                   key={mode}
                   onClick={() => setModeFilter(mode)}
@@ -669,7 +677,7 @@ export default function Sessions() {
                       : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                   )}
                 >
-                  {mode === 'all' ? 'All' : mode === 'safe' ? 'Safe Mode' : 'Standard'}
+                  {mode === 'all' ? 'All' : mode === 'safe' ? 'Safe Mode' : mode === 'hook' ? 'Hook' : 'Standard'}
                 </button>
               ))}
             </div>
@@ -723,6 +731,12 @@ export default function Sessions() {
                           <span className="text-xs px-1.5 sm:px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded-full flex items-center gap-1">
                             <Terminal className="w-3 h-3" />
                             <span className="hidden sm:inline">Dev Chat</span>
+                          </span>
+                        )}
+                        {session.scope === 'cron' && (
+                          <span className="text-xs px-1.5 sm:px-2 py-0.5 bg-yellow-500/20 text-yellow-400 rounded-full flex items-center gap-1">
+                            <Zap className="w-3 h-3" />
+                            <span className="hidden sm:inline">Hook</span>
                           </span>
                         )}
                         {session.safe_mode && (

@@ -149,7 +149,7 @@ pub async fn fire_discord_message_hooks(
             &config,
             "discord_message",
             prompt,
-            format!("hook:{}:{}", config.key, channel_id_str),
+            format!("hook:{}:{}:{}", config.key, channel_id_str, message_id),
             message_id.clone(),
             dispatcher,
         );
@@ -198,7 +198,7 @@ pub async fn fire_discord_mention_hooks(
             &config,
             "discord_mention",
             prompt,
-            format!("hook:{}:{}", config.key, channel_id_str),
+            format!("hook:{}:{}:{}", config.key, channel_id_str, message_id),
             message_id.clone(),
             dispatcher,
         );
@@ -243,7 +243,7 @@ pub async fn fire_discord_member_join_hooks(
             &config,
             "discord_member_join",
             prompt,
-            format!("hook:{}:join:{}", config.key, guild_id),
+            format!("hook:{}:join:{}:{}", config.key, guild_id, user_id),
             format!("join-{}-{}", guild_id, user_id),
             dispatcher,
         );
@@ -290,7 +290,7 @@ pub async fn fire_telegram_message_hooks(
             &config,
             "telegram_message",
             prompt,
-            format!("hook:{}:tg:{}", config.key, chat_id),
+            format!("hook:{}:tg:{}:{}", config.key, chat_id, message_id),
             format!("tg-{}", message_id),
             dispatcher,
         );
@@ -337,7 +337,7 @@ pub async fn fire_telegram_mention_hooks(
             &config,
             "telegram_mention",
             prompt,
-            format!("hook:{}:tg:{}", config.key, chat_id),
+            format!("hook:{}:tg:{}:{}", config.key, chat_id, message_id),
             format!("tg-{}", message_id),
             dispatcher,
         );
@@ -381,7 +381,7 @@ pub async fn fire_heartbeat_hooks(
             &config,
             "heartbeat",
             prompt,
-            format!("hook:{}:heartbeat", config.key),
+            format!("hook:{}:heartbeat:{}", config.key, now.timestamp()),
             format!("hb-{}", now.timestamp()),
             dispatcher,
         );

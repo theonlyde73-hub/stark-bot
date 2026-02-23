@@ -200,12 +200,17 @@ impl Orchestrator {
             );
         }
 
-        // Pick prompt based on whether the current subtype has skills
-        let has_skills = self.current_subtype_has_skills();
-        let prompt_key = if has_skills {
-            "system_prompt.assistant_skilled"
+        // Hook sessions get the autonomous hook prompt (no human operator)
+        let prompt_key = if self.context.is_hook_session {
+            "system_prompt.assistant_hooks"
         } else {
-            "system_prompt.assistant_director"
+            // Pick prompt based on whether the current subtype has skills
+            let has_skills = self.current_subtype_has_skills();
+            if has_skills {
+                "system_prompt.assistant_skilled"
+            } else {
+                "system_prompt.assistant_director"
+            }
         };
         let base_prompt = resource_manager.resolve_prompt(prompt_key);
         self.build_system_prompt_with_channel(&base_prompt, channel_type)
@@ -218,8 +223,10 @@ impl Orchestrator {
             return self.get_planner_prompt();
         }
 
-        // Pick prompt based on whether the current subtype has skills
-        let base_prompt = if self.current_subtype_has_skills() {
+        // Hook sessions get the autonomous hook prompt
+        let base_prompt = if self.context.is_hook_session {
+            include_str!("prompts/assistant_hooks.md").to_string()
+        } else if self.current_subtype_has_skills() {
             include_str!("prompts/assistant_skilled.md").to_string()
         } else {
             include_str!("prompts/assistant_director.md").to_string()

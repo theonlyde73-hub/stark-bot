@@ -728,6 +728,12 @@ pub struct AgentContext {
     /// Used as default for web3 operations unless user explicitly specifies otherwise
     #[serde(default)]
     pub selected_network: Option<String>,
+
+    /// Whether this session was triggered by an event hook (isolated, no human operator).
+    /// When true, the orchestrator uses the `assistant_hooks` prompt instead of
+    /// `assistant_skilled`/`assistant_director`.
+    #[serde(default)]
+    pub is_hook_session: bool,
 }
 
 /// Active skill context that persists across turns

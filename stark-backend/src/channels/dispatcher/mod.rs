@@ -1491,6 +1491,12 @@ impl MessageDispatcher {
             }
         }
 
+        // Mark hook sessions so the orchestrator uses the autonomous hook prompt
+        if original_message.session_mode.as_deref() == Some("isolated") {
+            orchestrator.context_mut().is_hook_session = true;
+            log::info!("[MULTI_AGENT] Hook session detected, using assistant_hooks prompt");
+        }
+
         // Update the selected network from the current message
         // This ensures the agent uses the network the user has selected in the UI
         if let Some(ref network) = original_message.selected_network {

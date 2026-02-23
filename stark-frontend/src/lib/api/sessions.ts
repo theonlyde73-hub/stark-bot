@@ -13,6 +13,7 @@ export async function getSessions(): Promise<Array<{
   message_count?: number;
   initial_query?: string;
   safe_mode?: boolean;
+  scope?: string;
 }>> {
   return apiFetch('/sessions');
 }
@@ -29,6 +30,7 @@ export async function getSession(id: number): Promise<{
   message_count?: number;
   initial_query?: string;
   safe_mode?: boolean;
+  scope?: string;
 }> {
   return apiFetch(`/sessions/${id}`);
 }

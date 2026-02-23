@@ -232,6 +232,9 @@ impl ResourceManager {
             "system_prompt.assistant_director" => {
                 include_str!("../ai/multi_agent/prompts/assistant_director.md").to_string()
             }
+            "system_prompt.assistant_hooks" => {
+                include_str!("../ai/multi_agent/prompts/assistant_hooks.md").to_string()
+            }
             // Legacy fallback — treat as skilled
             "system_prompt.assistant" => {
                 include_str!("../ai/multi_agent/prompts/assistant_skilled.md").to_string()

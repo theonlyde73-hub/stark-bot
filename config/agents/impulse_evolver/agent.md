@@ -10,13 +10,14 @@ enabled: true
 max_iterations: 90
 skip_task_planner: true
 hidden: true
-tool_groups: [system, memory]
+tool_groups: [memory]
 skill_tags: [general, impulse_map, automation, heartbeat]
 additional_tools:
   - impulse_map_manage
   - memory_search
   - memory_read
   - read_file
+  - task_fully_completed
 ---
 
 🌱 Impulse Evolver activated.
