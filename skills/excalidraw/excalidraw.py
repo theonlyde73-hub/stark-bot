@@ -13,12 +13,64 @@ import subprocess
 import sys
 import tempfile
 
+# Allowed base directories for file access (workspace and CWD)
+_ALLOWED_ROOTS = None
+
+
+def _get_allowed_roots():
+    """Return the set of allowed real directory roots for file access."""
+    global _ALLOWED_ROOTS
+    if _ALLOWED_ROOTS is None:
+        roots = [os.path.realpath(os.getcwd())]
+        workspace = os.environ.get("STARK_WORKSPACE_DIR") or os.environ.get("WORKSPACE_DIR")
+        if workspace:
+            roots.append(os.path.realpath(workspace))
+        public_dir = os.environ.get("STARK_PUBLIC_DIR")
+        if public_dir:
+            roots.append(os.path.realpath(public_dir))
+        _ALLOWED_ROOTS = roots
+    return _ALLOWED_ROOTS
+
+
+def _safe_resolve(file_path: str) -> str:
+    """Resolve a file path and verify it falls within allowed directories.
+
+    If the path doesn't exist relative to CWD, also tries WORKSPACE_DIR.
+    Returns the resolved real path or raises ValueError on traversal attempt.
+    """
+    resolved = os.path.realpath(os.path.expanduser(file_path))
+    allowed = _get_allowed_roots()
+
+    # If the file doesn't exist at resolved path and it's a relative path,
+    # try resolving relative to WORKSPACE_DIR (since CWD may be the skill dir)
+    if not os.path.exists(resolved) and not os.path.isabs(file_path):
+        workspace = os.environ.get("WORKSPACE_DIR") or os.environ.get("STARK_WORKSPACE_DIR")
+        if workspace:
+            alt = os.path.realpath(os.path.join(workspace, file_path))
+            if os.path.exists(alt):
+                resolved = alt
+
+    for root in allowed:
+        if resolved == root or resolved.startswith(root + os.sep):
+            return resolved
+    raise ValueError(
+        f"Path traversal blocked: '{file_path}' resolves outside allowed directories"
+    )
+
 
 def validate(data: dict) -> dict:
     """Validate an excalidraw JSON file for common issues."""
     file_path = data.get("file", "")
-    if not file_path or not os.path.isfile(file_path):
-        return {"valid": False, "errors": [f"File not found: {file_path}"], "element_count": 0}
+    if not file_path:
+        return {"valid": False, "errors": ["file parameter is required"], "element_count": 0}
+
+    try:
+        file_path = _safe_resolve(file_path)
+    except ValueError as e:
+        return {"valid": False, "errors": [str(e)], "element_count": 0}
+
+    if not os.path.isfile(file_path):
+        return {"valid": False, "errors": ["File not found"], "element_count": 0}
 
     try:
         with open(file_path, "r") as f:
@@ -112,8 +164,16 @@ def export(data: dict) -> dict:
     if fmt not in ("png", "svg"):
         return {"success": False, "error": f"Unsupported format: {fmt}"}
 
-    if not file_path or not os.path.isfile(file_path):
-        return {"success": False, "error": f"File not found: {file_path}"}
+    if not file_path:
+        return {"success": False, "error": "file parameter is required"}
+
+    try:
+        file_path = _safe_resolve(file_path)
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
+    if not os.path.isfile(file_path):
+        return {"success": False, "error": "File not found"}
 
     # Determine output path
     basename = os.path.splitext(os.path.basename(file_path))[0]
@@ -213,6 +273,10 @@ def main():
     except json.JSONDecodeError as e:
         print(json.dumps({"error": f"Invalid JSON arguments: {e}"}))
         sys.exit(1)
+
+    # If args is a plain string, treat it as the file path
+    if isinstance(args, str):
+        args = {"file": args}
 
     if action == "validate":
         result = validate(args)

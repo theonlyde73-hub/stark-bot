@@ -230,6 +230,14 @@ impl super::Module for DynamicModule {
         self.manifest.service.command.clone()
     }
 
+    fn manifest_port_env_var(&self) -> Option<String> {
+        self.manifest.service.port_env_var.clone()
+    }
+
+    fn manifest_env_var_keys(&self) -> Vec<String> {
+        self.manifest.service.env_vars.keys().cloned().collect()
+    }
+
     fn module_dir(&self) -> Option<&PathBuf> {
         Some(&self.module_dir)
     }

@@ -187,14 +187,14 @@ pub fn extract_module_to_dir(
 mod tests {
     use super::*;
     use std::io::Write;
-    use zip::write::SimpleFileOptions;
+    use zip::write::FileOptions;
     use zip::ZipWriter;
 
     fn make_test_zip(files: &[(&str, &str)]) -> Vec<u8> {
         let mut buf = Vec::new();
         {
             let mut writer = ZipWriter::new(Cursor::new(&mut buf));
-            let options = SimpleFileOptions::default();
+            let options = FileOptions::default();
             for (name, content) in files {
                 writer.start_file(*name, options).unwrap();
                 writer.write_all(content.as_bytes()).unwrap();

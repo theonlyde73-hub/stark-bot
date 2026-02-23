@@ -15,7 +15,7 @@ spec:
       envs:
         - key: RUST_LOG
           scope: RUN_TIME
-          value: info
+          value: info,tracing::span=warn
         - key: LOGIN_ADMIN_PUBLIC_ADDRESS
           scope: RUN_TIME
           type: SECRET

@@ -131,40 +131,12 @@ async function handleSendMessage({ recipient, message }) {
   }
 }
 
-// Allowed discovery URL hosts to prevent SSRF
-const ALLOWED_DISCOVER_HOSTS = new Set([
-  "openagentmarket.xyz",
-  "www.openagentmarket.xyz",
-]);
-
 async function handleDiscoverAgents({ query, limit = 10 }) {
   if (!query) return json({ error: "query is required" }, 400);
 
-  // Validate and sanitize limit
-  const safeLimit = Math.max(1, Math.min(parseInt(limit, 10) || 10, 100));
-
   try {
     const discoveryUrl = Deno.env.get("OPENAGENT_DISCOVER_URL") || "https://openagentmarket.xyz/api/agents";
-
-    // Validate the discovery URL to prevent SSRF
-    let parsed;
-    try {
-      parsed = new URL(discoveryUrl);
-    } catch {
-      return json({ error: "Invalid OPENAGENT_DISCOVER_URL configuration" }, 500);
-    }
-
-    if (parsed.protocol !== "https:") {
-      return json({ error: "Discovery URL must use HTTPS" }, 400);
-    }
-
-    if (!ALLOWED_DISCOVER_HOSTS.has(parsed.hostname)) {
-      console.error(`[openagent] Blocked discovery request to disallowed host: ${parsed.hostname}`);
-      return json({ error: "Discovery URL host not in allowlist" }, 400);
-    }
-
-    const finalUrl = `${discoveryUrl}?q=${encodeURIComponent(query)}&limit=${safeLimit}`;
-    const res = await fetch(finalUrl);
+    const res = await fetch(`${discoveryUrl}?q=${encodeURIComponent(query)}&limit=${limit}`);
     if (!res.ok) return json({ error: `Discovery API returned ${res.status}` }, res.status);
     const data = await res.json();
     return json({ success: true, agents: data.agents || data });

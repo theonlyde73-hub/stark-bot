@@ -362,8 +362,15 @@ impl MessageDispatcher {
             ).await {
                 Ok(response) => response,
                 Err(e) => {
-                    // Check if this is a client error (4xx) that might be recoverable
-                    if e.is_client_error() && iterations <= 2 {
+                    // Payment/infrastructure errors (402, timeouts) should NOT be retried here —
+                    // the HTTP client already retried 3 times internally.
+                    let is_payment_or_infra = e.status_code == Some(402)
+                        || e.message.contains("timed out")
+                        || e.message.contains("operation timed out")
+                        || e.message.contains("request failed");
+
+                    // Only retry recoverable client errors (context overflow, etc.)
+                    if !is_payment_or_infra && e.is_client_error() && iterations <= 2 {
                         if e.is_context_too_large() {
                             log::warn!(
                                 "[ORCHESTRATED_LOOP] Context too large error ({}), clearing tool history ({} entries) and retrying",
@@ -386,6 +393,13 @@ impl MessageDispatcher {
                         );
                         tool_history.push(crate::ai::types::create_error_feedback(&e, &iterations.to_string()));
                         continue;
+                    }
+
+                    if is_payment_or_infra {
+                        log::warn!(
+                            "[ORCHESTRATED_LOOP] Failing fast on infrastructure error (already retried at HTTP level): {}",
+                            e
+                        );
                     }
 
                     // AI generation failed - save summary of work done so far

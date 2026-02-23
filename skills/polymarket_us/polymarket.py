@@ -14,6 +14,9 @@ import sys
 import subprocess
 
 
+_POLYMARKET_SDK_VERSION = "polymarket-us==0.1.3"
+
+
 def ensure_sdk():
     """Auto-install polymarket-us SDK if not found."""
     try:
@@ -21,8 +24,9 @@ def ensure_sdk():
     except ModuleNotFoundError:
         print("Installing polymarket-us SDK...", file=sys.stderr)
         subprocess.check_call(
-            ["uv", "pip", "install", "polymarket-us", "-q"],
+            ["uv", "pip", "install", _POLYMARKET_SDK_VERSION, "-q"],
             stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
 

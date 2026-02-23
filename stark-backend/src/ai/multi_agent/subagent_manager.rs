@@ -637,7 +637,24 @@ impl SubAgentManager {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    // Check if this is a client error (4xx) that the AI might be able to recover from
+                    // Payment/infrastructure errors (402, timeouts) should NOT be retried here —
+                    // the HTTP client already retried 3 times. Retrying again just causes the
+                    // subagent to hang for minutes before finally failing.
+                    let is_payment_or_infra = e.status_code == Some(402)
+                        || e.message.contains("timed out")
+                        || e.message.contains("operation timed out")
+                        || e.message.contains("request failed");
+
+                    if is_payment_or_infra {
+                        log::warn!(
+                            "[SUBAGENT] {} failing fast on infrastructure error (already retried at HTTP level): {}",
+                            context.id,
+                            e
+                        );
+                        return Err(format!("AI inference failed: {}", e));
+                    }
+
+                    // Context-too-large errors are recoverable by clearing history
                     if e.is_client_error() && client_error_retries < MAX_CLIENT_ERROR_RETRIES {
                         client_error_retries += 1;
 

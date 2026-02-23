@@ -75,6 +75,16 @@ pub trait Module: Send + Sync {
         None
     }
 
+    /// Port environment variable name from manifest (e.g. "WALLET_MONITOR_PORT")
+    fn manifest_port_env_var(&self) -> Option<String> {
+        None
+    }
+
+    /// Environment variable keys declared in the manifest's `[service.env_vars]`
+    fn manifest_env_var_keys(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Directory containing the module on disk (if available)
     fn module_dir(&self) -> Option<&PathBuf> {
         None

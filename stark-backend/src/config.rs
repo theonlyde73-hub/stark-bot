@@ -754,29 +754,45 @@ pub fn seed_modules() -> std::io::Result<()> {
         let runtime_module = runtime.join(&name);
 
         let should_copy = if runtime_module.exists() {
-            let bundled_version = extract_version_from_module_toml(&entry.path());
-            let runtime_version = extract_version_from_module_toml(&runtime_module);
+            // Check if the runtime copy is manifest-only (only module.toml, no service files).
+            // This happens when installed from StarkHub without a binary archive.
+            // In that case, overwrite with the full bundled copy.
+            let is_manifest_only = runtime_module.join("module.toml").exists()
+                && !runtime_module.join("service.js").exists()
+                && !runtime_module.join("service.py").exists()
+                && !runtime_module.join("bin").exists();
 
-            match (bundled_version, runtime_version) {
-                (Some(bv), Some(rv)) => {
-                    if semver_is_newer(&bv, &rv) {
+            if is_manifest_only {
+                log::info!(
+                    "Replacing manifest-only module '{}' with full bundled copy",
+                    name_str
+                );
+                true
+            } else {
+                let bundled_version = extract_version_from_module_toml(&entry.path());
+                let runtime_version = extract_version_from_module_toml(&runtime_module);
+
+                match (bundled_version, runtime_version) {
+                    (Some(bv), Some(rv)) => {
+                        if semver_is_newer(&bv, &rv) {
+                            log::info!(
+                                "Upgrading module '{}' from v{} to v{} (bundled is newer)",
+                                name_str, rv, bv
+                            );
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    (Some(bv), None) => {
                         log::info!(
-                            "Upgrading module '{}' from v{} to v{} (bundled is newer)",
-                            name_str, rv, bv
+                            "Upgrading module '{}' (bundled has v{}, runtime has no version)",
+                            name_str, bv
                         );
                         true
-                    } else {
-                        false
                     }
+                    _ => false,
                 }
-                (Some(bv), None) => {
-                    log::info!(
-                        "Upgrading module '{}' (bundled has v{}, runtime has no version)",
-                        name_str, bv
-                    );
-                    true
-                }
-                _ => false,
             }
         } else {
             log::info!("Seeding module '{}' from bundled", name_str);

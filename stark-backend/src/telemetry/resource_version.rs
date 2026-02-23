@@ -121,12 +121,6 @@ impl ResourceManager {
                 log::info!("[RESOURCES] No active resource bundle found, seeding defaults");
                 let resources = vec![
                     Resource {
-                        name: "system_prompt.assistant".to_string(),
-                        resource_type: ResourceType::PromptTemplate,
-                        content: include_str!("../ai/multi_agent/prompts/assistant.md").to_string(),
-                        metadata: Value::Null,
-                    },
-                    Resource {
                         name: "system_prompt.task_planner".to_string(),
                         resource_type: ResourceType::PromptTemplate,
                         content: include_str!("../ai/multi_agent/prompts/task_planner.md").to_string(),

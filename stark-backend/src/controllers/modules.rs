@@ -55,12 +55,19 @@ fn start_module_service(module_name: &str, port: u16, db: &crate::db::Database) 
                 .stderr(std::process::Stdio::inherit());
             cmd.env("MODULE_PORT", port.to_string());
 
-            // Pass API keys from database
-            if let Ok(Some(key)) = db.get_api_key("ALCHEMY_API_KEY") {
-                cmd.env("ALCHEMY_API_KEY", &key.api_key);
-            } else if let Ok(val) = std::env::var("ALCHEMY_API_KEY") {
-                if !val.is_empty() {
-                    cmd.env("ALCHEMY_API_KEY", &val);
+            // Also set the module-specific port env var (e.g. OPENAGENT_PORT, WALLET_MONITOR_PORT)
+            if let Some(port_var) = module.manifest_port_env_var() {
+                cmd.env(&port_var, port.to_string());
+            }
+
+            // Pass all declared env vars from DB api_keys, falling back to process env
+            for env_key in module.manifest_env_var_keys() {
+                if let Ok(Some(key)) = db.get_api_key(&env_key) {
+                    cmd.env(&env_key, &key.api_key);
+                } else if let Ok(val) = std::env::var(&env_key) {
+                    if !val.is_empty() {
+                        cmd.env(&env_key, &val);
+                    }
                 }
             }
 
@@ -86,15 +93,7 @@ fn start_module_service(module_name: &str, port: u16, db: &crate::db::Database) 
     let mut cmd = std::process::Command::new(&exe_path);
     cmd.stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit());
-
-    // Pass API keys from database
-    if let Ok(Some(key)) = db.get_api_key("ALCHEMY_API_KEY") {
-        cmd.env("ALCHEMY_API_KEY", &key.api_key);
-    } else if let Ok(val) = std::env::var("ALCHEMY_API_KEY") {
-        if !val.is_empty() {
-            cmd.env("ALCHEMY_API_KEY", &val);
-        }
-    }
+    cmd.env("MODULE_PORT", port.to_string());
 
     match cmd.spawn() {
         Ok(_) => log::info!("[MODULE] Started {} (port {})", binary_name, port),
@@ -797,7 +796,8 @@ async fn fetch_remote(
                                 "status": "installed",
                                 "module": name_underscore,
                                 "version": module_info.version,
-                                "message": format!("Module '{}' installed from StarkHub (manifest-only).", name_underscore)
+                                "manifest_only": true,
+                                "message": format!("Module '{}' installed from StarkHub (manifest-only — tools registered but service files not included, service may not start).", name_underscore)
                             }));
                         }
                         Err(e) => {

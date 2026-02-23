@@ -10,17 +10,6 @@ if (!TOKEN) {
   console.error("[signer-proxy] STARKBOT_INTERNAL_TOKEN not set — signing will fail");
 }
 
-// Validate SELF_URL at startup to prevent SSRF via misconfiguration
-try {
-  const _parsed = new URL(SELF_URL);
-  const host = _parsed.hostname;
-  if (!["localhost", "127.0.0.1", "::1"].includes(host) && !host.endsWith(".internal") && !host.startsWith("10.") && !host.startsWith("172.") && !host.startsWith("192.168.")) {
-    console.warn(`[signer-proxy] STARKBOT_SELF_URL points to non-local host: ${host} — ensure this is intentional`);
-  }
-} catch {
-  console.error("[signer-proxy] Invalid STARKBOT_SELF_URL — signing proxy will fail");
-}
-
 /** Fetch the wallet address from the backend */
 export async function getAddress() {
   const res = await fetch(`${SELF_URL}/api/internal/wallet/address`, {

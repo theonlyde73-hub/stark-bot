@@ -77,11 +77,11 @@ impl TestHarness {
         // Load all skills from the skills/ directory into DB (matching production behavior).
         // Without this, `use_skill` pseudo-tool is never generated because
         // `list_enabled_skills()` returns empty on a fresh in-memory DB.
-        let skill_registry = Arc::new(SkillRegistry::new(db.clone()));
         let skills_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .join("skills");
+        let skill_registry = Arc::new(SkillRegistry::new(db.clone(), skills_dir.clone()));
         if skills_dir.exists() {
             if let Ok(entries) = std::fs::read_dir(&skills_dir) {
                 for entry in entries.flatten() {
@@ -160,11 +160,11 @@ impl TestHarness {
         let channel_id = channel.id;
 
         // Load skills from the skills/ directory into the DB
-        let skill_registry = Arc::new(SkillRegistry::new(db.clone()));
         let skills_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .join("skills");
+        let skill_registry = Arc::new(SkillRegistry::new(db.clone(), skills_dir.clone()));
         for name in skill_names {
             // Try {name}/{name}.md first, then flat {name}.md (legacy)
             let named_path = skills_dir.join(name).join(format!("{}.md", name));
@@ -878,7 +878,11 @@ async fn swap_flow_realistic() {
     let skill_content = std::fs::read_to_string(&skill_md_path)
         .unwrap_or_else(|e| panic!("Failed to read {}: {}", skill_md_path.display(), e));
 
-    let skill_registry = Arc::new(SkillRegistry::new(db.clone()));
+    let skills_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("skills");
+    let skill_registry = Arc::new(SkillRegistry::new(db.clone(), skills_dir));
     let skill = skill_registry.create_skill_from_markdown_force(&skill_content)
         .unwrap_or_else(|e| panic!("Failed to load swap skill: {}", e));
     eprintln!("  Loaded skill: {} v{}", skill.name, skill.version);
@@ -1600,7 +1604,11 @@ async fn build_tool_list_harness() -> MessageDispatcher {
     let broadcaster = Arc::new(EventBroadcaster::new());
     let execution_tracker = Arc::new(ExecutionTracker::new(broadcaster.clone()));
     let tool_registry = Arc::new(tools::create_default_registry());
-    let skill_registry = Arc::new(SkillRegistry::new(db.clone()));
+    let skills_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("skills");
+    let skill_registry = Arc::new(SkillRegistry::new(db.clone(), skills_dir));
 
     MessageDispatcher::new_with_wallet_and_skills(
         db,

@@ -14,6 +14,7 @@ import {
   readIntrinsicFile,
   writeIntrinsicFile,
   getAiEndpointPresets,
+  deleteIntrinsicFile,
   AgentSubtypeInfo,
   ToolGroupInfo,
   AiEndpointPreset,
@@ -329,6 +330,30 @@ export default function AgentSubtypes() {
     }
   };
 
+  const handleRemoveGoals = async () => {
+    if (!selectedKey) return;
+    if (!confirm('Remove goals for this agent? The goals.md file will be deleted.')) return;
+    try {
+      await deleteIntrinsicFile(`agents/${selectedKey}/goals.md`);
+      setGoalsContent(null);
+      setSuccess('Goals removed');
+    } catch {
+      setError('Failed to remove goals');
+    }
+  };
+
+  const handleRemoveHeartbeat = async () => {
+    if (!selectedKey) return;
+    if (!confirm('Remove heartbeat for this agent? The heartbeat.md file will be deleted.')) return;
+    try {
+      await deleteIntrinsicFile(`agents/${selectedKey}/heartbeat.md`);
+      setHeartbeatContent(null);
+      setSuccess('Heartbeat removed');
+    } catch {
+      setError('Failed to remove heartbeat');
+    }
+  };
+
   const handleToolGroupToggle = (group: string) => {
     if (!editForm) return;
     const groups = editForm.tool_groups.includes(group)
@@ -524,9 +549,14 @@ export default function AgentSubtypes() {
                         <span className="text-slate-600 ml-1">— strategic context prepended to each heartbeat prompt</span>
                       </label>
                       {goalsContent !== null && (
-                        <Button size="sm" variant="ghost" onClick={handleSaveGoals} isLoading={goalsSaving}>
-                          <Save className="w-3.5 h-3.5 mr-1" /> Save Goals
-                        </Button>
+                        <div className="flex items-center gap-1">
+                          <Button size="sm" variant="ghost" onClick={handleSaveGoals} isLoading={goalsSaving}>
+                            <Save className="w-3.5 h-3.5 mr-1" /> Save
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={handleRemoveGoals} className="text-red-400 hover:text-red-300 hover:bg-red-500/20">
+                            <Trash2 className="w-3.5 h-3.5 mr-1" /> Remove
+                          </Button>
+                        </div>
                       )}
                     </div>
                     {goalsLoading ? (
@@ -556,9 +586,14 @@ export default function AgentSubtypes() {
                         <span className="text-slate-600 ml-1">— runs on each heartbeat cycle if present</span>
                       </label>
                       {heartbeatContent !== null && (
-                        <Button size="sm" variant="ghost" onClick={handleSaveHeartbeat} isLoading={heartbeatSaving}>
-                          <Save className="w-3.5 h-3.5 mr-1" /> Save Heartbeat
-                        </Button>
+                        <div className="flex items-center gap-1">
+                          <Button size="sm" variant="ghost" onClick={handleSaveHeartbeat} isLoading={heartbeatSaving}>
+                            <Save className="w-3.5 h-3.5 mr-1" /> Save
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={handleRemoveHeartbeat} className="text-red-400 hover:text-red-300 hover:bg-red-500/20">
+                            <Trash2 className="w-3.5 h-3.5 mr-1" /> Remove
+                          </Button>
+                        </div>
                       )}
                     </div>
                     {heartbeatLoading ? (
@@ -777,7 +812,7 @@ function SubtypeForm({ form, setForm, toolGroups, onToolGroupToggle, isNew, endp
 
       {/* Prompt */}
       <div>
-        <label className="block text-xs text-slate-500 mb-1">Toolbox Activation Prompt</label>
+        <label className="block text-xs text-slate-500 mb-1">Agent Prompt</label>
         <textarea
           value={form.prompt}
           onChange={e => setForm({ ...form, prompt: e.target.value })}

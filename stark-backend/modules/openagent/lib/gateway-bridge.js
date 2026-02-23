@@ -6,17 +6,6 @@
 const SELF_URL = Deno.env.get("STARKBOT_SELF_URL") || "http://localhost:3000";
 const GATEWAY_TOKEN = Deno.env.get("OPENAGENT_GATEWAY_TOKEN") || Deno.env.get("STARKBOT_INTERNAL_TOKEN");
 
-// Validate SELF_URL at startup to prevent SSRF via misconfiguration
-try {
-  const _parsed = new URL(SELF_URL);
-  const host = _parsed.hostname;
-  if (!["localhost", "127.0.0.1", "::1"].includes(host) && !host.endsWith(".internal") && !host.startsWith("10.") && !host.startsWith("172.") && !host.startsWith("192.168.")) {
-    console.warn(`[gateway-bridge] STARKBOT_SELF_URL points to non-local host: ${host} — ensure this is intentional`);
-  }
-} catch {
-  console.error("[gateway-bridge] Invalid STARKBOT_SELF_URL — gateway bridge will fail");
-}
-
 // Persistent session map: xmtp_address → session_id
 const sessions = new Map();
 
