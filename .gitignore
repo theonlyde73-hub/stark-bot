@@ -8,10 +8,10 @@
 workspace/
 journal/
 soul/
-agents/
 /memory/
 stark-backend/memory/
 stark-backend/memory.migrated/
+stark-backend/agents/
 stark-backend/skills/
 stark-backend/workspace
 /test_output
