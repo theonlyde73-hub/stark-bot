@@ -6,6 +6,7 @@ use super::abi::common::keccak256;
 use super::abi::reputation::*;
 use super::config::Eip8004Config;
 use super::types::*;
+use crate::tools::rpc_config;
 use crate::wallet::WalletProvider;
 use crate::x402::X402EvmRpc;
 use ethers::types::Address;
@@ -43,19 +44,20 @@ impl ReputationRegistry {
         }
     }
 
-    /// Get or create RPC client
+    /// Get or create RPC client using unified 3-tier resolver.
     fn get_rpc(&self) -> Result<X402EvmRpc, String> {
         let network = if self.config.chain_id == 1 { "mainnet" } else { "base" };
+        let resolved = rpc_config::resolve_rpc(network);
 
         // Prefer wallet provider (works in both Standard and Flash/Privy mode)
         if let Some(ref wp) = self.wallet_provider {
-            return X402EvmRpc::new_with_wallet_provider(wp.clone(), network, None, true);
+            return X402EvmRpc::new_with_wallet_provider(wp.clone(), network, Some(resolved.url), resolved.use_x402);
         }
 
         // Fall back to raw private key (Standard mode only)
         let private_key = crate::config::burner_wallet_private_key()
             .ok_or("BURNER_WALLET_BOT_PRIVATE_KEY not set")?;
-        X402EvmRpc::new(&private_key, network)
+        X402EvmRpc::new_with_config(&private_key, network, Some(resolved.url), resolved.use_x402)
     }
 
     /// Get the registry contract address

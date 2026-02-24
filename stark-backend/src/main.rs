@@ -672,6 +672,24 @@ async fn main() -> std::io::Result<()> {
         Err(e) => log::warn!("Failed to load x402 payment limits from DB: {}", e),
     }
 
+    // Load RPC configuration into the unified resolver so ALL codepaths
+    // (tools, eip8004, x402 signer, etc.) share the same resolution logic.
+    {
+        let alchemy_key = db.get_api_key("ALCHEMY_API_KEY").ok().flatten()
+            .map(|k| k.api_key)
+            .or_else(|| std::env::var("ALCHEMY_API_KEY").ok().filter(|v| !v.is_empty()));
+        if let Some(key) = alchemy_key {
+            log::info!("[rpc_config] Alchemy API key loaded — Tier 1 RPC available");
+            tools::rpc_config::set_alchemy_api_key(key);
+        }
+
+        if let Ok(settings) = db.get_bot_settings() {
+            if let Some(endpoints) = settings.custom_rpc_endpoints {
+                tools::rpc_config::set_custom_rpc_endpoints(endpoints);
+            }
+        }
+    }
+
     // Load agent subtypes from agents/ folders (disk-based, no DB).
     // Seed bundled agents from config/agents/ → stark-backend/agents/ (version-gated).
     {

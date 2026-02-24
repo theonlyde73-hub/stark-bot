@@ -5,19 +5,12 @@
 use super::abi::identity::*;
 use super::config::Eip8004Config;
 use super::types::*;
+use crate::tools::rpc_config;
 use crate::wallet::WalletProvider;
 use crate::x402::X402EvmRpc;
 use ethers::types::Address;
 use std::str::FromStr;
 use std::sync::Arc;
-
-/// Free public RPC URL for read-only eth_call (no x402 payment needed)
-fn free_base_rpc_url(chain_id: u64) -> String {
-    match chain_id {
-        84532 => "https://sepolia.base.org".to_string(),
-        _ => "https://mainnet.base.org".to_string(),
-    }
-}
 
 /// Identity Registry client
 pub struct IdentityRegistry {
@@ -50,13 +43,18 @@ impl IdentityRegistry {
         }
     }
 
-    /// Get a free (non-x402) RPC client for read-only eth_call operations
+    /// Get an RPC client for read-only eth_call operations.
+    /// Uses the unified 3-tier resolver (Alchemy → DeFi Relay → Public).
     fn get_free_rpc(&self) -> Result<X402EvmRpc, String> {
-        let network = if self.config.chain_id == 1 { "mainnet" } else { "base" };
-        let free_rpc = Some(free_base_rpc_url(self.config.chain_id));
+        let network = match self.config.chain_id {
+            1 => "mainnet",
+            84532 => "base-sepolia",
+            _ => "base",
+        };
+        let resolved = rpc_config::resolve_rpc(network);
 
         if let Some(ref wp) = self.wallet_provider {
-            return X402EvmRpc::new_with_wallet_provider(wp.clone(), network, free_rpc, false);
+            return X402EvmRpc::new_with_wallet_provider(wp.clone(), network, Some(resolved.url), resolved.use_x402);
         }
 
         let private_key = crate::config::burner_wallet_private_key()
@@ -64,7 +62,7 @@ impl IdentityRegistry {
         let wp: Arc<dyn WalletProvider> = Arc::new(
             crate::wallet::EnvWalletProvider::from_private_key(&private_key)?
         );
-        X402EvmRpc::new_with_wallet_provider(wp, network, free_rpc, false)
+        X402EvmRpc::new_with_wallet_provider(wp, network, Some(resolved.url), resolved.use_x402)
     }
 
     /// Get the registry contract address

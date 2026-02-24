@@ -530,9 +530,10 @@ pub async fn check_usdc_balance(wallet_address: &str) -> Result<ethers::types::U
         "id": 1
     });
 
+    let resolved = crate::tools::rpc_config::resolve_rpc_readonly("base");
     let client = crate::http::shared_client();
     let response = client
-        .post("https://mainnet.base.org")
+        .post(&resolved.url)
         .json(&request)
         .send()
         .await

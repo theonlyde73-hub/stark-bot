@@ -318,6 +318,10 @@ pub async fn update_bot_settings(
                 settings.bot_email,
                 settings.rpc_provider
             );
+            // Sync custom RPC endpoints to the global resolver so all codepaths pick them up
+            if let Some(ref endpoints) = settings.custom_rpc_endpoints {
+                crate::tools::rpc_config::set_custom_rpc_endpoints(endpoints.clone());
+            }
             HttpResponse::Ok().json(settings)
         }
         Err(e) => {

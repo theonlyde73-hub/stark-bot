@@ -59,11 +59,9 @@ impl X402Signer {
         network: &str,
         token_address: ethers::types::Address,
     ) -> Result<U256, String> {
-        // Get RPC URL based on network
-        let rpc_url = match network {
-            "base-sepolia" => "https://sepolia.base.org",
-            _ => "https://mainnet.base.org", // Default to Base mainnet
-        };
+        // Get RPC URL via unified resolver (raw HTTP caller, can't handle x402 402s)
+        let resolved = crate::tools::rpc_config::resolve_rpc_readonly(network);
+        let rpc_url = &resolved.url;
 
         // Encode the nonces(address) call
         let call_data = erc20::encode_nonces(self.eth_address()?);

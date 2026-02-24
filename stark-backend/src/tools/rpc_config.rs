@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 use strum::{Display, EnumString, AsRefStr};
 
 /// Supported blockchain networks
@@ -82,6 +82,137 @@ impl Default for Network {
 
 /// Global storage for RPC providers
 static RPC_PROVIDERS: OnceLock<HashMap<String, RpcProvider>> = OnceLock::new();
+
+/// Global storage for Alchemy API key (loaded from DB at startup)
+static ALCHEMY_API_KEY: OnceLock<String> = OnceLock::new();
+
+/// Store the Alchemy API key for use by the unified RPC resolver.
+/// Called once at startup after loading the key from DB / env.
+pub fn set_alchemy_api_key(key: String) {
+    if ALCHEMY_API_KEY.set(key).is_err() {
+        log::warn!("[rpc_config] Alchemy API key already set");
+    }
+}
+
+/// Get the stored Alchemy API key, if any.
+pub fn get_alchemy_api_key() -> Option<&'static String> {
+    ALCHEMY_API_KEY.get()
+}
+
+/// Global storage for user-configured custom RPC endpoints (from bot_settings).
+/// Uses RwLock because these can be updated at runtime when the user changes settings.
+static CUSTOM_RPC_ENDPOINTS: RwLock<Option<HashMap<String, String>>> = RwLock::new(None);
+
+/// Store custom RPC endpoints globally so all codepaths (including eip8004) can use them.
+/// Called at startup and whenever bot_settings are updated.
+pub fn set_custom_rpc_endpoints(endpoints: HashMap<String, String>) {
+    let non_empty: HashMap<String, String> = endpoints.into_iter()
+        .filter(|(_, v)| !v.is_empty())
+        .collect();
+    if non_empty.is_empty() {
+        *CUSTOM_RPC_ENDPOINTS.write().unwrap_or_else(|e| e.into_inner()) = None;
+    } else {
+        log::info!("[rpc_config] Custom RPC endpoints set for: {:?}", non_empty.keys().collect::<Vec<_>>());
+        *CUSTOM_RPC_ENDPOINTS.write().unwrap_or_else(|e| e.into_inner()) = Some(non_empty);
+    }
+}
+
+/// Get a custom RPC endpoint for a network, if configured.
+fn custom_rpc_url(network: &str) -> Option<String> {
+    CUSTOM_RPC_ENDPOINTS.read().unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|endpoints| endpoints.get(network).cloned())
+}
+
+/// Build an Alchemy RPC URL for the given network and API key.
+/// Returns `None` if the network has no known Alchemy subdomain.
+fn alchemy_url(network: &str, key: &str) -> Option<String> {
+    let subdomain = match network {
+        "base" => "base-mainnet",
+        "mainnet" => "eth-mainnet",
+        "polygon" => "polygon-mainnet",
+        "arbitrum" => "arb-mainnet",
+        "optimism" => "opt-mainnet",
+        "base-sepolia" => "base-sepolia",
+        _ => return None,
+    };
+    Some(format!("https://{}.g.alchemy.com/v2/{}", subdomain, key))
+}
+
+/// Best free public RPC URL per network (last resort).
+fn public_rpc_url(network: &str) -> Option<&'static str> {
+    match network {
+        "base" => Some("https://mainnet.base.org"),
+        "mainnet" => Some("https://eth.llamarpc.com"),
+        "polygon" => Some("https://polygon-rpc.com"),
+        "arbitrum" => Some("https://arb1.arbitrum.io/rpc"),
+        "optimism" => Some("https://mainnet.optimism.io"),
+        "base-sepolia" => Some("https://sepolia.base.org"),
+        _ => None,
+    }
+}
+
+/// DeFi Relay x402 URL for a network.
+fn defirelay_url(network: &str) -> String {
+    if let Some((url, _)) = get_rpc_endpoint("defirelay", network) {
+        url
+    } else {
+        format!("https://rpc.defirelay.com/rpc/light/{}", network)
+    }
+}
+
+/// Canonical RPC resolution: Custom → Alchemy → DeFi Relay (x402).
+///
+/// Use this for codepaths that go through X402EvmRpc (which handles 402 responses).
+pub fn resolve_rpc(network: &str) -> ResolvedRpcConfig {
+    // Tier 0: User-configured custom endpoint (from bot_settings)
+    if let Some(url) = custom_rpc_url(network) {
+        log::info!("[rpc_config] Custom endpoint for {}: {}", network, url);
+        return ResolvedRpcConfig { url, use_x402: false };
+    }
+
+    // Tier 1: Alchemy (free, no x402)
+    if let Some(key) = get_alchemy_api_key() {
+        if let Some(url) = alchemy_url(network, key) {
+            log::info!("[rpc_config] Tier 1 (Alchemy) for {}: {}", network, &url[..url.len().min(60)]);
+            return ResolvedRpcConfig { url, use_x402: false };
+        }
+    }
+
+    // Tier 2: DeFi Relay (x402 paid RPC)
+    let url = defirelay_url(network);
+    log::info!("[rpc_config] Tier 2 (DeFi Relay) for {}: {}", network, url);
+    ResolvedRpcConfig { url, use_x402: true }
+}
+
+/// Read-only RPC resolution for raw HTTP callers that can't handle x402 402-responses.
+/// Priority: Custom → Alchemy → Public → DeFi Relay.
+pub fn resolve_rpc_readonly(network: &str) -> ResolvedRpcConfig {
+    // Tier 0: User-configured custom endpoint (from bot_settings)
+    if let Some(url) = custom_rpc_url(network) {
+        log::info!("[rpc_config] Custom endpoint readonly for {}: {}", network, url);
+        return ResolvedRpcConfig { url, use_x402: false };
+    }
+
+    // Tier 1: Alchemy (free, no x402)
+    if let Some(key) = get_alchemy_api_key() {
+        if let Some(url) = alchemy_url(network, key) {
+            log::info!("[rpc_config] Tier 1 (Alchemy) readonly for {}: {}", network, &url[..url.len().min(60)]);
+            return ResolvedRpcConfig { url, use_x402: false };
+        }
+    }
+
+    // Tier 2: Public RPC (free, no x402)
+    if let Some(url) = public_rpc_url(network) {
+        log::info!("[rpc_config] Tier 2 (Public) readonly for {}: {}", network, url);
+        return ResolvedRpcConfig { url: url.to_string(), use_x402: false };
+    }
+
+    // Tier 3: DeFi Relay (x402 — caller may not handle this well)
+    let url = defirelay_url(network);
+    log::warn!("[rpc_config] Tier 3 (DeFi Relay) readonly fallback for {}: {} — caller may not handle x402", network, url);
+    ResolvedRpcConfig { url, use_x402: true }
+}
 
 /// RPC Provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -234,26 +365,7 @@ pub struct ResolvedRpcConfig {
 /// Resolve RPC configuration using default provider
 /// Used when tool context is not available (e.g., gateway RPC methods)
 pub fn resolve_rpc_from_network(network: &str) -> ResolvedRpcConfig {
-    match resolve_rpc_config("defirelay", None, network) {
-        Some((url, use_x402)) => {
-            log::info!(
-                "[rpc_config] Resolved RPC for {} (default provider): {} (x402={})",
-                network,
-                url,
-                use_x402
-            );
-            ResolvedRpcConfig { url, use_x402 }
-        }
-        None => {
-            let url = format!("https://rpc.defirelay.com/rpc/light/{}", network);
-            log::info!(
-                "[rpc_config] Using fallback RPC for {}: {} (x402=true)",
-                network,
-                url
-            );
-            ResolvedRpcConfig { url, use_x402: true }
-        }
-    }
+    resolve_rpc(network)
 }
 
 /// Extract and resolve RPC configuration from ToolContext.extra
@@ -271,25 +383,27 @@ pub fn resolve_rpc_from_context(
         .get("custom_rpc_endpoints")
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-    match resolve_rpc_config(rpc_provider, custom_endpoints.as_ref(), network) {
-        Some((url, use_x402)) => {
-            log::info!(
-                "[rpc_config] Resolved RPC for {}: {} (x402={})",
-                network,
-                url,
-                use_x402
-            );
-            ResolvedRpcConfig { url, use_x402 }
-        }
-        None => {
-            // Fallback to default defirelay URL
-            let url = format!("https://rpc.defirelay.com/rpc/light/{}", network);
-            log::info!(
-                "[rpc_config] Using fallback RPC for {}: {} (x402=true)",
-                network,
-                url
-            );
-            ResolvedRpcConfig { url, use_x402: true }
+    // Custom endpoints take highest precedence (user-configured, no x402)
+    if let Some(ref endpoints) = custom_endpoints {
+        if let Some(url) = endpoints.get(network) {
+            if !url.is_empty() {
+                log::info!("[rpc_config] Custom endpoint for {}: {}", network, url);
+                return ResolvedRpcConfig { url: url.clone(), use_x402: false };
+            }
         }
     }
+
+    // Check if user configured a non-default provider in the RON config
+    if rpc_provider != "defirelay" {
+        if let Some((url, use_x402)) = resolve_rpc_config(rpc_provider, None, network) {
+            log::info!(
+                "[rpc_config] Provider '{}' for {}: {} (x402={})",
+                rpc_provider, network, url, use_x402
+            );
+            return ResolvedRpcConfig { url, use_x402 };
+        }
+    }
+
+    // Delegate to unified 3-tier resolver
+    resolve_rpc(network)
 }
