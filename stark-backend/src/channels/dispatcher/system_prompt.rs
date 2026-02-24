@@ -169,7 +169,7 @@ impl MessageDispatcher {
         // In safe mode, only show curated safemode memories.
         // In standard mode, show top long-term memories + today's log + query-relevant results.
         {
-            let mem_identity: Option<&str> = if is_safe_mode { Some("safemode") } else { Some(identity_id) };
+            let mem_identity: Option<&str> = if is_safe_mode { Some("safemode") } else { None };
 
             if is_safe_mode {
                 // Safe mode: only inject curated safemode long-term memories

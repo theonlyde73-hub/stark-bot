@@ -129,11 +129,12 @@ impl Tool for MemorySearchTool {
         let safe_mode = is_safe_mode(context);
         let result_limit = params.limit.unwrap_or(10).min(50).max(1);
 
-        // Identity filter for safe mode
+        // Identity filter: safe mode restricts to safemode identity only;
+        // standard mode searches ALL memories (no identity filter).
         let identity_id: Option<&str> = if safe_mode {
             Some(SAFE_MODE_IDENTITY)
         } else {
-            context.identity_id.as_deref()
+            None
         };
 
         // Extract agent_subtype from tool context for search boost
@@ -256,11 +257,9 @@ impl Tool for MemorySearchTool {
                         let mut graph_entries = Vec::new();
                         for (neighbor_id, strength) in &neighbors {
                             if let Ok(Some(mem)) = db.get_memory(*neighbor_id) {
-                                // Apply identity filter in safe mode
-                                if let Some(id_filter) = identity_id {
-                                    if mem.identity_id.as_deref() != Some(id_filter) {
-                                        continue;
-                                    }
+                                // In safe mode, only show safemode-identity memories
+                                if safe_mode && mem.identity_id.as_deref() != Some(SAFE_MODE_IDENTITY) {
+                                    continue;
                                 }
                                 graph_entries.push((mem, *strength));
                             }

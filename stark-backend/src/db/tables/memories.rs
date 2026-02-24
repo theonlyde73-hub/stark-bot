@@ -657,3 +657,94 @@ pub enum MergeStrategy {
     /// Use caller-provided content
     Custom(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::db::Database;
+
+    fn setup_db() -> Database {
+        Database::new(":memory:").expect("in-memory db")
+    }
+
+    #[test]
+    fn test_fts_no_identity_filter_finds_null_identity_memories() {
+        let db = setup_db();
+        // Insert a memory with NULL identity (standard mode behavior)
+        db.insert_memory(
+            "daily_log", "I created an Excalidraw file with shapes and arrows",
+            None, None, 5, None, None, None, None,
+            Some("session_completion"), Some("2026-02-23"), None,
+        ).unwrap();
+
+        // Search with identity_id = None should find it
+        let results = db.search_memories_fts("excalidraw", None, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].0.content.contains("Excalidraw"));
+    }
+
+    #[test]
+    fn test_fts_identity_filter_excludes_null_identity_memories() {
+        let db = setup_db();
+        // Insert a memory with NULL identity
+        db.insert_memory(
+            "daily_log", "I created an Excalidraw file with shapes",
+            None, None, 5, None, None, None, None,
+            Some("session_completion"), Some("2026-02-23"), None,
+        ).unwrap();
+
+        // Search with a specific identity_id should NOT find NULL-identity memories
+        let results = db.search_memories_fts("excalidraw", Some("some-uuid"), 10).unwrap();
+        assert_eq!(results.len(), 0, "identity-filtered search should not match NULL-identity memories");
+    }
+
+    #[test]
+    fn test_fts_safe_mode_only_finds_safemode_memories() {
+        let db = setup_db();
+        // Insert a safemode memory
+        db.insert_memory(
+            "long_term", "The user prefers dark mode in the UI",
+            None, None, 7, Some("safemode"), None, None, None,
+            None, None, None,
+        ).unwrap();
+        // Insert a standard memory (NULL identity)
+        db.insert_memory(
+            "daily_log", "Discussed dark mode implementation details",
+            None, None, 5, None, None, None, None,
+            Some("session_completion"), Some("2026-02-23"), None,
+        ).unwrap();
+
+        // Safe mode search: only safemode identity
+        let safe_results = db.search_memories_fts("dark mode", Some("safemode"), 10).unwrap();
+        assert_eq!(safe_results.len(), 1);
+        assert_eq!(safe_results[0].0.identity_id.as_deref(), Some("safemode"));
+
+        // Standard mode search: no identity filter, finds ALL
+        let all_results = db.search_memories_fts("dark mode", None, 10).unwrap();
+        assert_eq!(all_results.len(), 2, "standard mode should find all memories regardless of identity");
+    }
+
+    #[test]
+    fn test_fts_standard_mode_finds_all_identities() {
+        let db = setup_db();
+        // Insert memories with different identities
+        db.insert_memory(
+            "daily_log", "Built a trading bot for DeFi",
+            None, None, 5, Some("uuid-web-user"), None, None, None,
+            None, None, None,
+        ).unwrap();
+        db.insert_memory(
+            "daily_log", "Deployed the trading bot to production",
+            None, None, 5, Some("uuid-discord-user"), None, None, None,
+            None, None, None,
+        ).unwrap();
+        db.insert_memory(
+            "daily_log", "Trading bot performance metrics look good",
+            None, None, 5, None, None, None, None, // NULL identity
+            None, None, None,
+        ).unwrap();
+
+        // Standard mode (None identity filter) should find all 3
+        let results = db.search_memories_fts("trading bot", None, 10).unwrap();
+        assert_eq!(results.len(), 3, "standard mode should find memories from all identities including NULL");
+    }
+}

@@ -460,7 +460,8 @@ impl SubAgentManager {
             if fts_query.is_empty() {
                 String::new()
             } else {
-                let mem_identity = context.identity_id.as_deref();
+                // Standard mode searches all memories; safe mode handled upstream
+                let mem_identity: Option<&str> = None;
                 match db.search_memories_fts(&fts_query, mem_identity, 10) {
                     Ok(results) if !results.is_empty() => {
                         let mut hint = String::from("\n\n## Relevant Memories\n");

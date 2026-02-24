@@ -880,7 +880,7 @@ impl MessageDispatcher {
         log::debug!("[DISPATCH] System prompt:\n{}", system_prompt);
 
         // Build context with cross-session memory integration
-        let memory_identity: Option<&str> = if is_safe_mode { Some("safemode") } else { Some(&identity.identity_id) };
+        let memory_identity: Option<&str> = if is_safe_mode { Some("safemode") } else { None };
         let (history, context_summary) = self.context_manager.build_context_with_memories(
             session.id,
             memory_identity,
