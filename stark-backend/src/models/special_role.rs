@@ -25,6 +25,18 @@ pub struct SpecialRoleAssignment {
     pub created_at: String,
 }
 
+/// Links a (channel_type, platform_role_id) pair to a special role.
+/// Maps e.g. a Discord role → a StarkBot special role.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpecialRoleRoleAssignment {
+    pub id: i64,
+    pub channel_type: String,
+    pub platform_role_id: String,
+    pub special_role_name: String,
+    pub label: Option<String>,
+    pub created_at: String,
+}
+
 /// Grant set for a specific user — the single role's tools/skills (one role per user/channel).
 /// Both tools and skills are referenced by exact name.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -265,6 +265,7 @@ impl Scheduler {
             session_mode: Some("isolated".to_string()),
             selected_network: None,
             force_safe_mode: false,
+            platform_role_ids: vec![],
         };
 
         // Execute with 10-minute timeout (same as cron default)
@@ -423,6 +424,7 @@ impl Scheduler {
             session_mode: Some(job.session_mode.clone()),
             selected_network: None,
             force_safe_mode: false,
+            platform_role_ids: vec![],
         };
 
         // Execute the job with timeout

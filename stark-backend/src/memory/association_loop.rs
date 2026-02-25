@@ -441,24 +441,24 @@ async fn auto_backfill_embeddings_if_needed(
     };
 
     let mut generated = 0;
-    for (memory_id, content) in &memories {
-        match embedding_generator.generate(content).await {
-            Ok(embedding) => {
-                let dims = embedding.len() as i32;
-                if let Err(e) = db.upsert_memory_embedding(*memory_id, &embedding, "auto_backfill", dims) {
-                    log::warn!("Failed to store embedding for memory {}: {}", memory_id, e);
-                    continue;
+    for chunk in memories.chunks(64) {
+        let texts: Vec<String> = chunk.iter().map(|(_, content)| content.clone()).collect();
+        match embedding_generator.generate_batch(&texts).await {
+            Ok(embeddings) => {
+                for ((memory_id, _), embedding) in chunk.iter().zip(embeddings.iter()) {
+                    let dims = embedding.len() as i32;
+                    if let Err(e) = db.upsert_memory_embedding(*memory_id, embedding, "auto_backfill", dims) {
+                        log::warn!("Failed to store embedding for memory {}: {}", memory_id, e);
+                        continue;
+                    }
+                    generated += 1;
                 }
-                generated += 1;
             }
             Err(e) => {
-                // If the embedding server is unreachable, stop trying
-                log::warn!("[Association] Embedding generation failed, stopping auto-backfill: {}", e);
+                log::warn!("[Association] Batch embedding generation failed, stopping auto-backfill: {}", e);
                 break;
             }
         }
-        // Rate limit
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 
     if generated > 0 {
@@ -527,41 +527,62 @@ pub async fn run_association_pass(
     );
 
     // 3. Load all existing embeddings
-    let all_embeddings = load_all_embeddings(db)?;
+    let mut all_embeddings = load_all_embeddings(db)?;
+
+    // 3b. Batch-generate missing embeddings upfront (chunks of 64)
+    {
+        let embedded_ids: HashSet<i64> = all_embeddings.iter().map(|(id, _)| *id).collect();
+        let missing: Vec<&MemoryMeta> = memories_to_process
+            .iter()
+            .filter(|m| !embedded_ids.contains(&m.id))
+            .copied()
+            .collect();
+
+        if !missing.is_empty() {
+            log::info!(
+                "[Association] Batch-generating {} missing embeddings",
+                missing.len()
+            );
+            for chunk in missing.chunks(64) {
+                let texts: Vec<String> = chunk.iter().map(|m| m.content.clone()).collect();
+                match embedding_generator.generate_batch(&texts).await {
+                    Ok(embeddings) => {
+                        for (meta, embedding) in chunk.iter().zip(embeddings.iter()) {
+                            if let Err(e) = store_embedding(db, meta.id, embedding) {
+                                log::warn!(
+                                    "Failed to store embedding for memory {}: {}",
+                                    meta.id, e
+                                );
+                                continue;
+                            }
+                            all_embeddings.push((meta.id, embedding.clone()));
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[Association] Batch embedding generation failed: {}",
+                            e
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     let mut total_created: usize = 0;
     let mut type_counts: HashMap<&str, usize> = HashMap::new();
 
     for source_meta in &memories_to_process {
-        // 4. Ensure this memory has an embedding
+        // 4. Look up this memory's embedding (should exist after batch generation)
         let embedding = match find_embedding(&all_embeddings, source_meta.id) {
             Some(emb) => emb.clone(),
             None => {
-                // Generate embedding if missing
-                match embedding_generator.generate(&source_meta.content).await {
-                    Ok(emb) => {
-                        // Store the embedding
-                        if let Err(e) = store_embedding(db, source_meta.id, &emb) {
-                            log::warn!(
-                                "Failed to store embedding for memory {}: {}",
-                                source_meta.id,
-                                e
-                            );
-                            continue;
-                        }
-                        // Rate limit API calls
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                        emb
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to generate embedding for memory {}: {}",
-                            source_meta.id,
-                            e
-                        );
-                        continue;
-                    }
-                }
+                log::debug!(
+                    "No embedding available for memory {}, skipping",
+                    source_meta.id
+                );
+                continue;
             }
         };
 

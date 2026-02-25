@@ -417,24 +417,17 @@ struct KeystoreBackupResponse {
 }
 
 /// Sign a message with the burner wallet private key
-fn sign_message(private_key: &str, message: &str) -> Result<String, String> {
+async fn sign_message(private_key: &str, message: &str) -> Result<String, String> {
     use ethers::signers::{LocalWallet, Signer};
 
     let wallet: LocalWallet = private_key
         .parse()
         .map_err(|e| format!("Invalid private key: {}", e))?;
 
-    // Sign synchronously using the blocking runtime
-    let handle = tokio::runtime::Handle::current();
-    let message = message.to_string();
-    let signature = std::thread::spawn(move || {
-        handle.block_on(async {
-            wallet.sign_message(message).await
-        })
-    })
-    .join()
-    .expect("sign_message thread panicked")
-    .map_err(|e| format!("Failed to sign message: {}", e))?;
+    let signature = wallet
+        .sign_message(message)
+        .await
+        .map_err(|e| format!("Failed to sign message: {}", e))?;
 
     Ok(format!("0x{}", hex::encode(signature.to_vec())))
 }

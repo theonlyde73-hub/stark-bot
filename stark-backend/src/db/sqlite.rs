@@ -1697,6 +1697,24 @@ impl Database {
         );
 
         // =====================================================
+        // Special Role → Platform Role Assignments (Discord role mapping)
+        // =====================================================
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS special_role_role_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_type TEXT NOT NULL,
+                platform_role_id TEXT NOT NULL,
+                special_role_name TEXT NOT NULL,
+                label TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (special_role_name) REFERENCES special_roles(name) ON DELETE CASCADE,
+                UNIQUE(channel_type, platform_role_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_srra_lookup ON special_role_role_assignments(channel_type, platform_role_id);",
+        )?;
+
+        // =====================================================
         // Memory Associations Table (Knowledge Graph)
         // =====================================================
         conn.execute(

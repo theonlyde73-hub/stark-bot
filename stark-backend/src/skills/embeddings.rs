@@ -6,8 +6,6 @@ use crate::memory::EmbeddingGenerator;
 use crate::memory::vector_search;
 use crate::skills::types::DbSkill;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::sleep;
 
 /// Tag category constants — mirrors frontend groupings so skills in the same
 /// domain (e.g. all DeFi skills) get a similarity boost when building edges.
@@ -92,49 +90,36 @@ pub async fn backfill_skill_embeddings(
         return Ok(0);
     }
 
-    let mut count = 0;
-    let inter_request_delay = Duration::from_millis(200);
-
+    // Load all skills that need embeddings
+    let mut skills_to_embed: Vec<(i64, String, String)> = Vec::new();
     for skill_id in &missing_ids {
-        let skill = match db.get_skill_by_id(*skill_id) {
-            Ok(Some(s)) => s,
-            _ => continue,
-        };
+        if let Ok(Some(skill)) = db.get_skill_by_id(*skill_id) {
+            let text = build_skill_embedding_text(&skill);
+            skills_to_embed.push((*skill_id, skill.name.clone(), text));
+        }
+    }
 
-        let text = build_skill_embedding_text(&skill);
+    let mut count = 0;
 
-        // Retry up to 3 times with backoff for rate-limited requests
-        let mut result = None;
-        for attempt in 0..3 {
-            match embedding_gen.generate(&text).await {
-                Ok(embedding) => {
-                    result = Some(embedding);
-                    break;
-                }
-                Err(e) if e.contains("429") && attempt < 2 => {
-                    let backoff = Duration::from_secs((attempt + 1) as u64 * 2);
-                    log::debug!("[SKILL-EMB] Rate limited for '{}', retrying in {:?}", skill.name, backoff);
-                    sleep(backoff).await;
-                }
-                Err(e) => {
-                    log::warn!("[SKILL-EMB] Failed to generate embedding for skill '{}': {}", skill.name, e);
-                    break;
+    for chunk in skills_to_embed.chunks(64) {
+        let texts: Vec<String> = chunk.iter().map(|(_, _, text)| text.clone()).collect();
+        match embedding_gen.generate_batch(&texts).await {
+            Ok(embeddings) => {
+                for ((skill_id, name, _), embedding) in chunk.iter().zip(embeddings.iter()) {
+                    let dims = embedding.len() as i32;
+                    if let Err(e) = db.upsert_skill_embedding(*skill_id, embedding, "remote", dims) {
+                        log::warn!("[SKILL-EMB] Failed to store embedding for skill {}: {}", name, e);
+                    } else {
+                        count += 1;
+                        log::debug!("[SKILL-EMB] Generated embedding for skill '{}'", name);
+                    }
                 }
             }
-        }
-
-        if let Some(embedding) = result {
-            let dims = embedding.len() as i32;
-            if let Err(e) = db.upsert_skill_embedding(*skill_id, &embedding, "remote", dims) {
-                log::warn!("[SKILL-EMB] Failed to store embedding for skill {}: {}", skill.name, e);
-            } else {
-                count += 1;
-                log::debug!("[SKILL-EMB] Generated embedding for skill '{}'", skill.name);
+            Err(e) => {
+                log::warn!("[SKILL-EMB] Batch embedding generation failed: {}", e);
+                break;
             }
         }
-
-        // Pace requests to avoid overwhelming the embedding server
-        sleep(inter_request_delay).await;
     }
 
     log::info!("[SKILL-EMB] Backfilled {} skill embeddings", count);

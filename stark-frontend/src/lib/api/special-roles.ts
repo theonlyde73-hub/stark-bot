@@ -82,3 +82,37 @@ export async function deleteSpecialRoleAssignment(id: number): Promise<{ success
     method: 'DELETE',
   });
 }
+
+// --- Role Assignments (platform role → special role) ---
+
+export interface SpecialRoleRoleAssignmentInfo {
+  id: number;
+  channel_type: string;
+  platform_role_id: string;
+  special_role_name: string;
+  label: string | null;
+  created_at: string;
+}
+
+export async function getSpecialRoleRoleAssignments(roleName?: string): Promise<SpecialRoleRoleAssignmentInfo[]> {
+  const params = roleName ? `?role_name=${encodeURIComponent(roleName)}` : '';
+  return apiFetch(`/special-roles/role-assignments${params}`);
+}
+
+export async function createSpecialRoleRoleAssignment(assignment: {
+  channel_type: string;
+  platform_role_id: string;
+  special_role_name: string;
+  label?: string;
+}): Promise<SpecialRoleRoleAssignmentInfo> {
+  return apiFetch('/special-roles/role-assignments', {
+    method: 'POST',
+    body: JSON.stringify(assignment),
+  });
+}
+
+export async function deleteSpecialRoleRoleAssignment(id: number): Promise<{ success: boolean; message: string }> {
+  return apiFetch(`/special-roles/role-assignments/${id}`, {
+    method: 'DELETE',
+  });
+}

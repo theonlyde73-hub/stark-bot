@@ -76,6 +76,8 @@ pub struct ForwardRequest {
     pub is_admin: bool,
     /// Force safe mode for this request (e.g., non-admin Discord queries)
     pub force_safe_mode: bool,
+    /// Discord role IDs the user holds (for role-based special role resolution)
+    pub platform_role_ids: Vec<String>,
 }
 
 /// Check if text contains a "love" keyword (as a standalone word boundary)
@@ -225,6 +227,19 @@ pub async fn process(
         }
     );
 
+    // Fetch user's Discord role IDs for role-based special role resolution
+    let platform_role_ids: Vec<String> = if let Some(guild_id) = msg.guild_id {
+        match guild_id.member(&ctx.http, msg.author.id).await {
+            Ok(member) => member.roles.iter().map(|r| r.to_string()).collect(),
+            Err(e) => {
+                log::warn!("Discord hooks: Failed to fetch member roles for {}: {}", user_id, e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
     if is_admin {
         // Admin flow: forward everything to agent unless it matches a short-circuit keyword
         let cmd_lower = command_text.to_lowercase();
@@ -303,6 +318,7 @@ pub async fn process(
             user_name,
             is_admin: true,
             force_safe_mode: false,
+            platform_role_ids: platform_role_ids.clone(),
         }))
     } else {
         // Regular user: try limited commands
@@ -337,6 +353,7 @@ pub async fn process(
                     user_name,
                     is_admin: false,
                     force_safe_mode: true,
+                    platform_role_ids,
                 }))
             }
         }

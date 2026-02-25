@@ -10,20 +10,26 @@ import {
   getSpecialRoleAssignments,
   createSpecialRoleAssignment,
   deleteSpecialRoleAssignment,
+  getSpecialRoleRoleAssignments,
+  createSpecialRoleRoleAssignment,
+  deleteSpecialRoleRoleAssignment,
   SpecialRoleInfo,
   SpecialRoleAssignmentInfo,
+  SpecialRoleRoleAssignmentInfo,
 } from '@/lib/api';
 
-type Tab = 'roles' | 'assignments';
+type Tab = 'roles' | 'assignments' | 'role_assignments';
 
 const CHANNEL_TYPES = ['discord', 'twitter', 'telegram', 'slack', 'external_channel'];
 const MAX_ROLES = 10;
 const MAX_ASSIGNMENTS = 100;
+const MAX_ROLE_ASSIGNMENTS = 100;
 
 export default function SpecialRoles() {
   const [activeTab, setActiveTab] = useState<Tab>('roles');
   const [roles, setRoles] = useState<SpecialRoleInfo[]>([]);
   const [assignments, setAssignments] = useState<SpecialRoleAssignmentInfo[]>([]);
+  const [roleAssignments, setRoleAssignments] = useState<SpecialRoleRoleAssignmentInfo[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -43,6 +49,11 @@ export default function SpecialRoles() {
   const [newAssignRoleName, setNewAssignRoleName] = useState('');
   const [newAssignLabel, setNewAssignLabel] = useState('');
 
+  // Role Assignments state (Discord role → special role)
+  const [newRoleAssignPlatformRoleId, setNewRoleAssignPlatformRoleId] = useState('');
+  const [newRoleAssignRoleName, setNewRoleAssignRoleName] = useState('');
+  const [newRoleAssignLabel, setNewRoleAssignLabel] = useState('');
+
   useEffect(() => {
     loadData();
   }, []);
@@ -56,12 +67,14 @@ export default function SpecialRoles() {
 
   const loadData = async () => {
     try {
-      const [rolesData, assignmentsData] = await Promise.all([
+      const [rolesData, assignmentsData, roleAssignmentsData] = await Promise.all([
         getSpecialRoles(),
         getSpecialRoleAssignments(),
+        getSpecialRoleRoleAssignments(),
       ]);
       setRoles(rolesData);
       setAssignments(assignmentsData);
+      setRoleAssignments(roleAssignmentsData);
       if (rolesData.length > 0 && !selectedRole) {
         selectRole(rolesData[0]);
       }
@@ -143,6 +156,7 @@ export default function SpecialRoles() {
       const remaining = roles.filter(r => r.name !== name);
       setRoles(remaining);
       setAssignments(prev => prev.filter(a => a.special_role_name !== name));
+      setRoleAssignments(prev => prev.filter(a => a.special_role_name !== name));
       if (selectedRole === name) {
         if (remaining.length > 0) {
           selectRole(remaining[0]);
@@ -190,6 +204,39 @@ export default function SpecialRoles() {
       setSuccess('Assignment deleted');
     } catch (err) {
       setError('Failed to delete assignment');
+    }
+  };
+
+  const handleCreateRoleAssignment = async () => {
+    if (!newRoleAssignPlatformRoleId.trim() || !newRoleAssignRoleName) {
+      setError('Discord Role ID and special role are required');
+      return;
+    }
+    setError(null);
+    try {
+      const created = await createSpecialRoleRoleAssignment({
+        channel_type: 'discord',
+        platform_role_id: newRoleAssignPlatformRoleId.trim(),
+        special_role_name: newRoleAssignRoleName,
+        label: newRoleAssignLabel.trim() || undefined,
+      });
+      setRoleAssignments(prev => [...prev, created]);
+      setNewRoleAssignPlatformRoleId('');
+      setNewRoleAssignLabel('');
+      setSuccess('Role assignment created');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to create role assignment';
+      setError(msg);
+    }
+  };
+
+  const handleDeleteRoleAssignment = async (id: number) => {
+    try {
+      await deleteSpecialRoleRoleAssignment(id);
+      setRoleAssignments(prev => prev.filter(a => a.id !== id));
+      setSuccess('Role assignment deleted');
+    } catch (err) {
+      setError('Failed to delete role assignment');
     }
   };
 
@@ -251,7 +298,17 @@ export default function SpecialRoles() {
               : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-600'
           }`}
         >
-          Assignments ({assignments.length})
+          User Assignments ({assignments.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('role_assignments')}
+          className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors border-b-2 -mb-px ${
+            activeTab === 'role_assignments'
+              ? 'border-stark-500 text-white'
+              : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-600'
+          }`}
+        >
+          Discord Role Mappings ({roleAssignments.length})
         </button>
       </div>
 
@@ -504,6 +561,108 @@ export default function SpecialRoles() {
         </Card>
       )}
 
+      {activeTab === 'role_assignments' && (
+        <Card className="rounded-t-none border-t-0">
+          <CardContent>
+            {/* Add role assignment form */}
+            <div className="flex flex-col sm:flex-row gap-3 mb-6 p-4 bg-slate-900/30 rounded-lg border border-slate-700/50">
+              <div className="flex-1 min-w-0">
+                <label className="block text-xs text-slate-500 mb-1">Discord Role ID</label>
+                <input
+                  type="text"
+                  value={newRoleAssignPlatformRoleId}
+                  onChange={e => setNewRoleAssignPlatformRoleId(e.target.value)}
+                  placeholder="123456789012345678"
+                  className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-stark-500"
+                />
+              </div>
+              <div className="flex-1 min-w-0">
+                <label className="block text-xs text-slate-500 mb-1">Special Role</label>
+                <select
+                  value={newRoleAssignRoleName}
+                  onChange={e => setNewRoleAssignRoleName(e.target.value)}
+                  className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-stark-500"
+                >
+                  <option value="">Select role...</option>
+                  {roles.map(r => (
+                    <option key={r.name} value={r.name}>{r.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex-1 min-w-0">
+                <label className="block text-xs text-slate-500 mb-1">Label</label>
+                <input
+                  type="text"
+                  value={newRoleAssignLabel}
+                  onChange={e => setNewRoleAssignLabel(e.target.value)}
+                  placeholder="e.g. Moderator"
+                  className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-stark-500"
+                />
+              </div>
+              <div className="flex items-end">
+                <Button onClick={handleCreateRoleAssignment} size="sm" disabled={roleAssignments.length >= MAX_ROLE_ASSIGNMENTS}>
+                  <Plus className="w-4 h-4 mr-1" />
+                  Map
+                </Button>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-500 mb-4">
+              Map a Discord role to a special role. Any Discord user with a mapped role will automatically get the special role's permissions when messaging the bot, without needing a direct user assignment.
+              To find a Discord role ID: Server Settings &rarr; Roles &rarr; right-click the role &rarr; Copy Role ID (requires Developer Mode).
+            </p>
+
+            {/* Role Assignments table */}
+            {roleAssignments.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-700/50">
+                      <th className="text-left py-2 px-3 text-slate-500 font-medium">Channel</th>
+                      <th className="text-left py-2 px-3 text-slate-500 font-medium">Discord Role ID</th>
+                      <th className="text-left py-2 px-3 text-slate-500 font-medium">Label</th>
+                      <th className="text-left py-2 px-3 text-slate-500 font-medium">Special Role</th>
+                      <th className="text-left py-2 px-3 text-slate-500 font-medium">Created</th>
+                      <th className="text-right py-2 px-3 text-slate-500 font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {roleAssignments.map(a => (
+                      <tr key={a.id} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                        <td className="py-2 px-3 text-slate-300">{a.channel_type}</td>
+                        <td className="py-2 px-3 text-slate-300 font-mono text-xs">{a.platform_role_id}</td>
+                        <td className="py-2 px-3 text-slate-400 text-xs">{a.label || '\u2014'}</td>
+                        <td className="py-2 px-3">
+                          <span className="px-2 py-0.5 bg-stark-500/20 text-stark-400 rounded text-xs font-medium">
+                            {a.special_role_name}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-slate-500 text-xs">
+                          {new Date(a.created_at).toLocaleDateString()}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          <button
+                            onClick={() => handleDeleteRoleAssignment(a.id)}
+                            className="text-red-400 hover:text-red-300 p-1"
+                            title="Delete role assignment"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-center py-8 text-slate-500">
+                <p>No Discord role mappings yet. Map a Discord role to a special role to grant permissions to all users with that role.</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* FAQ */}
       <div className="mt-8 p-4 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-slate-400 space-y-2">
         <p className="text-slate-300 font-medium">How Special Roles Work</p>
@@ -514,7 +673,10 @@ export default function SpecialRoles() {
           <strong className="text-slate-300">Roles</strong> are named permission bundles (e.g. <code className="text-xs bg-slate-700 px-1 rounded">power_user</code>) that grant extra tools and skills by name. They do nothing until assigned to a user.
         </p>
         <p>
-          <strong className="text-slate-300">Assignments</strong> link a role to a specific (channel type, user ID) pair. Each user can have at most one role per channel type.
+          <strong className="text-slate-300">User Assignments</strong> link a role to a specific (channel type, user ID) pair. Each user can have at most one role per channel type.
+        </p>
+        <p>
+          <strong className="text-slate-300">Discord Role Mappings</strong> map a Discord role ID to a special role. Any Discord user with that role automatically gets the special role's permissions &mdash; no individual user assignment needed. Direct user assignments take priority over role-based ones.
         </p>
         <p>
           <strong className="text-slate-300">Allowed Tools</strong> are standalone tools added directly to the user's safe mode allow list (e.g. giving someone <code className="text-xs bg-slate-700 px-1 rounded">web_fetch</code> access without a specific skill).

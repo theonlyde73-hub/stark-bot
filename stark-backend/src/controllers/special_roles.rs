@@ -419,6 +419,138 @@ async fn delete_assignment(
     }
 }
 
+// --- Role Assignments (platform role → special role) ---
+
+const MAX_SPECIAL_ROLE_ROLE_ASSIGNMENTS: usize = 100;
+
+#[derive(Deserialize)]
+struct RoleAssignmentQuery {
+    #[serde(default)]
+    role_name: Option<String>,
+}
+
+async fn list_role_assignments(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    query: web::Query<RoleAssignmentQuery>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+    match data.db.list_special_role_role_assignments(query.role_name.as_deref()) {
+        Ok(assignments) => HttpResponse::Ok().json(assignments),
+        Err(e) => {
+            log::error!("Failed to list special role role assignments: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Database error: {}", e)
+            }))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateRoleAssignmentRequest {
+    channel_type: String,
+    platform_role_id: String,
+    special_role_name: String,
+    #[serde(default)]
+    label: Option<String>,
+}
+
+async fn create_role_assignment(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    body: web::Json<CreateRoleAssignmentRequest>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    // Check limit
+    match data.db.count_special_role_role_assignments() {
+        Ok(count) if count >= MAX_SPECIAL_ROLE_ROLE_ASSIGNMENTS as i64 => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": format!("Maximum of {} role assignments allowed", MAX_SPECIAL_ROLE_ROLE_ASSIGNMENTS)
+            }));
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Database error: {}", e)
+            }));
+        }
+        _ => {}
+    }
+
+    // Validate channel_type — currently only "discord" is meaningful
+    if ChannelType::from_str(&body.channel_type).is_none() {
+        let valid: Vec<&str> = ChannelType::all().iter().map(|ct| ct.as_str()).collect();
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": format!(
+                "Invalid channel_type '{}'. Must be one of: {}",
+                body.channel_type,
+                valid.join(", ")
+            )
+        }));
+    }
+
+    // Verify role exists
+    match data.db.get_special_role(&body.special_role_name) {
+        Ok(None) => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": format!("Special role '{}' does not exist", body.special_role_name)
+            }));
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Database error: {}", e)
+            }));
+        }
+        Ok(Some(_)) => {}
+    }
+
+    match data.db.create_special_role_role_assignment(
+        &body.channel_type,
+        &body.platform_role_id,
+        &body.special_role_name,
+        body.label.as_deref(),
+    ) {
+        Ok(assignment) => HttpResponse::Created().json(assignment),
+        Err(e) => {
+            log::error!("Failed to create role assignment: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Database error: {}", e)
+            }))
+        }
+    }
+}
+
+async fn delete_role_assignment(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<i64>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    let id = path.into_inner();
+    match data.db.delete_special_role_role_assignment(id) {
+        Ok(true) => HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "message": format!("Role assignment #{} deleted", id)
+        })),
+        Ok(false) => HttpResponse::NotFound().json(serde_json::json!({
+            "error": format!("Role assignment #{} not found", id)
+        })),
+        Err(e) => {
+            log::error!("Failed to delete role assignment: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Database error: {}", e)
+            }))
+        }
+    }
+}
+
 // --- Grants lookup (for debugging) ---
 
 #[derive(Deserialize)]
@@ -454,6 +586,9 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("/assignments", web::get().to(list_assignments))
             .route("/assignments", web::post().to(create_assignment))
             .route("/assignments/{id}", web::delete().to(delete_assignment))
+            .route("/role-assignments", web::get().to(list_role_assignments))
+            .route("/role-assignments", web::post().to(create_role_assignment))
+            .route("/role-assignments/{id}", web::delete().to(delete_role_assignment))
             .route("/grants", web::get().to(get_grants))
             .route("/{name}", web::get().to(get_role))
             .route("/{name}", web::put().to(update_role))

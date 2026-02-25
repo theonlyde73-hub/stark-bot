@@ -213,7 +213,7 @@ impl Tool for MemorySearchTool {
         }
 
         // FTS mode: use DB full-text search + graph expansion (also used as hybrid fallback)
-        match db.search_memories_fts(&params.query, identity_id, result_limit) {
+        match db.search_memories_fts_user(&params.query, identity_id, result_limit) {
             Ok(results) => {
                 if results.is_empty() {
                     return ToolResult::success(format!(

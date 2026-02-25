@@ -283,7 +283,7 @@ async fn search(
 
     let limit = query.limit.clamp(1, 100);
 
-    match data.db.search_memories_fts(&query.query, query.identity_id.as_deref(), limit) {
+    match data.db.search_memories_fts_user(&query.query, query.identity_id.as_deref(), limit) {
         Ok(results) => {
             let seed_ids: Vec<i64> = results.iter().map(|(m, _)| m.id).collect();
 

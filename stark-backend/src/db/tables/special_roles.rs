@@ -3,7 +3,7 @@
 use chrono::Utc;
 use rusqlite::Result as SqliteResult;
 
-use crate::models::{SpecialRole, SpecialRoleAssignment, SpecialRoleGrants};
+use crate::models::{SpecialRole, SpecialRoleAssignment, SpecialRoleGrants, SpecialRoleRoleAssignment};
 use super::super::Database;
 
 impl Database {
@@ -180,6 +180,149 @@ impl Database {
             rusqlite::params![channel_type, user_id, role_name],
         )?;
         Ok(rows > 0)
+    }
+
+    // --- Role Assignments (platform role → special role) ---
+
+    /// List role assignments, optionally filtered by role_name.
+    pub fn list_special_role_role_assignments(&self, role_name: Option<&str>) -> SqliteResult<Vec<SpecialRoleRoleAssignment>> {
+        let conn = self.conn();
+        let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match role_name {
+            Some(name) => (
+                "SELECT id, channel_type, platform_role_id, special_role_name, label, created_at
+                 FROM special_role_role_assignments WHERE special_role_name = ?1 ORDER BY id",
+                vec![Box::new(name.to_string())],
+            ),
+            None => (
+                "SELECT id, channel_type, platform_role_id, special_role_name, label, created_at
+                 FROM special_role_role_assignments ORDER BY id",
+                vec![],
+            ),
+        };
+
+        let mut stmt = conn.prepare(sql)?;
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let assignments = stmt
+            .query_map(params_ref.as_slice(), |row| {
+                Ok(SpecialRoleRoleAssignment {
+                    id: row.get(0)?,
+                    channel_type: row.get(1)?,
+                    platform_role_id: row.get(2)?,
+                    special_role_name: row.get(3)?,
+                    label: row.get(4)?,
+                    created_at: row.get(5)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(assignments)
+    }
+
+    /// Create a role assignment. Returns the created record.
+    pub fn create_special_role_role_assignment(
+        &self,
+        channel_type: &str,
+        platform_role_id: &str,
+        special_role_name: &str,
+        label: Option<&str>,
+    ) -> SqliteResult<SpecialRoleRoleAssignment> {
+        let conn = self.conn();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO special_role_role_assignments (channel_type, platform_role_id, special_role_name, label, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![channel_type, platform_role_id, special_role_name, label, now],
+        )?;
+        let id = conn.last_insert_rowid();
+        Ok(SpecialRoleRoleAssignment {
+            id,
+            channel_type: channel_type.to_string(),
+            platform_role_id: platform_role_id.to_string(),
+            special_role_name: special_role_name.to_string(),
+            label: label.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    /// Delete a role assignment by ID. Returns true if deleted.
+    pub fn delete_special_role_role_assignment(&self, id: i64) -> SqliteResult<bool> {
+        let conn = self.conn();
+        let rows = conn.execute("DELETE FROM special_role_role_assignments WHERE id = ?1", [id])?;
+        Ok(rows > 0)
+    }
+
+    /// Delete a role assignment by composite key.
+    pub fn delete_special_role_role_assignment_by_key(
+        &self,
+        channel_type: &str,
+        platform_role_id: &str,
+    ) -> SqliteResult<bool> {
+        let conn = self.conn();
+        let rows = conn.execute(
+            "DELETE FROM special_role_role_assignments WHERE channel_type = ?1 AND platform_role_id = ?2",
+            rusqlite::params![channel_type, platform_role_id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Count total role assignments.
+    pub fn count_special_role_role_assignments(&self) -> SqliteResult<i64> {
+        let conn = self.conn();
+        conn.query_row("SELECT COUNT(*) FROM special_role_role_assignments", [], |row| row.get(0))
+    }
+
+    /// Hot-path: look up special role grants by platform role IDs.
+    /// Given a set of platform role IDs (e.g. Discord role snowflakes),
+    /// find the first matching role assignment and return its grants.
+    pub fn get_special_role_grants_by_role_ids(
+        &self,
+        channel_type: &str,
+        role_ids: &[String],
+    ) -> SqliteResult<SpecialRoleGrants> {
+        if role_ids.is_empty() {
+            return Ok(SpecialRoleGrants::default());
+        }
+
+        let conn = self.conn();
+        // Build IN clause with positional params
+        let placeholders: Vec<String> = (0..role_ids.len()).map(|i| format!("?{}", i + 2)).collect();
+        let sql = format!(
+            "SELECT sr.name, sr.allowed_tools, sr.allowed_skills, sr.description
+             FROM special_role_role_assignments srra
+             JOIN special_roles sr ON sr.name = srra.special_role_name
+             WHERE srra.channel_type = ?1 AND srra.platform_role_id IN ({})
+             LIMIT 1",
+            placeholders.join(", ")
+        );
+
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(1 + role_ids.len());
+        params.push(Box::new(channel_type.to_string()));
+        for rid in role_ids {
+            params.push(Box::new(rid.clone()));
+        }
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = conn.prepare(&sql)?;
+        let result = stmt.query_row(params_ref.as_slice(), |row| {
+            let name: String = row.get(0)?;
+            let tools_str: String = row.get(1)?;
+            let skills_str: String = row.get(2)?;
+            let description: Option<String> = row.get(3)?;
+            Ok((name, tools_str, skills_str, description))
+        });
+
+        match result {
+            Ok((name, tools_str, skills_str, description)) => {
+                Ok(SpecialRoleGrants {
+                    role_name: Some(name),
+                    description,
+                    extra_tools: serde_json::from_str(&tools_str).unwrap_or_default(),
+                    extra_skills: serde_json::from_str(&skills_str).unwrap_or_default(),
+                })
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(SpecialRoleGrants::default()),
+            Err(e) => Err(e),
+        }
     }
 
     /// Get special role grants for a user on a channel (hot-path for dispatcher).

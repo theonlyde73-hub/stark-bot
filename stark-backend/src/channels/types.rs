@@ -88,6 +88,10 @@ pub struct NormalizedMessage {
     /// Force safe mode for this message (e.g., non-admin Discord queries)
     #[serde(default)]
     pub force_safe_mode: bool,
+    /// Platform role IDs the user holds (e.g. Discord role snowflakes).
+    /// Used for role-based special role resolution.
+    #[serde(default)]
+    pub platform_role_ids: Vec<String>,
 }
 
 /// Handle to a running channel listener

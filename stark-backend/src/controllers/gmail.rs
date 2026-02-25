@@ -233,6 +233,7 @@ async fn dispatch_email(
         session_mode: None,
         selected_network: None,
         force_safe_mode: false,
+        platform_role_ids: vec![],
     };
 
     // Broadcast event

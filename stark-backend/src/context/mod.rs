@@ -143,6 +143,8 @@ pub struct ContextManager {
     compaction_config: ThreeTierCompactionConfig,
     /// Optional in-memory session cache for fast reads of context_tokens / max_context_tokens
     active_cache: Option<Arc<ActiveSessionCache>>,
+    /// Optional hybrid search engine for semantic memory retrieval
+    hybrid_search: Option<Arc<crate::memory::HybridSearchEngine>>,
 }
 
 impl ContextManager {
@@ -156,7 +158,19 @@ impl ContextManager {
             sliding_window_config: SlidingWindowConfig::default(),
             compaction_config: ThreeTierCompactionConfig::default(),
             active_cache: None,
+            hybrid_search: None,
         }
+    }
+
+    /// Set the hybrid search engine for semantic memory retrieval (builder pattern)
+    pub fn with_hybrid_search(mut self, engine: Arc<crate::memory::HybridSearchEngine>) -> Self {
+        self.hybrid_search = Some(engine);
+        self
+    }
+
+    /// Set the hybrid search engine on an existing instance (mutable borrow)
+    pub fn set_hybrid_search(&mut self, engine: Arc<crate::memory::HybridSearchEngine>) {
+        self.hybrid_search = Some(engine);
     }
 
     /// Set the active session cache for fast session metadata reads
@@ -689,17 +703,20 @@ impl ContextManager {
     // ============================================
 
     /// Retrieve relevant memories from QMD store based on recent conversation
-    /// Returns formatted memory context if enabled and memories are found
-    pub fn retrieve_relevant_memories(
+    /// Returns formatted memory context if enabled and memories are found.
+    /// Tries hybrid search (FTS + vector + graph) first if available,
+    /// falls back to FTS-only with prefix matching.
+    pub async fn retrieve_relevant_memories(
         &self,
         identity_id: Option<&str>,
         recent_messages: &[SessionMessage],
-    ) -> Option<String> {
+    ) -> (Option<String>, Vec<String>) {
+        let mut warnings: Vec<String> = Vec::new();
         if !self.memory_config.enable_cross_session_memory {
-            return None;
+            return (None, warnings);
         }
 
-        // Build search query from last 3 user messages
+        // Build a natural language query from last 3 user messages
         let query_terms: Vec<String> = recent_messages
             .iter()
             .filter(|m| m.role == DbMessageRole::User)
@@ -716,21 +733,59 @@ impl ContextManager {
             .collect();
 
         if query_terms.is_empty() {
-            return None;
+            return (None, warnings);
         }
 
-        // Use prefix matching (word*) and OR for broader recall
-        let query = query_terms.iter()
+        let limit = self.memory_config.cross_session_memory_limit as usize;
+        let natural_query = query_terms.join(" ");
+
+        // Fast hybrid search: FTS + vector (1s timeout on embedding server) + graph.
+        // Called directly as async — no thread spawning needed.
+        if let Some(ref engine) = self.hybrid_search {
+            log::debug!("[MEMORY_RETRIEVAL] Fast search: {}", &natural_query);
+            match engine.search_fast(&natural_query, limit, None).await {
+                Ok(results) if !results.is_empty() => {
+                    log::info!(
+                        "[MEMORY_RETRIEVAL] Fast search found {} memories for identity {:?}",
+                        results.len(), identity_id
+                    );
+                    let formatted = results
+                        .iter()
+                        .map(|r| {
+                            let snippet: String = if r.content.chars().count() > 200 {
+                                let truncated: String = r.content.chars().take(200).collect();
+                                format!("{}...", truncated)
+                            } else {
+                                r.content.clone()
+                            };
+                            format!("- {}", snippet)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    return (Some(formatted), warnings);
+                }
+                Ok(_) => {
+                    log::debug!("[MEMORY_RETRIEVAL] Fast search returned no results, falling back to FTS");
+                }
+                Err(e) => {
+                    let msg = format!("Memory hybrid search failed: {}", e);
+                    log::warn!("[MEMORY_RETRIEVAL] {}", msg);
+                    warnings.push(msg);
+                }
+            }
+        }
+
+        // FTS fallback: use prefix matching (word*) and OR for broader recall
+        let fts_query = query_terms.iter()
             .map(|w| format!("{}*", w))
             .collect::<Vec<_>>()
             .join(" OR ");
-        log::debug!("[MEMORY_RETRIEVAL] Searching with query: {}", &query);
+        log::debug!("[MEMORY_RETRIEVAL] FTS search with query: {}", &fts_query);
 
-        let limit = self.memory_config.cross_session_memory_limit;
-        match self.db.search_memories_fts(&query, identity_id, limit) {
+        match self.db.search_memories_fts(&fts_query, identity_id, limit as i32) {
             Ok(results) if !results.is_empty() => {
                 log::info!(
-                    "[MEMORY_RETRIEVAL] Found {} relevant memories for identity {:?}",
+                    "[MEMORY_RETRIEVAL] FTS found {} relevant memories for identity {:?}",
                     results.len(), identity_id
                 );
 
@@ -749,33 +804,36 @@ impl ContextManager {
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                Some(formatted)
+                (Some(formatted), warnings)
             }
             Ok(_) => {
-                log::debug!("[MEMORY_RETRIEVAL] No relevant memories found");
-                None
+                log::debug!("[MEMORY_RETRIEVAL] No relevant memories found via FTS");
+                (None, warnings)
             }
             Err(e) => {
-                log::warn!("[MEMORY_RETRIEVAL] Search failed: {}", e);
-                None
+                let msg = format!("Memory FTS search failed: {}", e);
+                log::warn!("[MEMORY_RETRIEVAL] {}", msg);
+                warnings.push(msg);
+                (None, warnings)
             }
         }
     }
 
     /// Build context with optional memory retrieval
-    /// Returns (messages, combined_context_summary)
+    /// Returns (messages, combined_context_summary, warnings)
     /// The combined_context includes both compaction summary and cross-session memories
-    pub fn build_context_with_memories(
+    /// Warnings are surfaced to the gateway for live debug visibility.
+    pub async fn build_context_with_memories(
         &self,
         session_id: i64,
         identity_id: Option<&str>,
         limit: i32,
-    ) -> (Vec<SessionMessage>, Option<String>) {
+    ) -> (Vec<SessionMessage>, Option<String>, Vec<String>) {
         let messages = self.build_context(session_id, limit);
         let compaction_summary = self.get_compaction_summary(session_id);
 
         // Retrieve cross-session memories if enabled
-        let memory_context = self.retrieve_relevant_memories(identity_id, &messages);
+        let (memory_context, warnings) = self.retrieve_relevant_memories(identity_id, &messages).await;
 
         // Combine summaries
         let combined = match (compaction_summary, memory_context) {
@@ -788,7 +846,7 @@ impl ContextManager {
             (None, None) => None,
         };
 
-        (messages, combined)
+        (messages, combined, warnings)
     }
 
     /// Check the compaction urgency level based on current token usage

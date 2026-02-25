@@ -105,7 +105,11 @@ impl Database {
                 source_type, log_date, agent_subtype,
             ],
         )?;
-        Ok(conn.last_insert_rowid())
+        let id = conn.last_insert_rowid();
+        if let Err(e) = self.enforce_memory_cap() {
+            log::warn!("[MEMORY_CAP] Failed to enforce cap after insert: {}", e);
+        }
+        Ok(id)
     }
 
     /// Insert a memory with a specific created_at timestamp (for restore).
@@ -168,10 +172,35 @@ impl Database {
         Ok(deleted)
     }
 
+    /// Maximum number of memories to retain. Oldest are evicted first (FIFO).
+    const MAX_MEMORIES: i64 = 10_000;
+
     /// Count total memories in the table.
     pub fn count_memories(&self) -> Result<i64, rusqlite::Error> {
         let conn = self.conn();
         conn.query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+    }
+
+    /// Evict the oldest memories when the count exceeds MAX_MEMORIES.
+    /// Deletes in bulk via a single query. Embeddings and associations
+    /// are cleaned up automatically by ON DELETE CASCADE.
+    pub fn enforce_memory_cap(&self) -> Result<usize, rusqlite::Error> {
+        let conn = self.conn();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))?;
+        if count <= Self::MAX_MEMORIES {
+            return Ok(0);
+        }
+        let excess = count - Self::MAX_MEMORIES;
+        let deleted = conn.execute(
+            "DELETE FROM memories WHERE id IN (
+                SELECT id FROM memories ORDER BY created_at ASC LIMIT ?1
+            )",
+            rusqlite::params![excess],
+        )?;
+        if deleted > 0 {
+            log::info!("[MEMORY_CAP] Evicted {} oldest memories (was {} / {} max)", deleted, count, Self::MAX_MEMORIES);
+        }
+        Ok(deleted)
     }
 
     /// Touch a memory's last_accessed timestamp (for decay tracking).
@@ -290,10 +319,17 @@ impl Database {
         self.get_daily_log_memories(&today, identity_id, limit)
     }
 
-    /// Sanitize a user query for safe use with FTS5 MATCH.
+    /// Sanitize a raw user query for safe use with FTS5 MATCH.
     /// Quotes each token to prevent FTS5 operators (AND, OR, NOT, NEAR, *)
     /// from being interpreted as syntax, then joins with OR for broader matching.
-    fn sanitize_fts5_query(query: &str) -> String {
+    /// Use this for user-facing search inputs. Internal callers that construct
+    /// their own FTS5 queries should call `search_memories_fts` directly.
+    pub fn search_memories_fts_user(
+        &self,
+        query: &str,
+        identity_id: Option<&str>,
+        limit: i32,
+    ) -> Result<Vec<(MemoryRow, f64)>, rusqlite::Error> {
         let tokens: Vec<String> = query
             .split_whitespace()
             .filter(|t| !t.is_empty())
@@ -303,22 +339,23 @@ impl Database {
             })
             .collect();
         if tokens.is_empty() {
-            return String::new();
+            return Ok(Vec::new());
         }
-        tokens.join(" OR ")
+        let sanitized = tokens.join(" OR ");
+        self.search_memories_fts(&sanitized, identity_id, limit)
     }
 
     /// FTS5 full-text search against the existing `memories_fts` virtual table.
     /// Returns matching memories with BM25 rank score (lower = better match).
-    /// Query tokens are joined with OR for broader matching (any token matches).
+    /// The query is passed directly to FTS5 MATCH — callers must ensure it is
+    /// valid FTS5 syntax. For user-facing search, use `search_memories_fts_user`.
     pub fn search_memories_fts(
         &self,
         query: &str,
         identity_id: Option<&str>,
         limit: i32,
     ) -> Result<Vec<(MemoryRow, f64)>, rusqlite::Error> {
-        let sanitized = Self::sanitize_fts5_query(query);
-        if sanitized.is_empty() {
+        if query.trim().is_empty() {
             return Ok(Vec::new());
         }
 
@@ -335,7 +372,7 @@ impl Database {
                     cols = MEMORY_SELECT_COLS_QUALIFIED
                 ),
                 vec![
-                    Box::new(sanitized) as Box<dyn rusqlite::types::ToSql>,
+                    Box::new(query.to_string()) as Box<dyn rusqlite::types::ToSql>,
                     Box::new(id.to_string()),
                     Box::new(limit),
                 ],
@@ -351,7 +388,7 @@ impl Database {
                     cols = MEMORY_SELECT_COLS_QUALIFIED
                 ),
                 vec![
-                    Box::new(sanitized) as Box<dyn rusqlite::types::ToSql>,
+                    Box::new(query.to_string()) as Box<dyn rusqlite::types::ToSql>,
                     Box::new(limit),
                 ],
             ),
@@ -799,20 +836,24 @@ mod tests {
             None, None, None,
         ).unwrap();
 
-        // Single word exact match works
+        // Raw FTS: single word exact match works
         let results = db.search_memories_fts("excalidraw", None, 10).unwrap();
         assert_eq!(results.len(), 1, "exact match should work");
 
-        // Plural (excalidraws) does NOT match singular
+        // Raw FTS: plural (excalidraws) does NOT match singular
         let results = db.search_memories_fts("excalidraws", None, 10).unwrap();
         assert_eq!(results.len(), 0, "plural should not match singular");
 
-        // Multi-word query uses OR logic — matches either word
+        // Raw FTS: space-separated words are implicit AND (both must match)
         let results = db.search_memories_fts("excalidraw trading", None, 10).unwrap();
-        assert_eq!(results.len(), 2, "OR logic should find both memories");
+        assert_eq!(results.len(), 0, "raw FTS uses implicit AND — no single memory has both words");
 
-        // Query with special FTS5 chars is safely quoted
-        let results = db.search_memories_fts("shapes AND arrows", None, 10).unwrap();
+        // User-facing sanitized search: multi-word query uses OR logic
+        let results = db.search_memories_fts_user("excalidraw trading", None, 10).unwrap();
+        assert_eq!(results.len(), 2, "sanitized OR logic should find both memories");
+
+        // User-facing sanitized search: FTS operators are safely quoted
+        let results = db.search_memories_fts_user("shapes AND arrows", None, 10).unwrap();
         assert_eq!(results.len(), 1, "FTS operators should be quoted and matched as words");
     }
 

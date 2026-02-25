@@ -215,6 +215,7 @@ impl TestHarness {
             session_mode: None,
             selected_network: None,
             force_safe_mode,
+            platform_role_ids: vec![],
         }
     }
 
@@ -915,6 +916,7 @@ async fn swap_flow_realistic() {
         session_mode: None,
         selected_network: None,
         force_safe_mode: false,
+        platform_role_ids: vec![],
     };
 
     eprintln!("  Dispatching: \"{}\"", msg.text);

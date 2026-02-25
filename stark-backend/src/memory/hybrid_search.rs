@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
+
+use moka::sync::Cache;
 
 use crate::db::Database;
 use super::embeddings::EmbeddingGenerator;
@@ -38,6 +41,14 @@ pub struct HybridSearchEngine {
     db: Arc<Database>,
     embedding_generator: Arc<dyn EmbeddingGenerator + Send + Sync>,
     backfill_running: Arc<AtomicBool>,
+    /// Cached embeddings: loaded once, invalidated on writes.
+    /// Key is a generation counter (always 0); value is the full embedding set.
+    embeddings_cache: Cache<u64, Arc<Vec<(i64, Vec<f32>)>>>,
+    /// Bumped on every memory write to invalidate the embeddings cache.
+    embeddings_generation: Arc<AtomicU64>,
+    /// Cache of final hybrid search results keyed by query string.
+    /// Short TTL — just avoids re-running the same search within a burst.
+    search_cache: Cache<String, Arc<Vec<HybridSearchResult>>>,
 }
 
 impl HybridSearchEngine {
@@ -50,7 +61,26 @@ impl HybridSearchEngine {
             db,
             embedding_generator,
             backfill_running: Arc::new(AtomicBool::new(false)),
+            // Single-entry cache for embeddings; 60s TTL as safety net.
+            embeddings_cache: Cache::builder()
+                .max_capacity(1)
+                .time_to_live(Duration::from_secs(60))
+                .build(),
+            embeddings_generation: Arc::new(AtomicU64::new(0)),
+            // Cache recent search results for 30s to absorb bursts.
+            search_cache: Cache::builder()
+                .max_capacity(64)
+                .time_to_live(Duration::from_secs(30))
+                .build(),
         }
+    }
+
+    /// Call this after writing/updating/deleting memories or embeddings
+    /// to invalidate the in-memory caches.
+    pub fn invalidate_caches(&self) {
+        self.embeddings_generation.fetch_add(1, Ordering::SeqCst);
+        self.embeddings_cache.invalidate_all();
+        self.search_cache.invalidate_all();
     }
 
     /// Get a reference to the embedding generator.
@@ -66,6 +96,13 @@ impl HybridSearchEngine {
         limit: usize,
         agent_subtype: Option<&str>,
     ) -> Result<Vec<HybridSearchResult>, String> {
+        // Check search result cache first
+        let cache_key = format!("{}:{}:{}", query, limit, agent_subtype.unwrap_or(""));
+        if let Some(cached) = self.search_cache.get(&cache_key) {
+            log::debug!("[HYBRID_SEARCH] Cache hit for query: {:?}", query);
+            return Ok((*cached).clone());
+        }
+
         // 1. FTS5 search
         let fts_results = self.fts_search(query)?;
         log::debug!("[HYBRID_SEARCH] FTS returned {} results for query: {:?}", fts_results.len(), query);
@@ -94,6 +131,68 @@ impl HybridSearchEngine {
         }
 
         merged.truncate(limit);
+
+        // Cache the result
+        self.search_cache.insert(cache_key, Arc::new(merged.clone()));
+
+        Ok(merged)
+    }
+
+    /// Fast hybrid search for the chat hot-path.
+    /// Tries FTS + vector + graph but caps the embedding server call at 1 second.
+    /// If the embedding server doesn't respond in time, proceeds with FTS + graph only.
+    pub async fn search_fast(
+        &self,
+        query: &str,
+        limit: usize,
+        agent_subtype: Option<&str>,
+    ) -> Result<Vec<HybridSearchResult>, String> {
+        // Check search result cache first
+        let cache_key = format!("fast:{}:{}:{}", query, limit, agent_subtype.unwrap_or(""));
+        if let Some(cached) = self.search_cache.get(&cache_key) {
+            log::debug!("[HYBRID_SEARCH_FAST] Cache hit for query: {:?}", query);
+            return Ok((*cached).clone());
+        }
+
+        // 1. FTS5 search (local, fast)
+        let fts_results = self.fts_search(query)?;
+        log::debug!("[HYBRID_SEARCH_FAST] FTS returned {} results for query: {:?}", fts_results.len(), query);
+
+        // 2. Vector search with 1s timeout on the embedding server call
+        let vector_results = match tokio::time::timeout(
+            Duration::from_secs(1),
+            self.vector_search(query),
+        ).await {
+            Ok(results) => {
+                log::debug!("[HYBRID_SEARCH_FAST] Vector returned {} results", results.len());
+                results
+            }
+            Err(_) => {
+                log::warn!("[HYBRID_SEARCH_FAST] Embedding server timed out (>1s), skipping vector search");
+                Vec::new()
+            }
+        };
+
+        // 3. Graph expand from FTS+vector seeds
+        let seed_ids: Vec<i64> = fts_results.iter().map(|(id, _)| *id)
+            .chain(vector_results.iter().map(|(id, _)| *id))
+            .collect();
+        let graph_results = self.graph_expand(&seed_ids)?;
+        log::debug!("[HYBRID_SEARCH_FAST] Graph expanded to {} neighbors from {} seeds", graph_results.len(), seed_ids.len());
+
+        // 4. RRF merge
+        let mut merged = self.rrf_merge(&fts_results, &vector_results, &graph_results, limit * 2);
+
+        // 5. Apply subtype boost
+        if let Some(subtype) = agent_subtype {
+            if !subtype.is_empty() {
+                self.apply_subtype_boost(&mut merged, subtype);
+                merged.sort_by(|a, b| b.rrf_score.partial_cmp(&a.rrf_score).unwrap_or(std::cmp::Ordering::Equal));
+            }
+        }
+
+        merged.truncate(limit);
+        self.search_cache.insert(cache_key, Arc::new(merged.clone()));
         Ok(merged)
     }
 
@@ -199,11 +298,22 @@ impl HybridSearchEngine {
             .collect()
     }
 
-    /// Load all memory embeddings from the database.
+    /// Load all memory embeddings, using the in-memory moka cache.
     fn load_embeddings(&self) -> Result<Vec<(i64, Vec<f32>)>, String> {
-        self.db
+        let generation = self.embeddings_generation.load(Ordering::Relaxed);
+        if let Some(cached) = self.embeddings_cache.get(&generation) {
+            log::debug!("[HYBRID_SEARCH] Embeddings cache hit ({} vectors)", cached.len());
+            return Ok((*cached).clone());
+        }
+
+        log::debug!("[HYBRID_SEARCH] Loading embeddings from DB (generation {})", generation);
+        let embeddings = self.db
             .list_memory_embeddings()
-            .map_err(|e| format!("Failed to load memory embeddings: {}", e))
+            .map_err(|e| format!("Failed to load memory embeddings: {}", e))?;
+
+        log::info!("[HYBRID_SEARCH] Cached {} embeddings in memory", embeddings.len());
+        self.embeddings_cache.insert(generation, Arc::new(embeddings.clone()));
+        Ok(embeddings)
     }
 
     /// Expand from seed memory IDs to their graph neighbors.
@@ -355,6 +465,8 @@ impl HybridSearchEngine {
 
         let result = self.backfill_embeddings_inner().await;
         self.backfill_running.store(false, Ordering::SeqCst);
+        // Invalidate caches so next search picks up new embeddings
+        self.invalidate_caches();
         result
     }
 

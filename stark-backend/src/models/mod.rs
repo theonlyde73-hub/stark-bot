@@ -36,4 +36,4 @@ pub use cron_job::{
     UpdateHeartbeatConfigRequest,
 };
 pub use execution::{ExecutionTask, TaskMetrics, TaskStatus, TaskType};
-pub use special_role::{SpecialRole, SpecialRoleAssignment, SpecialRoleGrants};
+pub use special_role::{SpecialRole, SpecialRoleAssignment, SpecialRoleGrants, SpecialRoleRoleAssignment};

@@ -21,7 +21,7 @@ impl ModifySpecialRoleTool {
             "action".to_string(),
             PropertySchema {
                 schema_type: "string".to_string(),
-                description: "Action: 'list_roles', 'create_role', 'delete_role', 'list_assignments', 'assign_role', 'unassign_role'".to_string(),
+                description: "Action: 'list_roles', 'create_role', 'delete_role', 'list_assignments', 'assign_role', 'unassign_role', 'list_role_assignments', 'assign_discord_role', 'unassign_discord_role'".to_string(),
                 default: None,
                 items: None,
                 enum_values: Some(vec![
@@ -31,6 +31,9 @@ impl ModifySpecialRoleTool {
                     "list_assignments".to_string(),
                     "assign_role".to_string(),
                     "unassign_role".to_string(),
+                    "list_role_assignments".to_string(),
+                    "assign_discord_role".to_string(),
+                    "unassign_discord_role".to_string(),
                 ]),
             },
         );
@@ -120,6 +123,17 @@ impl ModifySpecialRoleTool {
         );
 
         properties.insert(
+            "platform_role_id".to_string(),
+            PropertySchema {
+                schema_type: "string".to_string(),
+                description: "Discord role ID (snowflake) for assign_discord_role / unassign_discord_role".to_string(),
+                default: None,
+                items: None,
+                enum_values: None,
+            },
+        );
+
+        properties.insert(
             "label".to_string(),
             PropertySchema {
                 schema_type: "string".to_string(),
@@ -161,6 +175,7 @@ struct Params {
     description: Option<String>,
     channel_type: Option<String>,
     user_id: Option<String>,
+    platform_role_id: Option<String>,
     label: Option<String>,
 }
 
@@ -358,8 +373,87 @@ impl Tool for ModifySpecialRoleTool {
                 }
             }
 
+            "list_role_assignments" => {
+                match db.list_special_role_role_assignments(params.role_name.as_deref()) {
+                    Ok(assignments) => {
+                        if assignments.is_empty() {
+                            return ToolResult::success("No role assignments (Discord role → special role mappings).");
+                        }
+                        let lines: Vec<String> = assignments
+                            .iter()
+                            .map(|a| {
+                                let label_part = a.label.as_deref()
+                                    .map(|l| format!(" ({})", l))
+                                    .unwrap_or_default();
+                                format!(
+                                    "- #{}: {} / role_id={}{} -> special role '{}'",
+                                    a.id, a.channel_type, a.platform_role_id, label_part, a.special_role_name
+                                )
+                            })
+                            .collect();
+                        ToolResult::success(format!(
+                            "Role assignments ({}):\n{}",
+                            assignments.len(),
+                            lines.join("\n")
+                        ))
+                        .with_metadata(json!({ "role_assignments": assignments }))
+                    }
+                    Err(e) => ToolResult::error(format!("Database error: {}", e)),
+                }
+            }
+
+            "assign_discord_role" => {
+                let role_name = match &params.role_name {
+                    Some(n) => n.as_str(),
+                    None => return ToolResult::error("'role_name' is required for assign_discord_role"),
+                };
+                let platform_role_id = match &params.platform_role_id {
+                    Some(id) => id.as_str(),
+                    None => return ToolResult::error("'platform_role_id' (Discord role ID) is required for assign_discord_role"),
+                };
+
+                // Check limit
+                match db.count_special_role_role_assignments() {
+                    Ok(count) if count >= 100 => {
+                        return ToolResult::error("Maximum of 100 role assignments allowed");
+                    }
+                    _ => {}
+                }
+
+                // Verify role exists
+                match db.get_special_role(role_name) {
+                    Ok(None) => return ToolResult::error(format!("Special role '{}' does not exist. Create it first.", role_name)),
+                    Err(e) => return ToolResult::error(format!("Database error: {}", e)),
+                    Ok(Some(_)) => {}
+                }
+
+                match db.create_special_role_role_assignment("discord", platform_role_id, role_name, params.label.as_deref()) {
+                    Ok(a) => ToolResult::success(format!(
+                        "Mapped Discord role {} -> special role '{}' (assignment #{})",
+                        a.platform_role_id, a.special_role_name, a.id
+                    )),
+                    Err(e) => ToolResult::error(format!("Failed to create role assignment: {}", e)),
+                }
+            }
+
+            "unassign_discord_role" => {
+                let platform_role_id = match &params.platform_role_id {
+                    Some(id) => id.as_str(),
+                    None => return ToolResult::error("'platform_role_id' (Discord role ID) is required for unassign_discord_role"),
+                };
+
+                match db.delete_special_role_role_assignment_by_key("discord", platform_role_id) {
+                    Ok(true) => ToolResult::success(format!(
+                        "Removed Discord role {} mapping",
+                        platform_role_id
+                    )),
+                    Ok(false) => ToolResult::error("Role assignment not found"),
+                    Err(e) => ToolResult::error(format!("Failed to delete role assignment: {}", e)),
+                }
+            }
+
             _ => ToolResult::error(format!(
-                "Unknown action: '{}'. Valid: list_roles, create_role, delete_role, list_assignments, assign_role, unassign_role",
+                "Unknown action: '{}'. Valid: list_roles, create_role, delete_role, list_assignments, assign_role, unassign_role, list_role_assignments, assign_discord_role, unassign_discord_role",
                 params.action
             )),
         }

@@ -302,6 +302,7 @@ impl EventHandler for DiscordHandler {
                         session_mode: None,
                         selected_network: None,
                         force_safe_mode: forward.force_safe_mode,
+                        platform_role_ids: forward.platform_role_ids,
                     };
 
                     self.dispatch_and_respond(&ctx, &msg, normalized, &user_name).await;

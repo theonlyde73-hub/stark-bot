@@ -65,10 +65,10 @@ StarkBot isn't a chatbot with a wallet taped on. It's an autonomous system that 
 
 | Method | What You Get |
 |--------|-------------|
+| **Docker (recommended)** | `./docker_run.sh run` — builds and runs everything locally. Easiest way to get started. |
 | **[DigitalOcean](https://cloud.digitalocean.com/apps/new?repo=https://github.com/ethereumdegen/stark-bot/tree/master)** | One-click deploy. Set env vars, done. |
-| **Docker** | `docker compose up` — production-ready with persistent storage. |
 | **Docker Dev** | `docker compose -f docker-compose.dev.yml up` — hot reload for both frontend and backend. |
-| **Local** | `cargo run -p stark-backend` — API + frontend on port 8080. |
+| **Local** | `cargo run -p stark-backend` — requires Rust toolchain + Node.js. |
 | **Railway** | Push to GitHub Container Registry, deploy from image. |
 
 ---
@@ -260,29 +260,22 @@ Memories decay over time. Identity memories are exempt. The graph is traversable
 
 ## Quick Start
 
-### Prerequisites
-
-- **Rust** 1.88+ ([rustup.rs](https://rustup.rs/))
-- **Node.js** 18+ (for frontend)
-- **SQLite3** (usually pre-installed on Linux)
-- **[uv](https://docs.astral.sh/uv/)** (for Python-based skill scripts)
-
-### Build and Run
+**The fastest way to get StarkBot running locally is with Docker:**
 
 ```bash
 git clone https://github.com/ethereumdegen/stark-bot
 cd stark-bot
-
-# Build frontend
-cd stark-frontend && npm install && npm run build && cd ..
-
-# Run (API + frontend on port 8080)
-cargo run -p stark-backend
+cp .env.template .env   # Edit .env with your wallet address + keys
+./docker_run.sh run     # Builds and starts everything — that's it
 ```
+
+This builds the Docker image, starts the backend + frontend, and serves the dashboard at **http://localhost:8080**. Press Ctrl+C to stop. No Rust toolchain, no Node.js, no manual build steps — just Docker.
+
+Other `docker_run.sh` commands: `daemon` (run in background), `down` (stop), `logs` (tail logs), `shell` (open a shell in the container), `status`.
 
 ### Configure
 
-Create a `.env` file:
+Create a `.env` file (or copy from `.env.template`):
 
 ```bash
 # Required: Ethereum address for SIWE login
@@ -307,14 +300,29 @@ RUST_LOG=info
 
 API keys are stored in the local SQLite database, not in environment variables. No secrets in `.env` beyond the wallet key.
 
+### Building from Source
+
+If you prefer to build natively without Docker:
+
+**Prerequisites:** Rust 1.88+ ([rustup.rs](https://rustup.rs/)), Node.js 18+, SQLite3, [uv](https://docs.astral.sh/uv/) (for Python-based skill scripts)
+
+```bash
+# Build frontend
+cd stark-frontend && npm install && npm run build && cd ..
+
+# Run (API + frontend on port 8080)
+cargo run -p stark-backend
+```
+
 ### Development Modes
 
 | Environment | Command | API | WebSocket | Frontend |
 |-------------|---------|-----|-----------|----------|
+| **Docker (easiest)** | `./docker_run.sh run` | :8080 | :8081 | :8080 |
+| **Docker background** | `./docker_run.sh daemon` | :8080 | :8081 | :8080 |
+| **Docker dev** | `docker compose -f docker-compose.dev.yml up` | internal | :8081 | :8080 |
 | **Local (combined)** | `cargo run -p stark-backend` | :8080 | :8081 | :8080 |
 | **Local (separate)** | `DISABLE_FRONTEND=1 cargo run` + `npm run dev` | :8080 | :8081 | :5173 |
-| **Docker dev** | `docker compose -f docker-compose.dev.yml up` | internal | :8081 | :8080 |
-| **Docker prod** | `docker compose up` | :8080 | :8081 | :8080 |
 
 ---
 

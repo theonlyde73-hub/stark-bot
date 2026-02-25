@@ -76,6 +76,7 @@ fn spawn_hook_session(
         session_mode: Some("isolated".to_string()),
         selected_network: None,
         force_safe_mode: safe_mode,
+        platform_role_ids: vec![],
     };
 
     log::info!(

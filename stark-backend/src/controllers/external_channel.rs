@@ -330,6 +330,7 @@ async fn gateway_chat(
         session_mode: None,
         selected_network: None,
         force_safe_mode: safe_mode,
+        platform_role_ids: vec![],
     };
 
     let result = state.dispatcher.dispatch_safe(normalized).await;
@@ -428,6 +429,7 @@ async fn gateway_chat_stream(
             session_mode: None,
             selected_network: None,
             force_safe_mode: safe_mode,
+            platform_role_ids: vec![],
         };
         let _ = dispatcher.dispatch_safe(normalized).await;
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;

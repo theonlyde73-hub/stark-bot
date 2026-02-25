@@ -532,6 +532,7 @@ pub async fn start_telegram_listener(
                         session_mode: None,
                         selected_network: None,
                         force_safe_mode,
+                        platform_role_ids: vec![],
                     };
 
                     // Subscribe to events for real-time tool call forwarding

@@ -124,6 +124,42 @@ async function getMemoryEntries(identityId?: string): Promise<ListFilesResponse>
 }
 
 async function searchMemory(query: string, limit = 20, identityId?: string): Promise<SearchResponse> {
+  // Use hybrid search (FTS + vector + graph) for better results.
+  // Falls back gracefully if embeddings aren't available.
+  try {
+    const params = new URLSearchParams({ query, limit: String(limit) });
+    const hybridResp = await apiFetch<{
+      success: boolean;
+      results: Array<{
+        memory_id: number;
+        content: string;
+        memory_type: string;
+        importance: number;
+        rrf_score: number;
+      }>;
+      error?: string;
+    }>(`/memory/hybrid-search?${params.toString()}`);
+
+    if (hybridResp.success && hybridResp.results.length > 0) {
+      return {
+        success: true,
+        query,
+        results: hybridResp.results.map(r => ({
+          memory_id: r.memory_id,
+          content: r.content,
+          memory_type: r.memory_type,
+          importance: r.importance,
+          score: r.rrf_score,
+          identity_id: identityId ?? null,
+          log_date: null,
+        })),
+      };
+    }
+  } catch {
+    // Hybrid unavailable — fall through to FTS
+  }
+
+  // Fallback: FTS-only search
   const params = new URLSearchParams({ query, limit: String(limit) });
   if (identityId) params.set('identity_id', identityId);
   return apiFetch(`/memory/search?${params.toString()}`);
@@ -267,7 +303,7 @@ function CalendarView({
   );
 }
 
-function SearchView({ onSelectMemory, identityFilter }: { onSelectMemory: (id: number) => void; identityFilter?: string }) {
+function SearchView({ onSelectMemory, identityFilter }: { onSelectMemory: (result: SearchResult) => void; identityFilter?: string }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -323,7 +359,7 @@ function SearchView({ onSelectMemory, identityFilter }: { onSelectMemory: (id: n
           {results.map((result) => (
             <button
               key={result.memory_id}
-              onClick={() => onSelectMemory(result.memory_id)}
+              onClick={() => onSelectMemory(result)}
               className="w-full text-left p-3 bg-slate-800/50 hover:bg-slate-700/50 rounded-lg transition-colors"
             >
               <div className="flex items-center gap-2 mb-1">
@@ -702,9 +738,9 @@ export default function MemoryBrowser() {
   }
 
   return (
-    <div className="p-8">
+    <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="mb-6">
+      <div className="flex-shrink-0 px-8 pt-8 pb-6">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-2xl font-bold text-white mb-1">Memory System</h1>
@@ -749,7 +785,7 @@ export default function MemoryBrowser() {
       </div>
 
       {error && (
-        <div className="mb-6 bg-red-500/20 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg flex items-center justify-between">
+        <div className="flex-shrink-0 mx-8 mb-4 bg-red-500/20 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg flex items-center justify-between">
           <span>{error}</span>
           <div className="flex items-center gap-3">
             <button onClick={loadData} className="text-red-300 hover:text-white text-sm font-medium">Retry</button>
@@ -760,14 +796,16 @@ export default function MemoryBrowser() {
 
       {/* Stats tab (full width) */}
       {viewMode === 'stats' && (
-        <StatsView stats={stats} />
+        <div className="flex-1 min-h-0 overflow-y-auto px-8 pb-8">
+          <StatsView stats={stats} />
+        </div>
       )}
 
       {/* Browse/Calendar/Search layouts (two column) */}
       {viewMode !== 'stats' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-3 gap-6 px-8 pb-8">
           {/* Left panel */}
-          <div className="lg:col-span-1">
+          <div className="lg:col-span-1 overflow-y-auto min-h-0">
             {viewMode === 'browse' && (
               <div className="space-y-4">
                 {/* Long-term memories */}
@@ -870,9 +908,17 @@ export default function MemoryBrowser() {
             )}
 
             {viewMode === 'search' && (
-              <SearchView identityFilter={identityFilter} onSelectMemory={(id) => {
-                // For now, just log. Could expand to show the specific memory.
-                console.log('Selected memory:', id);
+              <SearchView identityFilter={identityFilter} onSelectMemory={(result) => {
+                setSelectedMemories([{
+                  id: result.memory_id,
+                  content: result.content,
+                  memory_type: result.memory_type,
+                  importance: result.importance,
+                  identity_id: result.identity_id ?? null,
+                  log_date: result.log_date ?? null,
+                  created_at: '',
+                }]);
+                setSelectedLabel(`Memory #${result.memory_id}`);
               }} />
             )}
 
@@ -908,8 +954,8 @@ export default function MemoryBrowser() {
           </div>
 
           {/* Right panel: Memory viewer */}
-          <div className="lg:col-span-2">
-            <Card className="h-full min-h-[400px]">
+          <div className="lg:col-span-2 overflow-y-auto min-h-0">
+            <Card className="h-full">
               <CardContent>
                 {loadingContent ? (
                   <div className="flex items-center justify-center h-64">
@@ -924,7 +970,7 @@ export default function MemoryBrowser() {
                         <span className="text-sm text-slate-400">{selectedMemories.length} entries</span>
                       </div>
                     </div>
-                    <div className="max-h-[600px] overflow-y-auto space-y-3">
+                    <div className="space-y-3">
                       {selectedMemories.map((item) => (
                         <MemoryItemView key={item.id} item={item} />
                       ))}

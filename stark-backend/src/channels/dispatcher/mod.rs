@@ -245,8 +245,9 @@ impl MessageDispatcher {
         self
     }
 
-    /// Set the hybrid search engine
+    /// Set the hybrid search engine (shared with both tool context and context manager)
     pub fn with_hybrid_search(mut self, engine: Arc<crate::memory::HybridSearchEngine>) -> Self {
+        self.context_manager.set_hybrid_search(engine.clone());
         self.hybrid_search = Some(engine);
         self
     }
@@ -870,7 +871,74 @@ impl MessageDispatcher {
 
                     special_role_grants = Some(grants);
                 }
-                Ok(_) => {} // No special role
+                Ok(_) => {
+                    // No direct user assignment — try role-based assignment
+                    if !message.platform_role_ids.is_empty() {
+                        match self.db.get_special_role_grants_by_role_ids(&message.channel_type, &message.platform_role_ids) {
+                            Ok(role_grants) if !role_grants.is_empty() => {
+                                log::info!(
+                                    "[DISPATCH] Role-based special role enrichment for user {} on {}: role={:?}, +tools={:?}",
+                                    message.user_id, message.channel_type, role_grants.role_name, role_grants.extra_tools
+                                );
+                                for tool_name in &role_grants.extra_tools {
+                                    if !tool_config.allow_list.contains(tool_name) {
+                                        tool_config.allow_list.push(tool_name.clone());
+                                    }
+                                }
+
+                                if !role_grants.extra_skills.is_empty() {
+                                    if !tool_config.allow_list.iter().any(|t| t == "use_skill") {
+                                        tool_config.allow_list.push("use_skill".to_string());
+                                    }
+                                    tool_config.extra_skill_names = role_grants.extra_skills.clone();
+                                    let mut auto_tools: Vec<String> = Vec::new();
+                                    for skill_name in &role_grants.extra_skills {
+                                        match self.db.get_enabled_skill_by_name(skill_name) {
+                                            Ok(Some(skill)) => {
+                                                for req_tool in &skill.requires_tools {
+                                                    if !tool_config.allow_list.contains(req_tool)
+                                                        && !auto_tools.contains(req_tool)
+                                                    {
+                                                        auto_tools.push(req_tool.clone());
+                                                    }
+                                                }
+                                            }
+                                            Ok(None) => {
+                                                log::warn!(
+                                                    "[DISPATCH] Role-based grants skill '{}' but it doesn't exist or is disabled",
+                                                    skill_name
+                                                );
+                                            }
+                                            Err(e) => {
+                                                log::warn!(
+                                                    "[DISPATCH] Failed to look up skill '{}' for role-based grant: {}",
+                                                    skill_name, e
+                                                );
+                                            }
+                                        }
+                                    }
+                                    if !auto_tools.is_empty() {
+                                        log::info!(
+                                            "[DISPATCH] Role-based skill enrichment for {}: auto-granted tools {:?}",
+                                            message.user_id, auto_tools
+                                        );
+                                        tool_config.allow_list.extend(auto_tools);
+                                    }
+                                }
+
+                                if let Some(role_name) = &role_grants.role_name {
+                                    if let Err(e) = self.db.set_session_special_role(session.id, role_name) {
+                                        log::warn!("[DISPATCH] Failed to set session special_role: {}", e);
+                                    }
+                                }
+
+                                special_role_grants = Some(role_grants);
+                            }
+                            Ok(_) => {} // No role-based match either
+                            Err(e) => log::warn!("[DISPATCH] Failed to check role-based grants: {}", e),
+                        }
+                    }
+                }
                 Err(e) => log::warn!("[DISPATCH] Failed to check special role grants: {}", e),
             }
         }
@@ -896,11 +964,21 @@ impl MessageDispatcher {
 
         // Build context with cross-session memory integration
         let memory_identity: Option<&str> = if is_safe_mode { Some("safemode") } else { None };
-        let (history, context_summary) = self.context_manager.build_context_with_memories(
+        let (history, context_summary, memory_warnings) = self.context_manager.build_context_with_memories(
             session.id,
             memory_identity,
             20,
-        );
+        ).await;
+
+        // Broadcast any memory retrieval warnings to the gateway for live debug visibility
+        for warning in &memory_warnings {
+            self.broadcaster.broadcast(GatewayEvent::agent_warning(
+                message.channel_id,
+                "memory",
+                warning,
+                0,
+            ));
+        }
 
         // Build messages for the AI
         let mut messages = vec![Message {

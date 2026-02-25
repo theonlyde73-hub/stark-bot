@@ -340,13 +340,13 @@ impl Orchestrator {
             ));
         }
 
-        // Only include toolbox selection instructions when no subtype is active yet
-        if self.context.subtype.is_none() {
-            prompt.push_str(&Self::toolbox_select_prompt());
-            prompt.push_str("\n\n");
-        }
-
-        prompt.push_str(base_prompt);
+        // Replace {available_subtypes} placeholder with dynamic subtype list
+        let base_prompt = if base_prompt.contains("{available_subtypes}") {
+            base_prompt.replace("{available_subtypes}", &Self::generate_available_subtypes_list())
+        } else {
+            base_prompt.to_string()
+        };
+        prompt.push_str(&base_prompt);
 
         // Append channel-specific prompt sections
         if let Some(ch) = channel_type {
@@ -388,30 +388,38 @@ impl Orchestrator {
         table
     }
 
-    /// Generate the toolbox selection prompt dynamically from the registry.
-    fn toolbox_select_prompt() -> String {
+    /// Generate a compact list of all non-hidden, enabled subtypes for the director prompt.
+    /// Replaces the `{available_subtypes}` placeholder. Keeps each entry brief (~200 chars max).
+    /// Includes skill tags so the director knows what each subtype can do.
+    fn generate_available_subtypes_list() -> String {
         use super::types;
         let configs = types::all_subtype_configs();
-        if configs.is_empty() {
-            return include_str!("prompts/toolbox_select.md")
-                .replace("{available_subtypes}", &Self::generate_subtypes_table());
+        let domain_configs: Vec<_> = configs.iter()
+            .filter(|c| c.enabled && !c.hidden && !c.skill_tags.is_empty())
+            .collect();
+
+        if domain_configs.is_empty() {
+            return "No specialized subtypes available.".to_string();
         }
 
-        let mut prompt = String::from("## 🚨 FIRST THING: Select Your Toolbox 🚨\n\n");
-        prompt.push_str("**You start with NO tools available.** Before you can do ANYTHING, you MUST call `set_agent_subtype` to select your toolbox based on what the user wants:\n\n");
-        prompt.push_str("| User Wants | Toolbox | Call |\n");
-        prompt.push_str("|------------|---------|------|\n");
-        for c in &configs {
-            if c.skill_tags.is_empty() {
-                continue; // Skip orchestrator-only subtypes (e.g., Director)
-            }
-            prompt.push_str(&format!(
-                "| {} | `{}` | `set_agent_subtype(subtype=\"{}\")` |\n",
-                c.description, c.key, c.key
+        let mut list = String::new();
+        for c in &domain_configs {
+            let desc = if c.description.len() > 200 {
+                format!("{}...", &c.description[..200])
+            } else {
+                c.description.clone()
+            };
+            let tags = if c.skill_tags.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", c.skill_tags.join(", "))
+            };
+            list.push_str(&format!(
+                "- `{}` — {}{}\n",
+                c.key, desc, tags
             ));
         }
-        prompt.push_str("\n**YOUR FIRST TOOL CALL MUST BE `set_agent_subtype`.** No other tools will work until you select a toolbox.\n");
-        prompt
+        list
     }
 
     /// Format a summary of the current context for the prompt
@@ -425,12 +433,12 @@ impl Orchestrator {
         summary.push_str(&format!("**Request**: {}\n\n", self.context.original_request));
         if let Some(ref key) = self.context.subtype {
             summary.push_str(&format!(
-                "**Subtype**: {} {} (active — do NOT call `set_agent_subtype`, just proceed with tools)\n\n",
+                "**Subtype**: {} {}\n\n",
                 types::subtype_emoji(key),
                 types::subtype_label(key)
             ));
         } else {
-            summary.push_str("**Subtype**: None — call `set_agent_subtype` first based on the user's request\n\n");
+            summary.push_str("**Subtype**: None\n\n");
         }
 
         // Add selected network - this is the network the user has selected in the UI
