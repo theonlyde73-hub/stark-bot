@@ -1004,6 +1004,17 @@ async fn main() -> std::io::Result<()> {
         }
     }
 
+    // Rebuild FTS index on startup to ensure it's in sync with the memories table.
+    // This is cheap (takes <100ms for typical memory counts) and guarantees search works
+    // even if the index got out of sync from a restore, crash, or schema migration.
+    match db.rebuild_fts_index() {
+        Ok(()) => {
+            let count = db.count_memories().unwrap_or(0);
+            log::info!("[FTS] Rebuilt FTS index on startup ({} memories)", count);
+        }
+        Err(e) => log::warn!("[FTS] Failed to rebuild FTS index on startup: {}", e),
+    }
+
     // Create the shared MessageDispatcher for all message processing
     log::info!("Initializing message dispatcher");
     let mut dispatcher_builder = MessageDispatcher::new_with_wallet_and_skills(

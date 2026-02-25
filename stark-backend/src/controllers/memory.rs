@@ -595,16 +595,31 @@ async fn get_stats(data: web::Data<AppState>, req: HttpRequest) -> impl Responde
     }
 }
 
-/// POST /api/memory/reindex - No-op (FTS triggers handle sync automatically)
-async fn reindex(_data: web::Data<AppState>, req: HttpRequest) -> impl Responder {
-    // FTS is auto-synced via triggers on the memories table, so reindex is a no-op
-    HttpResponse::Ok().json(AppendResponse {
-        success: true,
-        message: Some("FTS index is auto-synced via triggers. No reindex needed.".to_string()),
-        memory_id: None,
-        similar_memories: None,
-        error: None,
-    })
+/// POST /api/memory/reindex - Rebuild the FTS5 index from the memories table
+async fn reindex(data: web::Data<AppState>, req: HttpRequest) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+
+    match data.db.rebuild_fts_index() {
+        Ok(()) => {
+            let count = data.db.count_memories().unwrap_or(0);
+            HttpResponse::Ok().json(AppendResponse {
+                success: true,
+                message: Some(format!("FTS index rebuilt from {} memories.", count)),
+                memory_id: None,
+                similar_memories: None,
+                error: None,
+            })
+        }
+        Err(e) => HttpResponse::InternalServerError().json(AppendResponse {
+            success: false,
+            message: None,
+            memory_id: None,
+            similar_memories: None,
+            error: Some(format!("Failed to rebuild FTS index: {}", e)),
+        }),
+    }
 }
 
 /// GET /api/memory/info - Get memory system info

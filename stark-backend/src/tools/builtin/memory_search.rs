@@ -49,8 +49,8 @@ impl MemorySearchTool {
             "mode".to_string(),
             PropertySchema {
                 schema_type: "string".to_string(),
-                description: "Search mode: 'fts' for full-text search only (default), 'hybrid' for combined FTS + vector + graph search using RRF ranking.".to_string(),
-                default: Some(json!("fts")),
+                description: "Search mode: 'hybrid' (default) for combined FTS + vector + graph search using RRF ranking (gracefully degrades to FTS-only if embeddings are unavailable), or 'fts' for full-text keyword search only.".to_string(),
+                default: Some(json!("hybrid")),
                 items: None,
                 enum_values: Some(vec!["fts".to_string(), "hybrid".to_string()]),
             },
@@ -87,7 +87,7 @@ struct SearchParams {
 }
 
 fn default_mode() -> String {
-    "fts".to_string()
+    "hybrid".to_string()
 }
 
 /// Check if tool context indicates safe mode
@@ -142,7 +142,8 @@ impl Tool for MemorySearchTool {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        // Hybrid mode: use combined FTS + vector + graph search
+        // Hybrid mode: use combined FTS + vector + graph search.
+        // Gracefully falls back to FTS-only if the hybrid engine is unavailable or fails.
         if params.mode == "hybrid" {
             if let Some(ref hybrid_engine) = context.hybrid_search {
                 match hybrid_engine.search(&params.query, result_limit as usize, agent_subtype.as_deref()).await {
@@ -203,15 +204,15 @@ impl Tool for MemorySearchTool {
                         }));
                     }
                     Err(e) => {
-                        return ToolResult::error(format!("Hybrid search failed: {}. Try mode='fts' as fallback.", e));
+                        log::warn!("[MEMORY_SEARCH] Hybrid search failed, falling back to FTS: {}", e);
+                        // Fall through to FTS below
                     }
                 }
-            } else {
-                return ToolResult::error("Hybrid search engine not available. Use mode='fts' for full-text search.");
             }
+            // Fall through: hybrid engine unavailable or failed → use FTS
         }
 
-        // FTS mode (default): use DB full-text search + graph expansion
+        // FTS mode: use DB full-text search + graph expansion (also used as hybrid fallback)
         match db.search_memories_fts(&params.query, identity_id, result_limit) {
             Ok(results) => {
                 if results.is_empty() {

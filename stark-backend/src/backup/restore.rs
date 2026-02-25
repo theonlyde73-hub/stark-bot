@@ -844,6 +844,12 @@ pub async fn restore_all(
         }
         if result.memories > 0 {
             log::info!("[Restore] Restored {} memories (embeddings + associations will be recomputed)", result.memories);
+            // Rebuild FTS index to ensure it's in sync after bulk restore
+            if let Err(e) = db.rebuild_fts_index() {
+                log::warn!("[Restore] Failed to rebuild FTS index after memory restore: {}", e);
+            } else {
+                log::info!("[Restore] FTS index rebuilt successfully after memory restore");
+            }
         }
     }
 

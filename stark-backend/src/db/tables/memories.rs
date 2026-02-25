@@ -290,14 +290,38 @@ impl Database {
         self.get_daily_log_memories(&today, identity_id, limit)
     }
 
+    /// Sanitize a user query for safe use with FTS5 MATCH.
+    /// Quotes each token to prevent FTS5 operators (AND, OR, NOT, NEAR, *)
+    /// from being interpreted as syntax, then joins with OR for broader matching.
+    fn sanitize_fts5_query(query: &str) -> String {
+        let tokens: Vec<String> = query
+            .split_whitespace()
+            .filter(|t| !t.is_empty())
+            .map(|token| {
+                let escaped = token.replace('"', "\"\"");
+                format!("\"{}\"", escaped)
+            })
+            .collect();
+        if tokens.is_empty() {
+            return String::new();
+        }
+        tokens.join(" OR ")
+    }
+
     /// FTS5 full-text search against the existing `memories_fts` virtual table.
     /// Returns matching memories with BM25 rank score (lower = better match).
+    /// Query tokens are joined with OR for broader matching (any token matches).
     pub fn search_memories_fts(
         &self,
         query: &str,
         identity_id: Option<&str>,
         limit: i32,
     ) -> Result<Vec<(MemoryRow, f64)>, rusqlite::Error> {
+        let sanitized = Self::sanitize_fts5_query(query);
+        if sanitized.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let conn = self.conn();
         let (sql, params) = match identity_id {
             Some(id) => (
@@ -311,7 +335,7 @@ impl Database {
                     cols = MEMORY_SELECT_COLS_QUALIFIED
                 ),
                 vec![
-                    Box::new(query.to_string()) as Box<dyn rusqlite::types::ToSql>,
+                    Box::new(sanitized) as Box<dyn rusqlite::types::ToSql>,
                     Box::new(id.to_string()),
                     Box::new(limit),
                 ],
@@ -327,7 +351,7 @@ impl Database {
                     cols = MEMORY_SELECT_COLS_QUALIFIED
                 ),
                 vec![
-                    Box::new(query.to_string()) as Box<dyn rusqlite::types::ToSql>,
+                    Box::new(sanitized) as Box<dyn rusqlite::types::ToSql>,
                     Box::new(limit),
                 ],
             ),
@@ -604,6 +628,18 @@ impl Database {
         rows.collect()
     }
 
+    /// Rebuild the FTS5 index from the external content table.
+    /// Use this when the FTS index gets out of sync (e.g., after restore,
+    /// or if the FTS table was created after memories already existed).
+    pub fn rebuild_fts_index(&self) -> Result<(), rusqlite::Error> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO memories_fts(memories_fts) VALUES('rebuild')",
+            [],
+        )?;
+        Ok(())
+    }
+
     /// Get memory statistics aggregated from the DB.
     pub fn get_memory_stats(
         &self,
@@ -749,29 +785,67 @@ mod tests {
     }
 
     #[test]
-    fn test_fts_prefix_matching_finds_plural_and_singular() {
+    fn test_fts_sanitized_query_or_logic() {
         let db = setup_db();
-        // Insert a memory with "excalidraw" (singular)
+        // Insert two memories with different keywords
         db.insert_memory(
             "daily_log", "I created an Excalidraw file with shapes and arrows",
             None, None, 5, None, None, None, None,
             None, None, None,
         ).unwrap();
+        db.insert_memory(
+            "daily_log", "Deployed the trading bot to production",
+            None, None, 5, None, None, None, None,
+            None, None, None,
+        ).unwrap();
 
-        // Exact match works
+        // Single word exact match works
         let results = db.search_memories_fts("excalidraw", None, 10).unwrap();
         assert_eq!(results.len(), 1, "exact match should work");
 
-        // Plural (excalidraws) does NOT match singular without prefix
+        // Plural (excalidraws) does NOT match singular
         let results = db.search_memories_fts("excalidraws", None, 10).unwrap();
-        assert_eq!(results.len(), 0, "plural should not match singular without prefix");
+        assert_eq!(results.len(), 0, "plural should not match singular");
 
-        // Prefix match (excalidraw*) matches the singular form
-        let results = db.search_memories_fts("excalidraw*", None, 10).unwrap();
-        assert_eq!(results.len(), 1, "prefix match should find singular");
+        // Multi-word query uses OR logic — matches either word
+        let results = db.search_memories_fts("excalidraw trading", None, 10).unwrap();
+        assert_eq!(results.len(), 2, "OR logic should find both memories");
 
-        // OR query with prefix matching (simulating the fixed query builder)
-        let results = db.search_memories_fts("excalidraws* OR shapes*", None, 10).unwrap();
-        assert_eq!(results.len(), 1, "OR with prefix should find the memory via shapes*");
+        // Query with special FTS5 chars is safely quoted
+        let results = db.search_memories_fts("shapes AND arrows", None, 10).unwrap();
+        assert_eq!(results.len(), 1, "FTS operators should be quoted and matched as words");
+    }
+
+    #[test]
+    fn test_fts_rebuild_resyncs_index() {
+        let db = setup_db();
+
+        // Insert memories normally (triggers keep FTS in sync)
+        db.insert_memory(
+            "long_term", "Andy likes jazz music and plays guitar",
+            None, Some("music,hobbies"), 7, None, None, None, None,
+            None, None, None,
+        ).unwrap();
+        db.insert_memory(
+            "daily_log", "Discussed favorite music genres today",
+            None, Some("music"), 5, None, None, None, None,
+            None, Some("2026-02-25"), None,
+        ).unwrap();
+
+        // Verify search works before rebuild
+        let results = db.search_memories_fts("music", None, 10).unwrap();
+        assert_eq!(results.len(), 2, "should find both music memories before rebuild");
+
+        // Rebuild FTS index
+        db.rebuild_fts_index().unwrap();
+
+        // Verify search still works after rebuild
+        let results = db.search_memories_fts("music", None, 10).unwrap();
+        assert_eq!(results.len(), 2, "should find both music memories after rebuild");
+
+        // Verify specific terms work
+        let results = db.search_memories_fts("guitar", None, 10).unwrap();
+        assert_eq!(results.len(), 1, "should find guitar memory after rebuild");
+        assert!(results[0].0.content.contains("guitar"));
     }
 }
