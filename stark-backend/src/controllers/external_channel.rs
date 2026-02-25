@@ -1,5 +1,6 @@
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
 
 use crate::channels::NormalizedMessage;
@@ -92,6 +93,12 @@ struct SseEvent {
     content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameters: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    success: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -449,10 +456,13 @@ async fn gateway_chat_stream(
             let sse = match event.event.as_str() {
                 "tool.call" => {
                     let tool_name = event.data.get("tool_name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let parameters = event.data.get("parameters").cloned();
                     Some(SseEvent {
                         event_type: "tool_call".to_string(),
                         content: None,
                         tool_name: Some(tool_name.to_string()),
+                        parameters,
+                        success: None, duration_ms: None,
                         label: None, agent_subtype: None, error: None, task_name: None,
                     })
                 }
@@ -460,22 +470,35 @@ async fn gateway_chat_stream(
                     let tool_name = event.data.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
                     let success = event.data.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
                     let content = event.data.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                    let duration_ms = event.data.get("duration_ms").and_then(|v| v.as_i64());
 
+                    // For say_to_user / task_fully_completed, also emit text so the
+                    // main response body is visible inline
                     if success && !content.is_empty() && (tool_name == "say_to_user" || tool_name == "task_fully_completed") {
-                        Some(SseEvent {
+                        // Send the text event first
+                        let text_event = SseEvent {
                             event_type: "text".to_string(),
                             content: Some(content.to_string()),
-                            tool_name: None,
+                            tool_name: None, parameters: None,
+                            success: None, duration_ms: None,
                             label: None, agent_subtype: None, error: None, task_name: None,
-                        })
-                    } else {
-                        Some(SseEvent {
-                            event_type: "tool_result".to_string(),
-                            content: None,
-                            tool_name: Some(tool_name.to_string()),
-                            label: None, agent_subtype: None, error: None, task_name: None,
-                        })
+                        };
+                        if let Ok(json) = serde_json::to_string(&text_event) {
+                            let _ = tx.send(web::Bytes::from(format!("data: {}\n\n", json))).await;
+                        }
                     }
+
+                    // Always emit the tool_result so the CLI can show tool activity
+                    let content_val = if !content.is_empty() { Some(content.to_string()) } else { None };
+                    Some(SseEvent {
+                        event_type: "tool_result".to_string(),
+                        content: content_val,
+                        tool_name: Some(tool_name.to_string()),
+                        parameters: None,
+                        success: Some(success),
+                        duration_ms,
+                        label: None, agent_subtype: None, error: None, task_name: None,
+                    })
                 }
                 "agent.response" => {
                     let content = event.data.get("content").and_then(|v| v.as_str()).unwrap_or("");
@@ -483,7 +506,8 @@ async fn gateway_chat_stream(
                         Some(SseEvent {
                             event_type: "text".to_string(),
                             content: Some(content.to_string()),
-                            tool_name: None,
+                            tool_name: None, parameters: None,
+                            success: None, duration_ms: None,
                             label: None, agent_subtype: None, error: None, task_name: None,
                         })
                     } else {
@@ -497,7 +521,8 @@ async fn gateway_chat_stream(
                     Some(SseEvent {
                         event_type: "subagent_spawned".to_string(),
                         content: task,
-                        tool_name: None,
+                        tool_name: None, parameters: None,
+                        success: None, duration_ms: None,
                         label: Some(label), agent_subtype, error: None, task_name: None,
                     })
                 }
@@ -505,7 +530,8 @@ async fn gateway_chat_stream(
                     let label = event.data.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     Some(SseEvent {
                         event_type: "subagent_completed".to_string(),
-                        content: None, tool_name: None,
+                        content: None, tool_name: None, parameters: None,
+                        success: None, duration_ms: None,
                         label: Some(label), agent_subtype: None, error: None, task_name: None,
                     })
                 }
@@ -514,7 +540,8 @@ async fn gateway_chat_stream(
                     let error = event.data.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error").to_string();
                     Some(SseEvent {
                         event_type: "subagent_failed".to_string(),
-                        content: None, tool_name: None,
+                        content: None, tool_name: None, parameters: None,
+                        success: None, duration_ms: None,
                         label: Some(label), agent_subtype: None, error: Some(error), task_name: None,
                     })
                 }
@@ -523,7 +550,8 @@ async fn gateway_chat_stream(
                     let label = event.data.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     Some(SseEvent {
                         event_type: "subtype_change".to_string(),
-                        content: None, tool_name: None,
+                        content: None, tool_name: None, parameters: None,
+                        success: None, duration_ms: None,
                         label: Some(label), agent_subtype: Some(subtype), error: None, task_name: None,
                     })
                 }
@@ -532,7 +560,8 @@ async fn gateway_chat_stream(
                     Some(SseEvent {
                         event_type: "thinking".to_string(),
                         content: Some(message),
-                        tool_name: None,
+                        tool_name: None, parameters: None,
+                        success: None, duration_ms: None,
                         label: None, agent_subtype: None, error: None, task_name: None,
                     })
                 }
@@ -544,7 +573,8 @@ async fn gateway_chat_stream(
                     if !name.is_empty() {
                         Some(SseEvent {
                             event_type: "task_started".to_string(),
-                            content: None, tool_name: None,
+                            content: None, tool_name: None, parameters: None,
+                            success: None, duration_ms: None,
                             label: None, agent_subtype: None, error: None, task_name: Some(name),
                         })
                     } else {
@@ -556,14 +586,16 @@ async fn gateway_chat_stream(
                     Some(SseEvent {
                         event_type: "task_completed".to_string(),
                         content: Some(status),
-                        tool_name: None,
+                        tool_name: None, parameters: None,
+                        success: None, duration_ms: None,
                         label: None, agent_subtype: None, error: None, task_name: None,
                     })
                 }
                 "dispatch.complete" => {
                     let done = SseEvent {
                         event_type: "done".to_string(),
-                        content: None, tool_name: None,
+                        content: None, tool_name: None, parameters: None,
+                        success: None, duration_ms: None,
                         label: None, agent_subtype: None, error: None, task_name: None,
                     };
                     if let Ok(json) = serde_json::to_string(&done) {
