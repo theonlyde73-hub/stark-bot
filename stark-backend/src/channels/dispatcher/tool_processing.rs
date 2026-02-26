@@ -22,6 +22,10 @@ pub(super) struct BatchState {
     /// Prevents duplicate messages when AI calls say_to_user multiple times
     /// in a single response.
     pub(super) had_say_to_user: bool,
+    /// Set when auto-complete fires and advances to the next task.
+    /// Remaining tool calls in this batch are skipped to prevent the AI
+    /// from executing tools meant for future tasks.
+    pub(super) task_auto_advanced: bool,
 }
 
 impl BatchState {
@@ -30,6 +34,7 @@ impl BatchState {
             define_tasks_replaced_queue: false,
             auto_completed_task: false,
             had_say_to_user: false,
+            task_auto_advanced: false,
         }
     }
 }
@@ -126,6 +131,24 @@ impl MessageDispatcher {
             return ToolCallProcessed {
                 result_content: "⚠️ Task queue was just replaced by define_tasks. This tool call was not executed. \
                      The next iteration will start with the correct task context.".to_string(),
+                success: false,
+                orchestrator_complete: false,
+                final_summary: None,
+                waiting_for_user_response: false,
+                user_question_content: None,
+            };
+        }
+
+        // If auto-complete advanced to the next task, skip remaining tool calls
+        // to prevent the AI from executing tools meant for future tasks.
+        if batch_state.task_auto_advanced && tool_name != "say_to_user" {
+            log::info!(
+                "[ORCHESTRATED_LOOP] Skipping tool '{}' — task was auto-completed. Check your current task.",
+                tool_name
+            );
+            return ToolCallProcessed {
+                result_content: "Task was auto-completed and advanced. This tool call was skipped. \
+                     Check your current task instructions and proceed from there.".to_string(),
                 success: false,
                 orchestrator_complete: false,
                 final_summary: None,
@@ -757,6 +780,7 @@ impl MessageDispatcher {
                             orchestrator,
                         );
                         batch_state.auto_completed_task = true;
+                        batch_state.task_auto_advanced = true;
                     }
                 }
             }
@@ -825,7 +849,25 @@ impl MessageDispatcher {
         // Broadcast task list update after any orchestrator tool processing
         self.broadcast_tasks_update(original_message.channel_id, session_id, orchestrator);
 
-        processed.result_content = result.content;
+        // Inject task reminder into successful tool results so the AI
+        // sees a boundary reminder after every tool call, making it harder to drift.
+        let mut content = result.content;
+        if result.success && !batch_state.task_auto_advanced {
+            if let Some(current_task) = orchestrator.task_queue().current_task() {
+                // Use first 80 chars of description as a brief reminder
+                let brief = if current_task.description.len() > 80 {
+                    format!("{}...", &current_task.description[..80])
+                } else {
+                    current_task.description.clone()
+                };
+                content.push_str(&format!(
+                    "\n\n[Current task: \"{}\". Complete ONLY this task.]",
+                    brief
+                ));
+            }
+        }
+
+        processed.result_content = content;
         processed.success = result.success;
         processed
     }

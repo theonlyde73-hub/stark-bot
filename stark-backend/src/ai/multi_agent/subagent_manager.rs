@@ -625,7 +625,6 @@ impl SubAgentManager {
 
         // Task queue state for multi-task skills (e.g. swap)
         let mut task_queue: Option<TaskQueue> = None;
-        let mut _skill_required_tools: Vec<String> = Vec::new();
 
         // Execute the AI with tool loop
         let max_iterations = 90; // Matches default subtype config
@@ -733,7 +732,23 @@ impl SubAgentManager {
             let mut tool_responses = Vec::new();
             let mut task_completed = false;
             let mut tasks_defined_this_batch = false;
+            let mut auto_completed_this_batch = false;
             for tool_call in &response.tool_calls {
+                // Skip remaining tool calls if define_tasks replaced the queue this batch
+                if tasks_defined_this_batch {
+                    log::info!(
+                        "[SUBAGENT] {} skipping tool '{}' — define_tasks replaced queue this batch",
+                        context.id, tool_call.name
+                    );
+                    tool_responses.push(crate::ai::ToolResponse {
+                        tool_call_id: tool_call.id.clone(),
+                        content: "Task queue was just replaced by define_tasks. This tool call was not executed. \
+                                  The next iteration will start with the correct task context.".to_string(),
+                        is_error: true,
+                    });
+                    continue;
+                }
+
                 log::info!(
                     "[SUBAGENT] {} calling tool: {}",
                     context.id,
@@ -815,7 +830,22 @@ impl SubAgentManager {
                     last_say_to_user_content = result.content.clone();
                 }
 
-                // Handle use_skill: refresh tool list to include skill-required tools
+                // Handle set_agent_subtype: refresh tool list for new subtype
+                if tool_call.name == "set_agent_subtype" && result.success {
+                    if let Some(ref metadata) = result.metadata {
+                        if let Some(new_subtype) = metadata.get("subtype").and_then(|v| v.as_str()) {
+                            tools = tool_registry
+                                .get_tool_definitions_for_subtype(&tool_config, new_subtype);
+                            tools.retain(|t| t.group != crate::tools::ToolGroup::SubAgent);
+                            log::info!(
+                                "[SUBAGENT] {} refreshed toolset after set_agent_subtype('{}'): {} tools",
+                                context.id, new_subtype, tools.len()
+                            );
+                        }
+                    }
+                }
+
+                // Handle use_skill: refresh tool list and inject skill instructions
                 if tool_call.name == "use_skill" && result.success {
                     if let Some(ref metadata) = result.metadata {
                         if let Some(requires) = metadata.get("requires_tools").and_then(|v| v.as_array()) {
@@ -830,12 +860,23 @@ impl SubAgentManager {
                                 "[SUBAGENT] {} refreshed toolset after use_skill: {} tools (requires {:?})",
                                 context.id, tools.len(), required_tools
                             );
-                            _skill_required_tools = required_tools;
                         }
+                    }
+                    // The skill instructions are in result.content (returned by the tool).
+                    // Inject them as a persistent system hint so they survive context growth.
+                    if !result.content.is_empty() {
+                        let skill_name = result.metadata.as_ref()
+                            .and_then(|m| m.get("skill_name"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        log::info!(
+                            "[SUBAGENT] {} injecting skill '{}' instructions as system hint ({} chars)",
+                            context.id, skill_name, result.content.len()
+                        );
                     }
                 }
 
-                // Check metadata for define_tasks and task_fully_completed
+                // Process metadata-driven side effects
                 if let Some(ref metadata) = result.metadata {
                     // Handle define_tasks: build task queue from skill's task list
                     if metadata.get("define_tasks").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -848,7 +889,6 @@ impl SubAgentManager {
                                 task_queue = Some(TaskQueue::from_descriptions_with_tool_matching(
                                     descriptions.clone(), &tool_names,
                                 ));
-                                // Start the first task
                                 if let Some(ref mut q) = task_queue {
                                     q.pop_next();
                                 }
@@ -861,14 +901,45 @@ impl SubAgentManager {
                         }
                     }
 
+                    // Handle add_task: insert task into existing queue
+                    if metadata.get("add_task").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        if let Some(desc) = metadata.get("task_description").and_then(|v| v.as_str()) {
+                            let position = metadata.get("task_position")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("back");
+                            if let Some(ref mut q) = task_queue {
+                                if position == "front" {
+                                    q.insert_after_current(vec![desc.to_string()]);
+                                } else {
+                                    q.append_tasks(vec![desc.to_string()]);
+                                }
+                                log::info!(
+                                    "[SUBAGENT] {} add_task ({}): '{}' — queue now has {} tasks",
+                                    context.id, position, truncate_str(desc, 80), q.total()
+                                );
+                            } else {
+                                // No queue exists yet — create one with this single task
+                                let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+                                task_queue = Some(TaskQueue::from_descriptions_with_tool_matching(
+                                    vec![desc.to_string()], &tool_names,
+                                ));
+                                if let Some(ref mut q) = task_queue {
+                                    q.pop_next();
+                                }
+                                log::info!(
+                                    "[SUBAGENT] {} add_task created new queue with 1 task",
+                                    context.id
+                                );
+                            }
+                        }
+                    }
+
                     // Handle task_fully_completed: advance queue or exit
                     if metadata.get("task_fully_completed").and_then(|v| v.as_bool()).unwrap_or(false) {
                         log::info!("[SUBAGENT] {} task_fully_completed called", context.id);
-                        // Prefer say_to_user content over task_fully_completed summary
-                        if !last_say_to_user_content.is_empty() {
-                            log::info!("[SUBAGENT] {} using last_say_to_user_content as final response ({} chars)", context.id, last_say_to_user_content.len());
-                            final_response = last_say_to_user_content.clone();
-                        } else if let Some(summary) = metadata.get("summary").and_then(|v| v.as_str()) {
+
+                        // Capture response (may be overridden later by say_to_user preference)
+                        if let Some(summary) = metadata.get("summary").and_then(|v| v.as_str()) {
                             final_response = summary.to_string();
                         } else if !result.content.is_empty() {
                             final_response = result.content.clone();
@@ -878,13 +949,11 @@ impl SubAgentManager {
                             if !tasks_defined_this_batch {
                                 q.complete_current();
                                 if q.pop_next().is_some() {
-                                    // More tasks — continue the loop
                                     log::info!(
                                         "[SUBAGENT] {} advanced to next task ({}/{})",
                                         context.id, q.completed_count(), q.total()
                                     );
                                 } else {
-                                    // All tasks done
                                     log::info!("[SUBAGENT] {} all tasks complete", context.id);
                                     task_completed = true;
                                 }
@@ -897,6 +966,31 @@ impl SubAgentManager {
                     }
                 }
 
+                // Auto-complete: if the successful tool matches the current task's auto_complete_tool
+                if result.success && !tasks_defined_this_batch && !auto_completed_this_batch {
+                    if let Some(ref mut q) = task_queue {
+                        if let Some(current) = q.current_task() {
+                            if current.auto_complete_tool.as_deref() == Some(&tool_call.name) {
+                                log::info!(
+                                    "[SUBAGENT] {} auto-completing task via tool '{}'",
+                                    context.id, tool_call.name
+                                );
+                                q.complete_current();
+                                if q.pop_next().is_some() {
+                                    log::info!(
+                                        "[SUBAGENT] {} auto-advanced to next task ({}/{})",
+                                        context.id, q.completed_count(), q.total()
+                                    );
+                                } else {
+                                    log::info!("[SUBAGENT] {} all tasks complete (via auto-complete)", context.id);
+                                    task_completed = true;
+                                }
+                                auto_completed_this_batch = true;
+                            }
+                        }
+                    }
+                }
+
                 tool_responses.push(crate::ai::ToolResponse {
                     tool_call_id: tool_call.id.clone(),
                     content: result.content.clone(),
@@ -904,7 +998,7 @@ impl SubAgentManager {
                 });
             }
 
-            // If task_fully_completed was called, break the loop immediately
+            // If all tasks done, break the outer loop
             if task_completed {
                 break;
             }
@@ -941,13 +1035,10 @@ impl SubAgentManager {
             }
         }
 
-        // Prefer say_to_user content over any other final response (e.g. plain AI text)
-        // This ensures image URLs and user-facing messages from say_to_user bubble up
-        if !last_say_to_user_content.is_empty() && final_response != last_say_to_user_content {
-            log::info!("[SUBAGENT] {} overriding final_response with last_say_to_user_content ({} chars)", context.id, last_say_to_user_content.len());
+        // Final response priority: say_to_user > task summary > AI content > fallback
+        if !last_say_to_user_content.is_empty() {
             final_response = last_say_to_user_content;
         }
-
         if final_response.is_empty() {
             final_response = "Task completed (no explicit response generated)".to_string();
         }

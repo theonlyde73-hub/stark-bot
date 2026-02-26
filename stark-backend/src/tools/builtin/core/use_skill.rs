@@ -10,10 +10,9 @@ use std::collections::HashMap;
 
 /// Tool to execute a specialized skill by name.
 ///
-/// The static definition has no enum_values — the dispatcher patches the
-/// definition at build_tool_list() time with the context-aware list of
-/// allowed skills (filtered by subtype tags, special-role grants, and
-/// safe-mode tool availability).
+/// Registered in the tool registry like any other tool. The definition's
+/// enum_values for skill_name are patched dynamically by the dispatcher's
+/// build_tool_list() with the list of available skills.
 ///
 /// Post-execution side effects (skill activation, subtype switching,
 /// tool list refresh) are handled by the dispatcher's post-execution

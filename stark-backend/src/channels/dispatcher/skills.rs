@@ -189,13 +189,14 @@ impl MessageDispatcher {
                 .get_tool_definitions_for_subtype(tool_config, subtype_key)
         };
 
-        // Patch use_skill: replace the static registered definition with a
-        // context-aware one (dynamic enum_values + description), or remove it
-        // entirely if no skills are available.
-        // All enabled skills are shown regardless of subtype (no tag filtering).
+        // Patch use_skill: replace the registered definition with a
+        // context-aware one (dynamic enum_values listing available skills),
+        // or remove it entirely if no skills are available.
         if let Some(patched_def) = self.create_skill_tool_definition_all_skills(tool_config) {
             if let Some(existing) = tools.iter_mut().find(|t| t.name == "use_skill") {
                 *existing = patched_def;
+            } else {
+                tools.push(patched_def);
             }
         } else {
             tools.retain(|t| t.name != "use_skill");

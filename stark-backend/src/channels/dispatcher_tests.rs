@@ -742,13 +742,13 @@ async fn swap_flow_with_trace() {
         );
     }
 
-    // Verify CURRENT TASK advances through the system prompt
+    // Verify YOUR TASK advances through the system prompt
     let extract_task_num = |sys_prompt: &str| -> Option<(usize, usize)> {
-        if let Some(pos) = sys_prompt.find("CURRENT TASK (") {
-            let after = &sys_prompt[pos + "CURRENT TASK (".len()..];
-            if let Some(slash) = after.find('/') {
-                let current: usize = after[..slash].parse().ok()?;
-                let rest = &after[slash + 1..];
+        if let Some(pos) = sys_prompt.find("YOUR TASK (step ") {
+            let after = &sys_prompt[pos + "YOUR TASK (step ".len()..];
+            if let Some(of_pos) = after.find(" of ") {
+                let current: usize = after[..of_pos].parse().ok()?;
+                let rest = &after[of_pos + " of ".len()..];
                 if let Some(paren) = rest.find(')') {
                     let total: usize = rest[..paren].parse().ok()?;
                     return Some((current, total));
@@ -1241,13 +1241,13 @@ async fn lp_deposit_flow_with_trace() {
         );
     }
 
-    // Verify CURRENT TASK advances through the system prompt
+    // Verify YOUR TASK advances through the system prompt
     let extract_task_num = |sys_prompt: &str| -> Option<(usize, usize)> {
-        if let Some(pos) = sys_prompt.find("CURRENT TASK (") {
-            let after = &sys_prompt[pos + "CURRENT TASK (".len()..];
-            if let Some(slash) = after.find('/') {
-                let current: usize = after[..slash].parse().ok()?;
-                let rest = &after[slash + 1..];
+        if let Some(pos) = sys_prompt.find("YOUR TASK (step ") {
+            let after = &sys_prompt[pos + "YOUR TASK (step ".len()..];
+            if let Some(of_pos) = after.find(" of ") {
+                let current: usize = after[..of_pos].parse().ok()?;
+                let rest = &after[of_pos + " of ".len()..];
                 if let Some(paren) = rest.find(')') {
                     let total: usize = rest[..paren].parse().ok()?;
                     return Some((current, total));
@@ -1374,11 +1374,11 @@ async fn safe_mode_finished_task_advances_task_queue() {
     harness.write_trace("safe_mode_finished_task_advances");
 
     let extract_task_num = |sys_prompt: &str| -> Option<(usize, usize)> {
-        if let Some(pos) = sys_prompt.find("CURRENT TASK (") {
-            let after = &sys_prompt[pos + "CURRENT TASK (".len()..];
-            if let Some(slash) = after.find('/') {
-                let current: usize = after[..slash].parse().ok()?;
-                let rest = &after[slash + 1..];
+        if let Some(pos) = sys_prompt.find("YOUR TASK (step ") {
+            let after = &sys_prompt[pos + "YOUR TASK (step ".len()..];
+            if let Some(of_pos) = after.find(" of ") {
+                let current: usize = after[..of_pos].parse().ok()?;
+                let rest = &after[of_pos + " of ".len()..];
                 if let Some(paren) = rest.find(')') {
                     let total: usize = rest[..paren].parse().ok()?;
                     return Some((current, total));
@@ -1470,11 +1470,11 @@ async fn consecutive_say_to_user_with_pending_tasks_does_not_terminate() {
     harness.write_trace("consecutive_say_to_user_pending_tasks");
 
     let extract_task_num = |sys_prompt: &str| -> Option<(usize, usize)> {
-        if let Some(pos) = sys_prompt.find("CURRENT TASK (") {
-            let after = &sys_prompt[pos + "CURRENT TASK (".len()..];
-            if let Some(slash) = after.find('/') {
-                let current: usize = after[..slash].parse().ok()?;
-                let rest = &after[slash + 1..];
+        if let Some(pos) = sys_prompt.find("YOUR TASK (step ") {
+            let after = &sys_prompt[pos + "YOUR TASK (step ".len()..];
+            if let Some(of_pos) = after.find(" of ") {
+                let current: usize = after[..of_pos].parse().ok()?;
+                let rest = &after[of_pos + " of ".len()..];
                 if let Some(paren) = rest.find(')') {
                     let total: usize = rest[..paren].parse().ok()?;
                     return Some((current, total));

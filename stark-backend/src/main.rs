@@ -817,6 +817,17 @@ async fn main() -> std::io::Result<()> {
         }
     }
 
+    // Generate internal token early so child module services can use it for
+    // backend API calls (wallet signing proxy, hooks, etc.).
+    if std::env::var("STARKBOT_INTERNAL_TOKEN").is_err() {
+        let mut buf = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut buf);
+        let token = hex::encode(buf);
+        // SAFETY: Called during single-threaded startup before any modules are spawned.
+        unsafe { std::env::set_var("STARKBOT_INTERNAL_TOKEN", &token); }
+        log::info!("Generated STARKBOT_INTERNAL_TOKEN for module communication");
+    }
+
     // Auto-start module service binaries as child processes.
     // Only starts services for modules that are enabled in the database.
     // Set DISABLE_MODULE_SERVICES=1 to skip auto-start entirely.
@@ -1274,14 +1285,9 @@ async fn main() -> std::io::Result<()> {
     let frontend_dist = frontend_dist.to_string();
     let dev_mode = dev_mode;
     // Internal token for module-to-backend API calls (wallet signing proxy, etc.)
-    let internal_token = std::env::var("STARKBOT_INTERNAL_TOKEN").unwrap_or_else(|_| {
-        let mut buf = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut buf);
-        let token = hex::encode(buf);
-        // SAFETY: Called during single-threaded startup.
-        unsafe { std::env::set_var("STARKBOT_INTERNAL_TOKEN", &token); }
-        token
-    });
+    // Token is generated early in startup (before module services are spawned).
+    let internal_token = std::env::var("STARKBOT_INTERNAL_TOKEN")
+        .expect("STARKBOT_INTERNAL_TOKEN should have been set during startup");
 
     let server = HttpServer::new(move || {
         let cors = Cors::default()

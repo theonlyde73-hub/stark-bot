@@ -81,18 +81,14 @@ impl Tool for DefineTasksTool {
             return ToolResult::error("No valid tasks provided. Each task must be a non-empty string.");
         }
 
-        let task_list = task_descriptions
-            .iter()
-            .enumerate()
-            .map(|(i, t)| format!("{}. {}", i + 1, t))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let count = task_descriptions.len();
 
-        // Return metadata for the dispatcher to intercept and replace the queue
+        // Return minimal response — hide task details from AI context to prevent
+        // it from seeing future tasks and doing all work in one shot.
+        // The full task list is still in metadata for the dispatcher to consume.
         ToolResult::success(format!(
-            "Tasks defined ({}):\n{}",
-            task_descriptions.len(),
-            task_list
+            "Tasks planned ({}). Starting task 1 now. Focus on the CURRENT TASK shown in your instructions.",
+            count
         ))
         .with_metadata(json!({
             "define_tasks": true,
@@ -131,6 +127,9 @@ mod tests {
             .await;
 
         assert!(result.success);
+        // Response should be minimal — no task details visible to AI
+        assert!(result.content.contains("Tasks planned (4)"));
+        assert!(!result.content.contains("Look up tokens"), "Task details should NOT be in response");
         let metadata = result.metadata.unwrap();
         assert_eq!(metadata["define_tasks"], true);
         let tasks = metadata["tasks"].as_array().unwrap();

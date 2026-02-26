@@ -268,6 +268,17 @@ impl Orchestrator {
             let total = self.context.task_queue.total();
             let completed = self.context.task_queue.completed_count();
 
+            // Show completed tasks as brief summary (no details of future tasks)
+            if completed > 0 {
+                prompt.push_str("## Completed Steps\n\n");
+                for t in &self.context.task_queue.tasks {
+                    if t.status == super::types::TaskStatus::Completed {
+                        prompt.push_str(&format!("- Step {}: done\n", t.id));
+                    }
+                }
+                prompt.push_str("\n");
+            }
+
             // Detect "Use skill: X" in task description and inject explicit use_skill instruction
             let skill_instruction = if let Some(caps) = task.description
                 .find("Use skill: ")
@@ -328,9 +339,8 @@ impl Orchestrator {
             };
 
             prompt.push_str(&format!(
-                "# >>> CURRENT TASK ({}/{}) <<<\n\n{}{}{}{}\n\n\
-                 **YOU MUST**: Complete ONLY this task. Do NOT skip ahead. \
-                 When done, call `say_to_user` with `finished_task: true` or `task_fully_completed` with a summary.\n\n---\n\n",
+                "# YOUR TASK (step {} of {})\n\n{}{}{}{}\n\n\
+                 When done, call `say_to_user(finished_task=true)` or `task_fully_completed`.\n\n---\n\n",
                 completed + 1,
                 total,
                 task.description,
