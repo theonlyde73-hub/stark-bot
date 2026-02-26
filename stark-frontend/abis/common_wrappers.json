@@ -1,0 +1,30 @@
+{
+  "name": "Common Wrappers",
+  "description": "Common wrapper/executor function signatures (ERC-7579 modules, account abstraction, etc.)",
+  "abi": [
+    {
+      "name": "exec",
+      "type": "function",
+      "stateMutability": "payable",
+      "inputs": [
+        {"name": "dest", "type": "address"},
+        {"name": "to", "type": "address"},
+        {"name": "value", "type": "uint256"},
+        {"name": "callType", "type": "address"},
+        {"name": "data", "type": "bytes"}
+      ],
+      "outputs": []
+    },
+    {
+      "name": "execute",
+      "type": "function",
+      "stateMutability": "payable",
+      "inputs": [
+        {"name": "to", "type": "address"},
+        {"name": "value", "type": "uint256"},
+        {"name": "data", "type": "bytes"}
+      ],
+      "outputs": []
+    }
+  ]
+}

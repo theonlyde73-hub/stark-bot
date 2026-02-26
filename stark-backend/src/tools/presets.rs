@@ -66,7 +66,12 @@ pub struct Web3Preset {
     /// Static params (not from registers)
     #[serde(default)]
     pub static_params: Vec<String>,
+    /// Register keys to append AFTER static params (for interleaved ordering)
+    #[serde(default)]
+    pub params_registers_after_static: Vec<String>,
     pub description: String,
+    /// If set, auto-format raw uint return values using decimals from this register (e.g. "token_address_decimals")
+    pub format_decimals_register: Option<String>,
 }
 
 /// Network configuration

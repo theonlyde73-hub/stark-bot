@@ -79,6 +79,7 @@ fn register_all_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(builtin::DecodeCalldataTool::new()));
     registry.register(Arc::new(builtin::TokenLookupTool::new()));
     registry.register(Arc::new(builtin::ToRawAmountTool::new()));
+    registry.register(Arc::new(builtin::FromRawAmountTool::new()));
     // Composite swap tool (token lookup + allowance + quote + execute in one call)
     registry.register(Arc::new(builtin::SwapTokenTool::new()));
     registry.register(Arc::new(builtin::SetAddressTool::new()));

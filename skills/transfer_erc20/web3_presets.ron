@@ -9,6 +9,7 @@
         value_register: None,
         static_params: [],
         description: "Get ERC20 token balance. Set token_address register first.",
+        format_decimals_register: Some("token_address_decimals"),
     ),
     "erc20_transfer": (
         abi: "erc20",

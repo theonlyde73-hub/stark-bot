@@ -106,6 +106,65 @@ interface FunctionInfo {
   loading: boolean;
 }
 
+// Component for displaying a bytes param that looks like calldata - shows function name
+function BytesCalldataDisplay({ value }: { value: string }) {
+  const [selectorName, setSelectorName] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  // Try to get the full raw hex (before truncation) - we only need the first 10 chars for selector
+  // The value may be truncated like "0x1fff991f... (2468 bytes)" so extract the selector
+  const rawHex = value.startsWith('0x') ? value : `0x${value}`;
+  const selector = rawHex.length >= 10 ? rawHex.slice(0, 10).toLowerCase() : null;
+
+  useEffect(() => {
+    if (!selector) return;
+
+    // If the value isn't truncated, try local ABI decode first
+    const isTruncated = rawHex.includes('...');
+    if (!isTruncated) {
+      const decoded = decodeCalldata(rawHex);
+      if (decoded) {
+        setSelectorName(`${decoded.functionName}() — ${decoded.signature}`);
+        return;
+      }
+    }
+
+    // Fall back to OpenChain lookup using just the selector
+    setLoading(true);
+    lookupFunctionSignature(selector).then(sig => {
+      if (sig) {
+        setSelectorName(sig);
+      } else {
+        setSelectorName(null);
+      }
+      setLoading(false);
+    });
+  }, [selector, rawHex]);
+
+  return (
+    <div>
+      {selector && (
+        <div className="mb-1">
+          {loading ? (
+            <span className="text-slate-500 text-xs flex items-center gap-1">
+              <Loader2 className="w-3 h-3 animate-spin" /> Looking up function...
+            </span>
+          ) : selectorName ? (
+            <span className="text-purple-300 text-xs font-medium">
+              → {selectorName}
+            </span>
+          ) : (
+            <span className="text-slate-500 text-xs">
+              Selector: {selector}
+            </span>
+          )}
+        </div>
+      )}
+      <span className="text-slate-400">{value}</span>
+    </div>
+  );
+}
+
 // Component for rendering decoded parameters
 function DecodedParams({ decoded, network }: { decoded: DecodedFunction; network: string }) {
   const [expanded, setExpanded] = useState(true);
@@ -143,6 +202,8 @@ function DecodedParams({ decoded, network }: { decoded: DecodedFunction; network
                       {param.value}
                       <ExternalLink className="w-3 h-3 flex-shrink-0" />
                     </a>
+                  ) : param.type === 'bytes' && param.value.startsWith('0x') && param.value.length > 10 ? (
+                    <BytesCalldataDisplay value={param.value} />
                   ) : (
                     param.value
                   )}
@@ -150,6 +211,32 @@ function DecodedParams({ decoded, network }: { decoded: DecodedFunction; network
               </div>
             ))
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Collapsed section showing wrapper function details (exec, execTransaction, etc.)
+function WrapperCallDetails({ decoded, network }: { decoded: DecodedFunction; network: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="mt-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1 text-slate-500 text-xs hover:text-slate-400 transition-colors"
+      >
+        {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        <span>via {decoded.functionName}()</span>
+        <span className="text-slate-600">— {decoded.abiName}</span>
+      </button>
+      {expanded && (
+        <div className="mt-1 ml-3 border-l-2 border-slate-700 pl-2">
+          <div className="text-slate-500 font-mono text-xs break-all mb-1">
+            {decoded.signature}
+          </div>
+          <DecodedParams decoded={decoded} network={network} />
         </div>
       )}
     </div>
@@ -305,14 +392,33 @@ export default function TxQueueConfirmationModal({
                 </div>
               ) : functionInfo?.signature ? (
                 <div className="space-y-1">
-                  <span className="text-purple-300 font-semibold text-lg">
-                    {functionInfo.name}()
-                  </span>
-                  <div className="text-slate-400 font-mono text-xs break-all">
-                    {functionInfo.signature}
-                  </div>
-                  {/* Show decoded parameters if available */}
-                  {decodedFunction && <DecodedParams decoded={decodedFunction} network={transaction.network} />}
+                  {/* If there's a decoded inner call, show it prominently */}
+                  {decodedFunction?.innerCall ? (
+                    <>
+                      <span className="text-purple-300 font-semibold text-lg">
+                        {decodedFunction.innerCall.functionName}()
+                      </span>
+                      <div className="text-slate-400 font-mono text-xs break-all">
+                        {decodedFunction.innerCall.signature}
+                      </div>
+                      <DecodedParams decoded={decodedFunction.innerCall} network={transaction.network} />
+                      {/* Show the wrapper as collapsed context */}
+                      <WrapperCallDetails
+                        decoded={decodedFunction}
+                        network={transaction.network}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-purple-300 font-semibold text-lg">
+                        {functionInfo.name}()
+                      </span>
+                      <div className="text-slate-400 font-mono text-xs break-all">
+                        {functionInfo.signature}
+                      </div>
+                      {decodedFunction && <DecodedParams decoded={decodedFunction} network={transaction.network} />}
+                    </>
+                  )}
                 </div>
               ) : functionInfo ? (
                 <div className="space-y-1">
@@ -341,20 +447,50 @@ export default function TxQueueConfirmationModal({
             <span className="text-white font-mono uppercase">{transaction.network}</span>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-slate-400">{decodedFunction ? 'Contract' : 'To'}</span>
-            <a
-              href={getAddressExplorerUrl(transaction.network, transaction.to)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-cyan-400 hover:text-cyan-300 font-mono text-xs break-all flex items-center gap-1"
-            >
-              {transaction.to}
-              <ExternalLink className="w-3 h-3 flex-shrink-0" />
-            </a>
+            <span className="text-slate-400">
+              {decodedFunction?.innerTo ? 'Target' : decodedFunction ? 'Contract' : 'To'}
+            </span>
+            {decodedFunction?.innerTo ? (
+              <>
+                <a
+                  href={getAddressExplorerUrl(transaction.network, decodedFunction.innerTo)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-cyan-400 hover:text-cyan-300 font-mono text-xs break-all flex items-center gap-1"
+                >
+                  {decodedFunction.innerTo}
+                  <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                </a>
+                <div className="flex items-center gap-1 text-slate-500 text-xs">
+                  <span>via</span>
+                  <a
+                    href={getAddressExplorerUrl(transaction.network, transaction.to)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-slate-500 hover:text-slate-400 font-mono flex items-center gap-1"
+                  >
+                    {transaction.to.slice(0, 10)}...{transaction.to.slice(-8)}
+                    <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                  </a>
+                </div>
+              </>
+            ) : (
+              <a
+                href={getAddressExplorerUrl(transaction.network, transaction.to)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-cyan-400 hover:text-cyan-300 font-mono text-xs break-all flex items-center gap-1"
+              >
+                {transaction.to}
+                <ExternalLink className="w-3 h-3 flex-shrink-0" />
+              </a>
+            )}
           </div>
           <div className="flex justify-between">
             <span className="text-slate-400">Value</span>
-            <span className="text-white font-medium">{transaction.value_formatted}</span>
+            <span className="text-white font-medium">
+              {transaction.value_formatted}
+            </span>
           </div>
 
           {/* Show calldata - collapsed by default if decoded, expanded if not */}

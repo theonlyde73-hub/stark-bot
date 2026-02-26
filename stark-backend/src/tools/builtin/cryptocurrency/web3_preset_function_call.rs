@@ -206,6 +206,25 @@ impl Tool for Web3PresetFunctionCallTool {
             resolved_params.push(json!(static_val));
         }
 
+        // Append register params that come after static params
+        for reg_key in &preset.params_registers_after_static {
+            match context.registers.get(reg_key) {
+                Some(v) => {
+                    let param_str = match v.as_str() {
+                        Some(s) => s.to_string(),
+                        None => v.to_string().trim_matches('"').to_string(),
+                    };
+                    resolved_params.push(json!(param_str));
+                }
+                None => {
+                    return ToolResult::error(format!(
+                        "Preset '{}' requires register '{}' but it's not set",
+                        params.preset, reg_key
+                    ));
+                }
+            }
+        }
+
         // Read value from register if specified
         let value = if let Some(ref val_reg) = preset.value_register {
             match context.registers.get(val_reg) {
@@ -263,7 +282,9 @@ mod tests {
             params_registers: vec!["recipient_address".to_string(), "transfer_amount".to_string()],
             value_register: None,
             static_params: vec![],
+            params_registers_after_static: vec![],
             description: "Transfer ERC20 tokens".to_string(),
+            format_decimals_register: None,
         });
     }
 

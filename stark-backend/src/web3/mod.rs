@@ -421,6 +421,58 @@ pub async fn sign_transaction_for_queue(
     })
 }
 
+/// Try to auto-format a decoded return value using the preset's `format_decimals_register`.
+/// Returns a formatted string like "871043093 (871.043093 — 6 decimals)" on success,
+/// or the default pretty-printed JSON if formatting is not applicable.
+fn try_auto_format_result(
+    decoded: &Value,
+    preset_name: Option<&str>,
+    context: &ToolContext,
+) -> String {
+    let default = || serde_json::to_string_pretty(decoded).unwrap_or_default();
+
+    let pname = match preset_name {
+        Some(p) => p,
+        None => return default(),
+    };
+    let preset_cfg = match crate::tools::presets::get_web3_preset(pname) {
+        Some(p) => p,
+        None => return default(),
+    };
+    let dec_reg = match preset_cfg.format_decimals_register.as_deref() {
+        Some(r) => r,
+        None => return default(),
+    };
+    let dec_val = match context.registers.get(dec_reg) {
+        Some(v) => v,
+        None => return default(),
+    };
+    let decimals = match dec_val.as_u64().map(|d| d as u8).or_else(|| {
+        dec_val.as_str().and_then(|s| s.parse::<u8>().ok())
+    }) {
+        Some(d) => d,
+        None => return default(),
+    };
+
+    let raw_str = match decoded {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => match serde_json::to_string(decoded) {
+            Ok(s) => s,
+            Err(_) => return default(),
+        },
+    };
+
+    let clean_raw = raw_str.trim().trim_matches('"').to_string();
+    match crate::tools::builtin::cryptocurrency::FromRawAmountTool::convert_from_raw(&clean_raw, decimals) {
+        Ok(human) => {
+            context.set_register("human_amount", json!(&human), "web3_preset_function_call");
+            format!("{} ({} — {} decimals)", clean_raw, human, decimals)
+        }
+        Err(_) => default(),
+    }
+}
+
 /// Shared execution logic: ABI loading, encoding, safety checks, call/sign/queue.
 /// Used by both `Web3FunctionCallTool` (manual) and `Web3PresetFunctionCallTool` (preset).
 pub async fn execute_resolved_call(
@@ -564,7 +616,10 @@ pub async fn execute_resolved_call(
                 let decoded = decode_return(function, &result)
                     .unwrap_or_else(|_| json!(format!("0x{}", hex::encode(&result))));
 
-                ToolResult::success(serde_json::to_string_pretty(&decoded).unwrap_or_default())
+                // Auto-format raw uint values if preset has format_decimals_register
+                let content = try_auto_format_result(&decoded, preset_name, context);
+
+                ToolResult::success(content)
                     .with_metadata(json!({
                         "preset": preset_name,
                         "abi": abi_name,

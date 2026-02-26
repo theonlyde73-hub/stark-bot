@@ -44,4 +44,30 @@
         static_params: [],
         description: "Withdraw tokens from Aave V3 Pool on Base. Set token_address and aave_withdraw_amount registers first.",
     ),
+    "aave_borrow": (
+        abi: "aave_pool",
+        contracts: {
+            "base": "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
+        },
+        contract_register: None,
+        function: "borrow",
+        params_registers: ["token_address", "borrow_amount_raw"],
+        value_register: None,
+        static_params: ["2", "0"],
+        params_registers_after_static: ["wallet_address"],
+        description: "Borrow tokens from Aave V3 Pool on Base. Set token_address and borrow_amount_raw registers first. Uses variable rate (2), no referral (0).",
+    ),
+    "aave_repay": (
+        abi: "aave_pool",
+        contracts: {
+            "base": "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
+        },
+        contract_register: None,
+        function: "repay",
+        params_registers: ["token_address", "repay_amount_raw"],
+        value_register: None,
+        static_params: ["2"],
+        params_registers_after_static: ["wallet_address"],
+        description: "Repay borrowed tokens to Aave V3 Pool on Base. Set token_address and repay_amount_raw registers first. Uses variable rate (2).",
+    ),
 }

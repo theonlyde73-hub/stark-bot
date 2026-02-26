@@ -1,7 +1,7 @@
 ---
 name: "swap"
 description: "Swap ERC20 tokens on Base using 0x DEX aggregator via quoter.defirelay.com"
-version: "9.0.5"
+version: "9.0.6"
 author: "starkbot"
 homepage: "https://0x.org"
 metadata: "{\"requires_auth\": false, \"clawdbot\":{\"emoji\":\"🔄\"}}"

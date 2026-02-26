@@ -1,11 +1,11 @@
 ---
 name: aave
 description: "Aave V3 DeFi lending — view positions across chains, find best yields, supply, borrow, withdraw, repay. Powered by PayToll."
-version: 3.0.0
+version: 3.1.0
 author: starkbot
 homepage: https://aave.com
 metadata: {"requires_auth": false, "clawdbot":{"emoji":"👻"}}
-requires_tools: [x402_post, web_fetch, token_lookup, to_raw_amount, web3_preset_function_call, web3_function_call, broadcast_web3_tx, verify_tx_broadcast, select_web3_network, define_tasks]
+requires_tools: [x402_post, web_fetch, token_lookup, to_raw_amount, from_raw_amount, web3_preset_function_call, web3_function_call, broadcast_web3_tx, verify_tx_broadcast, select_web3_network, define_tasks]
 tags: [crypto, defi, finance, lending, aave, yield, apy, borrow, collateral, multichain, paytoll]
 ---
 
@@ -19,6 +19,7 @@ Supply tokens for yield, borrow against collateral, check positions across Ether
 2. **Do NOT call `say_to_user` with `finished_task: true` until the current task is truly done.**
 3. **Sequential tool calls only.** Never call two tools in parallel when the second depends on the first.
 4. **Health Factor Safety**: ALWAYS check health factor before borrowing or withdrawing collateral. Never allow HF < 1.5.
+5. **Balance Formatting Rule**: ALWAYS use `from_raw_amount` to convert raw balances before displaying to users. NEVER do mental math on raw blockchain values.
 
 ## PayToll API Reference
 
@@ -183,6 +184,8 @@ network: base
 call_only: true
 ```
 
+Use `from_raw_amount` to convert the raw balance to human-readable before reporting to user.
+
 #### 1e. Check Aave Pool allowance
 
 ```tool:web3_preset_function_call
@@ -264,7 +267,7 @@ Report: "Supplied [amount] [symbol] to Aave on Base."
 ```json
 {"tool": "define_tasks", "tasks": [
   "TASK 1 — Safety check: query PayToll for health factor and available borrows.",
-  "TASK 2 — Borrow: look up asset, convert amount, call borrow via web3_function_call, broadcast, verify."
+  "TASK 2 — Borrow: look up asset, convert amount, call aave_borrow preset, broadcast, verify."
 ]}
 ```
 
@@ -279,6 +282,8 @@ Also check positions:
 ```json
 {"tool": "x402_post", "url": "https://api.paytoll.io/v1/aave/user-positions", "body": {"userAddress": "<WALLET_ADDRESS>", "chainIds": [8453]}}
 ```
+
+Use `from_raw_amount` to convert any raw balances to human-readable before reporting to user.
 
 **Safety checks:**
 - If HF < 1.5: warn that borrowing is risky
@@ -303,13 +308,12 @@ Also check positions:
 
 #### 2c. Execute borrow
 
-Read `token_address` and `borrow_amount_raw` from registers, and `wallet_address` from registers:
-
-```json
-{"tool": "web3_function_call", "abi": "aave_pool", "contract": "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5", "function": "borrow", "params": ["<token_address>", "<borrow_amount_raw>", "2", "0", "<wallet_address>"], "network": "base"}
+```tool:web3_preset_function_call
+preset: aave_borrow
+network: base
 ```
 
-**Note:** `"2"` = variable interest rate mode, `"0"` = no referral.
+**Note:** Preset uses variable interest rate mode (2) and no referral (0).
 
 #### 2d. Broadcast
 
@@ -352,7 +356,7 @@ Report updated health factor.
 {"tool": "x402_post", "url": "https://api.paytoll.io/v1/aave/user-positions", "body": {"userAddress": "<WALLET_ADDRESS>", "chainIds": [8453]}}
 ```
 
-If user has debt, also check health factor and verify withdrawal won't drop HF below 1.5.
+If user has debt, also check health factor and verify withdrawal won't drop HF below 1.5. Use `from_raw_amount` to convert any raw balances to human-readable before reporting to user.
 
 ---
 
@@ -403,7 +407,7 @@ network: base
 {"tool": "define_tasks", "tasks": [
   "TASK 1 — Check debt: query PayToll for positions, check token balance, check allowance.",
   "TASK 2 — Approve (SKIP if sufficient): approve token for Aave Pool.",
-  "TASK 3 — Repay: convert amount, call repay via web3_function_call, broadcast, verify."
+  "TASK 3 — Repay: convert amount, call aave_repay preset, broadcast, verify."
 ]}
 ```
 
@@ -415,7 +419,7 @@ network: base
 
 If no debt: "You have no outstanding debt on Aave!" — skip remaining tasks.
 
-Check balance and allowance (same as Supply Task 1c–1e).
+Check balance and allowance (same as Supply Task 1c–1e). Use `from_raw_amount` to convert any raw balances to human-readable before reporting to user.
 
 ---
 
@@ -441,13 +445,12 @@ To repay ALL (max uint256):
 
 #### 3b. Execute repay
 
-Read `token_address`, `repay_amount_raw`, and `wallet_address` from registers:
-
-```json
-{"tool": "web3_function_call", "abi": "aave_pool", "contract": "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5", "function": "repay", "params": ["<token_address>", "<repay_amount_raw>", "2", "<wallet_address>"], "network": "base"}
+```tool:web3_preset_function_call
+preset: aave_repay
+network: base
 ```
 
-**Note:** `"2"` = variable interest rate mode.
+**Note:** Preset uses variable interest rate mode (2).
 
 #### 3c. Broadcast + Verify
 
