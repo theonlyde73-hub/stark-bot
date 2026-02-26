@@ -119,7 +119,9 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("/sessions", web::get().to(gateway_sessions))
             .route("/sessions/{id}/messages", web::get().to(gateway_session_messages))
             .route("/sessions/new", web::post().to(gateway_new_session))
-            .route("/token/generate", web::post().to(gateway_generate_token)),
+            .route("/token/generate", web::post().to(gateway_generate_token))
+            .route("/modules/{name}/tui/stream", web::get().to(gateway_tui_stream))
+            .route("/modules/{name}/tui/action", web::post().to(gateway_tui_action)),
     );
 }
 
@@ -797,4 +799,194 @@ async fn gateway_generate_token(
         token: Some(token),
         error: None,
     })
+}
+
+// ── TUI streaming endpoints ─────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct TuiStreamQuery {
+    #[serde(default = "default_tui_width")]
+    width: u32,
+    #[serde(default = "default_tui_height")]
+    height: u32,
+}
+
+fn default_tui_width() -> u32 { 120 }
+fn default_tui_height() -> u32 { 40 }
+
+/// Fetch a TUI ANSI frame from a module's service endpoint
+async fn fetch_tui_frame(module_name: &str, width: u32, height: u32) -> Result<(String, Option<Value>), String> {
+    let registry = crate::modules::ModuleRegistry::new();
+    let module = match registry.get(module_name) {
+        Some(m) => m,
+        None => return Err(format!("Unknown module: '{}'", module_name)),
+    };
+
+    let url = format!(
+        "{}/rpc/dashboard/tui?width={}&height={}",
+        module.service_url(),
+        width,
+        height
+    );
+
+    let client = reqwest::Client::new();
+    let ansi = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch TUI frame: {}", e))?
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read TUI frame: {}", e))?;
+
+    // Optionally fetch actions metadata
+    let actions_url = format!("{}/rpc/dashboard/tui/actions", module.service_url());
+    let actions = client
+        .get(&actions_url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .ok()
+        .and_then(|r| {
+            if r.status().is_success() {
+                Some(r)
+            } else {
+                None
+            }
+        });
+    let actions_json = match actions {
+        Some(resp) => resp.json::<Value>().await.ok(),
+        None => None,
+    };
+
+    Ok((ansi, actions_json))
+}
+
+/// GET /api/gateway/modules/{name}/tui/stream — SSE stream of TUI frames
+async fn gateway_tui_stream(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<String>,
+    query: web::Query<TuiStreamQuery>,
+) -> impl Responder {
+    if let Err(resp) = validate_gateway_token(&state, &req) {
+        return resp;
+    }
+
+    let module_name = path.into_inner();
+    let width = query.width;
+    let height = query.height;
+
+    let broadcaster = state.broadcaster.clone();
+    let (_client_id, mut rx) = broadcaster.subscribe();
+
+    let (tx, mut sse_rx) = tokio::sync::mpsc::channel::<web::Bytes>(64);
+
+    let mod_name = module_name.clone();
+    tokio::spawn(async move {
+        // Send initial frame
+        match fetch_tui_frame(&mod_name, width, height).await {
+            Ok((ansi, actions)) => {
+                let mut frame = serde_json::json!({ "ansi": ansi });
+                if let Some(a) = actions {
+                    frame["actions"] = a;
+                }
+                let sse = format!("event: tui_frame\ndata: {}\n\n", frame);
+                let _ = tx.send(web::Bytes::from(sse)).await;
+            }
+            Err(e) => {
+                let sse = format!("event: error\ndata: {}\n\n", serde_json::json!({ "error": e }));
+                let _ = tx.send(web::Bytes::from(sse)).await;
+                return;
+            }
+        }
+
+        // Listen for invalidation events
+        loop {
+            match rx.recv().await {
+                Some(event) => {
+                    if event.event != "module.tui_invalidate" {
+                        continue;
+                    }
+                    let event_module = event.data.get("module").and_then(|v| v.as_str()).unwrap_or("");
+                    if event_module != mod_name {
+                        continue;
+                    }
+
+                    match fetch_tui_frame(&mod_name, width, height).await {
+                        Ok((ansi, _)) => {
+                            let frame = serde_json::json!({ "ansi": ansi });
+                            let sse = format!("event: tui_frame\ndata: {}\n\n", frame);
+                            if tx.send(web::Bytes::from(sse)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(_) => {} // skip failed frame fetches
+                    }
+                }
+                None => break, // broadcaster shut down
+            }
+        }
+    });
+
+    let stream = futures_util::stream::unfold(sse_rx, |mut rx| async move {
+        rx.recv().await.map(|bytes| (Ok::<_, actix_web::Error>(bytes), rx))
+    });
+
+    HttpResponse::Ok()
+        .content_type("text/event-stream")
+        .insert_header(("Cache-Control", "no-cache"))
+        .insert_header(("X-Accel-Buffering", "no"))
+        .streaming(stream)
+}
+
+/// POST /api/gateway/modules/{name}/tui/action — forward TUI action to module
+async fn gateway_tui_action(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<String>,
+    body: web::Json<Value>,
+) -> impl Responder {
+    if let Err(resp) = validate_gateway_token(&state, &req) {
+        return resp;
+    }
+
+    let module_name = path.into_inner();
+
+    let registry = crate::modules::ModuleRegistry::new();
+    let module = match registry.get(&module_name) {
+        Some(m) => m,
+        None => {
+            return HttpResponse::NotFound().json(GatewayErrorResponse {
+                success: false,
+                error: format!("Unknown module: '{}'", module_name),
+            });
+        }
+    };
+
+    let url = format!("{}/rpc/dashboard/tui/action", module.service_url());
+
+    let client = reqwest::Client::new();
+    match client
+        .post(&url)
+        .json(&body.into_inner())
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            HttpResponse::build(actix_web::http::StatusCode::from_u16(status.as_u16()).unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR))
+                .content_type("application/json")
+                .body(body)
+        }
+        Err(e) => {
+            HttpResponse::BadGateway().json(GatewayErrorResponse {
+                success: false,
+                error: format!("Failed to proxy action: {}", e),
+            })
+        }
+    }
 }

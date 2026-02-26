@@ -9,3 +9,6 @@ __all__ = [
     "status_response",
     "create_app",
 ]
+
+# TUI dashboard support available via: from starkbot_sdk.tui import StarkbotDashboard
+# Requires optional dependency group: pip install starkbot-sdk[tui]

@@ -231,7 +231,13 @@ impl super::Module for DynamicModule {
     }
 
     fn has_dashboard(&self) -> bool {
-        self.manifest.service.has_dashboard
+        self.manifest.service.has_dashboard || self.manifest.service.dashboard_style.is_some()
+    }
+
+    fn dashboard_style(&self) -> Option<String> {
+        self.manifest.service.dashboard_style.clone().or_else(|| {
+            if self.manifest.service.has_dashboard { Some("html".to_string()) } else { None }
+        })
     }
 
     fn create_tools(&self) -> Vec<Arc<dyn Tool>> {
@@ -327,6 +333,11 @@ impl super::Module for DynamicModule {
             description: ep.description.clone(),
             rpc_endpoint: ep.rpc_endpoint.clone(),
             http_methods: ep.http_methods.clone(),
+            x402: ep.x402,
+            x402_price: ep.x402_price.clone(),
+            x402_currency: ep.x402_currency.clone(),
+            x402_payee: ep.x402_payee.clone(),
+            x402_network: ep.x402_network.clone(),
         })
     }
 
@@ -339,6 +350,11 @@ impl super::Module for DynamicModule {
                 description: ep.description.clone(),
                 rpc_endpoint: ep.rpc_endpoint.clone(),
                 http_methods: ep.http_methods.clone(),
+                x402: ep.x402,
+                x402_price: ep.x402_price.clone(),
+                x402_currency: ep.x402_currency.clone(),
+                x402_payee: ep.x402_payee.clone(),
+                x402_network: ep.x402_network.clone(),
             })
             .collect()
     }

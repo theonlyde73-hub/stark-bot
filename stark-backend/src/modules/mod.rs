@@ -34,6 +34,21 @@ pub struct ExtEndpointInfo {
     pub rpc_endpoint: String,
     /// Allowed HTTP methods
     pub http_methods: Vec<String>,
+    /// If true, the backend verifies x402 payments before forwarding
+    #[serde(default)]
+    pub x402: bool,
+    /// x402 price requirement (e.g. "0.01")
+    #[serde(default)]
+    pub x402_price: Option<String>,
+    /// x402 currency (e.g. "USDC")
+    #[serde(default)]
+    pub x402_currency: Option<String>,
+    /// x402 payee address
+    #[serde(default)]
+    pub x402_payee: Option<String>,
+    /// x402 network (e.g. "base")
+    #[serde(default)]
+    pub x402_network: Option<String>,
 }
 
 /// Raw HTTP response from proxying to a module (preserves status, headers, body).
@@ -67,6 +82,10 @@ pub trait Module: Send + Sync {
     fn has_tools(&self) -> bool;
     /// Whether this module has a standalone dashboard (served by the service itself)
     fn has_dashboard(&self) -> bool;
+    /// Dashboard style: "html", "tui", or None
+    fn dashboard_style(&self) -> Option<String> {
+        if self.has_dashboard() { Some("html".to_string()) } else { None }
+    }
 
     /// Return tool instances to register with the bot
     fn create_tools(&self) -> Vec<Arc<dyn Tool>>;

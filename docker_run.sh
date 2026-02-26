@@ -39,7 +39,7 @@ check_env() {
 
 cmd_build() {
     echo "Building starkbot Docker image (v$VERSION)..."
-    docker build \
+    docker build $NO_CACHE \
         --build-arg STARKBOT_VERSION="$VERSION" \
         -t "$IMAGE_NAME:latest" \
         -t "$IMAGE_NAME:$VERSION" \
@@ -53,13 +53,15 @@ cmd_run() {
     echo "Starkbot will be available at http://localhost:8080"
     echo "Press Ctrl+C to stop."
     echo ""
-    docker compose up --build
+    docker compose build $NO_CACHE
+    docker compose up
 }
 
 cmd_daemon() {
     check_env
     echo "Building and starting starkbot (v$VERSION) in background..."
-    docker compose up --build -d
+    docker compose build $NO_CACHE
+    docker compose up -d
     echo ""
     echo "Starkbot is running!"
     echo "  Web UI:  http://localhost:8080"
@@ -96,6 +98,14 @@ cmd_restart() {
 cmd_status() {
     docker compose ps
 }
+
+# Parse flags
+NO_CACHE=""
+for arg in "$@"; do
+    case "$arg" in
+        --no-cache) NO_CACHE="--no-cache" ;;
+    esac
+done
 
 # Default to "run" if no argument
 CMD="${1:-}"

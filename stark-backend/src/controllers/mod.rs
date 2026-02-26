@@ -34,6 +34,7 @@ pub mod system;
 pub mod special_roles;
 pub mod telemetry;
 pub mod transcribe;
+pub mod x402;
 pub mod x402_limits;
 
 use actix_web::{web, HttpRequest, HttpResponse};

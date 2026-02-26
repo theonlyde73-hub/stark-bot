@@ -55,6 +55,9 @@ pub struct ServiceConfig {
     pub url_env_var: Option<String>,
     #[serde(default)]
     pub has_dashboard: bool,
+    /// Dashboard style: "html" for traditional HTML dashboards, "tui" for Rich ANSI dashboards.
+    #[serde(default)]
+    pub dashboard_style: Option<String>,
     #[serde(default = "default_health_endpoint")]
     pub health_endpoint: String,
     /// RPC endpoint for backup export (e.g. "/rpc/backup/export"). POST, returns JSON.
@@ -169,6 +172,21 @@ pub struct ExtEndpointManifest {
     /// Allowed HTTP methods (e.g. ["POST"], ["GET", "POST"])
     #[serde(default = "default_http_methods")]
     pub http_methods: Vec<String>,
+    /// If true, the backend verifies x402 payments before forwarding to the module.
+    #[serde(default)]
+    pub x402: bool,
+    /// x402 payment price (e.g. "0.01") — used when x402 = true
+    #[serde(default)]
+    pub x402_price: Option<String>,
+    /// x402 payment currency (e.g. "USDC") — used when x402 = true
+    #[serde(default)]
+    pub x402_currency: Option<String>,
+    /// x402 payee address — used when x402 = true
+    #[serde(default)]
+    pub x402_payee: Option<String>,
+    /// x402 network (e.g. "base", "base-sepolia") — defaults to "base"
+    #[serde(default)]
+    pub x402_network: Option<String>,
 }
 
 fn default_http_methods() -> Vec<String> {

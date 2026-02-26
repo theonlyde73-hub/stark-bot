@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, ExternalLink, AlertCircle } from 'lucide-react';
 import Card, { CardContent } from '@/components/ui/Card';
 import { apiFetch } from '@/lib/api';
+
+const TuiDashboard = lazy(() => import('@/components/TuiDashboard'));
 
 interface ModuleInfo {
   name: string;
@@ -11,6 +13,7 @@ interface ModuleInfo {
   service_url: string;
   service_port: number;
   has_dashboard: boolean;
+  dashboard_style: string | null;
 }
 
 export default function ModuleDashboard() {
@@ -62,7 +65,7 @@ export default function ModuleDashboard() {
             {formatModuleName(name!)} Dashboard
           </h1>
         </div>
-        {module?.has_dashboard && (
+        {module?.has_dashboard && module.dashboard_style !== 'tui' && (
           <a
             href={`/api/modules/${encodeURIComponent(name!)}/proxy/`}
             target="_blank"
@@ -76,29 +79,43 @@ export default function ModuleDashboard() {
       </div>
 
       {module?.has_dashboard ? (
-        <div className="flex-1 rounded-lg overflow-hidden border border-slate-700 bg-white">
-          {iframeError ? (
-            <div className="flex flex-col items-center justify-center h-full bg-slate-900 text-slate-400 gap-3">
-              <AlertCircle className="w-8 h-8" />
-              <p>Unable to load the dashboard. The service may be offline.</p>
-              <a
-                href={`/api/modules/${encodeURIComponent(name!)}/proxy/`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-stark-400 hover:text-stark-300 underline text-sm"
-              >
-                Try opening via proxy
-              </a>
-            </div>
-          ) : (
-            <iframe
-              src={`/api/modules/${encodeURIComponent(name!)}/proxy/`}
-              className="w-full h-full border-0"
-              title={`${formatModuleName(name!)} Dashboard`}
-              onError={() => setIframeError(true)}
-            />
-          )}
-        </div>
+        module.dashboard_style === 'tui' ? (
+          <div className="flex-1 rounded-lg overflow-hidden border border-slate-700 bg-[#0f172a]">
+            <Suspense
+              fallback={
+                <div className="flex items-center justify-center h-full text-slate-400">
+                  Loading terminal...
+                </div>
+              }
+            >
+              <TuiDashboard moduleName={name!} />
+            </Suspense>
+          </div>
+        ) : (
+          <div className="flex-1 rounded-lg overflow-hidden border border-slate-700 bg-white">
+            {iframeError ? (
+              <div className="flex flex-col items-center justify-center h-full bg-slate-900 text-slate-400 gap-3">
+                <AlertCircle className="w-8 h-8" />
+                <p>Unable to load the dashboard. The service may be offline.</p>
+                <a
+                  href={`/api/modules/${encodeURIComponent(name!)}/proxy/`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-stark-400 hover:text-stark-300 underline text-sm"
+                >
+                  Try opening via proxy
+                </a>
+              </div>
+            ) : (
+              <iframe
+                src={`/api/modules/${encodeURIComponent(name!)}/proxy/`}
+                className="w-full h-full border-0"
+                title={`${formatModuleName(name!)} Dashboard`}
+                onError={() => setIframeError(true)}
+              />
+            )}
+          </div>
+        )
       ) : (
         <Card>
           <CardContent>

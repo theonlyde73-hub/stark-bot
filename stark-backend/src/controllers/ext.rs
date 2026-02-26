@@ -6,6 +6,7 @@
 //! codes, headers, and body — critical for x402 payment flows).
 
 use actix_web::{web, HttpRequest, HttpResponse};
+use base64::Engine;
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -148,6 +149,102 @@ async fn ext_proxy(
         if should_forward_request_header(key_str) {
             if let Ok(v) = value.to_str() {
                 forward_headers.insert(key_str.to_string(), v.to_string());
+            }
+        }
+    }
+
+    // x402 auto-verification: if the endpoint declares x402 = true and the request
+    // has an X-Payment header, verify it before forwarding.
+    if ext_ep.x402 {
+        if let Some(payment_header) = forward_headers.get("x-payment") {
+            // Build verification requirements from the endpoint's manifest fields
+            let price = ext_ep.x402_price.as_deref().unwrap_or("0");
+            let currency = ext_ep.x402_currency.as_deref().unwrap_or("USDC");
+            let network = ext_ep.x402_network.as_deref().unwrap_or("base");
+            let payee = ext_ep.x402_payee.as_deref().unwrap_or("");
+
+            if !payee.is_empty() {
+                match crate::x402::verify::decode_payment_header(payment_header) {
+                    Ok(payload_json) => {
+                        let requirements = crate::x402::verify::VerifyRequirements {
+                            price: price.to_string(),
+                            currency: currency.to_string(),
+                            payee: payee.to_string(),
+                            network: network.to_string(),
+                            asset: None,
+                            token_name: None,
+                            token_version: None,
+                            decimals: None,
+                        };
+                        let result = crate::x402::verify::verify_payment(&payload_json, &requirements);
+                        if result.valid {
+                            forward_headers.insert(
+                                "x-payment-verified".to_string(),
+                                "true".to_string(),
+                            );
+                            forward_headers.insert(
+                                "x-payment-payer".to_string(),
+                                result.payer,
+                            );
+                            log::info!(
+                                "[EXT] x402 payment verified for /ext/{}/{} — payer: {}",
+                                module_name, method,
+                                forward_headers.get("x-payment-payer").unwrap_or(&String::new()),
+                            );
+                        } else {
+                            log::warn!(
+                                "[EXT] x402 payment verification failed for /ext/{}/{}: {}",
+                                module_name, method,
+                                result.error.as_deref().unwrap_or("unknown"),
+                            );
+                            // Don't block — forward without verified header so module can
+                            // decide how to handle it. The module sees no X-Payment-Verified.
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[EXT] Failed to decode X-Payment for /ext/{}/{}: {}",
+                            module_name, method, e,
+                        );
+                    }
+                }
+            }
+        } else {
+            // No X-Payment header but endpoint requires x402 — generate a 402 response
+            let price = ext_ep.x402_price.as_deref().unwrap_or("0");
+            let currency = ext_ep.x402_currency.as_deref().unwrap_or("USDC");
+            let network = ext_ep.x402_network.as_deref().unwrap_or("base");
+            let payee = ext_ep.x402_payee.as_deref().unwrap_or("");
+
+            if !payee.is_empty() {
+                let asset = crate::x402::USDC_ADDRESS;
+                let max_amount = crate::x402::verify::parse_token_amount(price, 6)
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|_| price.to_string());
+
+                let requirement = serde_json::json!({
+                    "scheme": "exact",
+                    "network": format!("eip155:{}", crate::x402::chain_id_for_network(network)),
+                    "maxAmountRequired": max_amount,
+                    "payToAddress": payee,
+                    "asset": asset,
+                    "maxTimeoutSeconds": 3600,
+                });
+                let payment_required = serde_json::json!({
+                    "x402Version": 1,
+                    "accepts": [requirement],
+                });
+                let encoded = base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    serde_json::to_string(&payment_required).unwrap_or_default(),
+                );
+
+                return HttpResponse::PaymentRequired()
+                    .insert_header(("Payment-Required", encoded))
+                    .json(serde_json::json!({
+                        "error": "Payment Required",
+                        "payment_required": payment_required,
+                    }));
             }
         }
     }

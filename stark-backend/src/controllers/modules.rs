@@ -110,6 +110,7 @@ struct ModuleInfo {
     enabled: bool,
     has_tools: bool,
     has_dashboard: bool,
+    dashboard_style: Option<String>,
     has_skill: bool,
     has_ext_endpoints: bool,
     ext_endpoint_count: usize,
@@ -191,6 +192,7 @@ async fn list_modules(data: web::Data<AppState>, _req: HttpRequest) -> HttpRespo
             enabled: installed_entry.map(|e| e.enabled).unwrap_or(false),
             has_tools: module.has_tools(),
             has_dashboard: module.has_dashboard(),
+            dashboard_style: module.dashboard_style(),
             has_skill: module.has_skill(),
             has_ext_endpoints: !ext_endpoints.is_empty(),
             ext_endpoint_count: ext_endpoints.len(),
@@ -536,6 +538,13 @@ async fn module_proxy(
         }));
     }
 
+    // For TUI-only modules, only allow the TUI endpoint
+    if module.dashboard_style().as_deref() == Some("tui") && !sub_path.starts_with("rpc/dashboard/tui") {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "error": format!("Module '{}' only supports TUI dashboard (use /rpc/dashboard/tui)", name)
+        }));
+    }
+
     let target_url = if sub_path.is_empty() {
         format!("{}/", module.service_url())
     } else {
@@ -797,8 +806,9 @@ async fn fetch_remote(
                         .map(|u| format!("@{}", u))
                         .unwrap_or_else(|| module_info.author.wallet_address.clone());
 
-                    // Parse has_dashboard from manifest
-                    let has_dashboard = manifest_toml.contains("has_dashboard = true");
+                    // Parse has_dashboard from manifest (true if explicit flag or dashboard_style is set)
+                    let has_dashboard = manifest_toml.contains("has_dashboard = true")
+                        || manifest_toml.contains("dashboard_style");
 
                     match data.db.install_module_full(
                         &name_underscore,
@@ -899,12 +909,18 @@ async fn fetch_remote(
         .map(|u| format!("@{}", u))
         .unwrap_or_else(|| module_info.author.wallet_address.clone());
 
+    // Determine has_dashboard from the on-disk manifest
+    let has_dashboard_binary = {
+        let registry = crate::modules::ModuleRegistry::new();
+        registry.get(&name_underscore).map(|m| m.has_dashboard()).unwrap_or(false)
+    };
+
     match data.db.install_module_full(
         &name_underscore,
         &module_info.description,
         &module_info.version,
         !module_info.tools_provided.is_empty(),
-        false,
+        has_dashboard_binary,
         "starkhub",
         Some(&manifest_path.to_string_lossy()),
         Some(&binary_path.to_string_lossy()),
@@ -1008,7 +1024,7 @@ async fn upload_module(
 
     let manifest = &parsed.manifest;
     let has_tools = !manifest.tools.is_empty();
-    let has_dashboard = manifest.service.has_dashboard;
+    let has_dashboard = manifest.service.has_dashboard || manifest.service.dashboard_style.is_some();
     let author = manifest.module.author.as_deref();
     let manifest_path = module_dir.join("module.toml");
 
@@ -1254,4 +1270,44 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("/{name}/proxy/{path:.*}", web::post().to(module_proxy_post))
             .route("/{name}", web::post().to(module_action)),
     );
+    cfg.service(
+        web::scope("/api/internal/modules")
+            .route("/tui-invalidate", web::post().to(tui_invalidate)),
+    );
+}
+
+/// POST /api/internal/modules/tui-invalidate — notify that a module TUI needs re-render
+async fn tui_invalidate(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    body: web::Json<serde_json::Value>,
+) -> HttpResponse {
+    // Authenticate via internal token
+    let token = req
+        .headers()
+        .get("X-Internal-Token")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+
+    if token.is_empty() || token != state.internal_token {
+        return HttpResponse::Unauthorized().json(serde_json::json!({
+            "error": "Invalid or missing X-Internal-Token"
+        }));
+    }
+
+    let module_name = match body.get("module").and_then(|v| v.as_str()) {
+        Some(name) => name,
+        None => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "'module' field is required"
+            }));
+        }
+    };
+
+    let event = crate::gateway::protocol::GatewayEvent::module_tui_invalidate(module_name);
+    state.broadcaster.broadcast(event);
+
+    log::debug!("[MODULE] TUI invalidate broadcast for '{}'", module_name);
+
+    HttpResponse::Ok().json(serde_json::json!({ "ok": true }))
 }

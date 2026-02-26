@@ -87,6 +87,8 @@ pub enum EventType {
     // Telemetry events
     SpanEmitted,        // A telemetry span was emitted (for real-time telemetry streaming)
     RolloutStatusChange, // Rollout lifecycle status changed
+    // Module TUI events
+    ModuleTuiInvalidate, // Module TUI dashboard needs re-render
 }
 
 impl EventType {
@@ -154,6 +156,7 @@ impl EventType {
             Self::ContextCompacting => "context.compacting",
             Self::SpanEmitted => "telemetry.span_emitted",
             Self::RolloutStatusChange => "telemetry.rollout_status",
+            Self::ModuleTuiInvalidate => "module.tui_invalidate",
         }
     }
 
@@ -221,6 +224,7 @@ impl EventType {
             "context.compacting" => Some(EventType::ContextCompacting),
             "telemetry.span_emitted" => Some(EventType::SpanEmitted),
             "telemetry.rollout_status" => Some(EventType::RolloutStatusChange),
+            "module.tui_invalidate" => Some(EventType::ModuleTuiInvalidate),
             _ => None,
         }
     }
@@ -735,6 +739,17 @@ impl GatewayEvent {
     /// Custom event with arbitrary event name and data
     pub fn custom(event: &str, data: Value) -> Self {
         Self::new(event, data)
+    }
+
+    /// Module TUI invalidate — signal that a module's TUI dashboard needs re-render
+    pub fn module_tui_invalidate(module_name: &str) -> Self {
+        Self::new(
+            EventType::ModuleTuiInvalidate,
+            serde_json::json!({
+                "module": module_name,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }),
+        )
     }
 
     /// Transaction pending - broadcast when tx is sent but not yet mined

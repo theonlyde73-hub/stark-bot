@@ -1358,6 +1358,7 @@ async fn main() -> std::io::Result<()> {
             .configure(controllers::memory::config)
             .configure(controllers::system::config)
             .configure(controllers::well_known::config)
+            .configure(controllers::x402::config)
             .configure(controllers::x402_limits::config)
             .configure(controllers::telemetry::config)
             .configure(controllers::agent_subtypes::config)

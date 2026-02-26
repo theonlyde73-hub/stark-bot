@@ -1,5 +1,16 @@
 """x402 payment helpers for StarkBot modules.
 
+DEPRECATED: Server-side payment verification has moved to the Rust backend.
+Modules should use the backend RPC endpoints instead:
+  - POST /rpc/x402/verify           — verify an x402 payment signature
+  - POST /rpc/x402/payment-required — generate a 402 response payload
+
+Alternatively, set `x402 = true` on ext_endpoints in module.toml for
+automatic backend-managed verification (adds X-Payment-Verified header).
+
+These Python helpers are kept for backwards compatibility but will be
+removed in a future release.
+
 Provides utilities for building HTTP 402 responses with payment-required
 headers and extracting/verifying x402 payment receipts from incoming requests.
 """

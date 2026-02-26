@@ -105,9 +105,11 @@ COPY soul_template /app/soul_template
 COPY modules /app/modules
 
 # Pre-warm uv cache: download Python + dependencies for all module services
-# so first-run startup is instant instead of waiting for downloads
+# so first-run startup is instant instead of waiting for downloads.
+# First build the SDK wheel, then resolve deps for each service (without running them).
+RUN cd /app/modules/starkbot_sdk && uv build 2>/dev/null || true
 RUN for svc in /app/modules/*/service.py; do \
-        [ -f "$svc" ] && (cd "$(dirname "$svc")" && uv run --quiet python -c "print('ok')" 2>/dev/null) || true; \
+        [ -f "$svc" ] && (cd "$(dirname "$svc")" && uv sync --script "$svc" --quiet 2>/dev/null) || true; \
     done
 
 # Pre-warm Deno cache: download npm dependencies for JS module services

@@ -1,9 +1,12 @@
 [project]
 name = "starkbot-sdk"
-version = "0.1.0"
+version = "0.2.0"
 description = "Shared SDK for StarkBot Python modules"
 requires-python = ">=3.12"
 dependencies = ["flask"]
+
+[project.optional-dependencies]
+tui = ["rich>=13.0.0", "httpx"]
 
 [build-system]
 requires = ["hatchling"]

@@ -826,6 +826,49 @@ pub fn seed_modules() -> std::io::Result<()> {
 
     std::fs::create_dir_all(&runtime)?;
 
+    // Always sync starkbot_sdk — it's a shared library (no module.toml) that other
+    // modules depend on. Must be kept in sync so runtime copies get the latest code.
+    let bundled_sdk = bundled.join("starkbot_sdk");
+    let runtime_sdk = runtime.join("starkbot_sdk");
+    if bundled_sdk.exists() {
+        let should_sync = if runtime_sdk.exists() {
+            // Compare pyproject.toml version to detect changes
+            let bundled_ver = std::fs::read_to_string(bundled_sdk.join("pyproject.toml"))
+                .ok()
+                .and_then(|c| {
+                    c.lines()
+                        .find(|l| l.trim().starts_with("version"))
+                        .and_then(|l| l.split('"').nth(1))
+                        .map(|s| s.to_string())
+                });
+            let runtime_ver = std::fs::read_to_string(runtime_sdk.join("pyproject.toml"))
+                .ok()
+                .and_then(|c| {
+                    c.lines()
+                        .find(|l| l.trim().starts_with("version"))
+                        .and_then(|l| l.split('"').nth(1))
+                        .map(|s| s.to_string())
+                });
+            match (bundled_ver, runtime_ver) {
+                (Some(bv), Some(rv)) if bv != rv => {
+                    log::info!("Upgrading starkbot_sdk from v{} to v{}", rv, bv);
+                    true
+                }
+                (Some(_), None) => true,
+                _ => false,
+            }
+        } else {
+            log::info!("Seeding starkbot_sdk from bundled");
+            true
+        };
+        if should_sync {
+            if runtime_sdk.exists() {
+                let _ = std::fs::remove_dir_all(&runtime_sdk);
+            }
+            copy_dir_recursive(&bundled_sdk, &runtime_sdk)?;
+        }
+    }
+
     let entries = std::fs::read_dir(&bundled)?;
     for entry in entries {
         let entry = match entry {
