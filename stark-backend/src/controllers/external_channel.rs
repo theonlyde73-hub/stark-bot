@@ -83,6 +83,20 @@ struct GatewayErrorResponse {
     error: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct GatewayModuleInfo {
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub has_tui: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GatewayModulesResponse {
+    pub success: bool,
+    pub modules: Vec<GatewayModuleInfo>,
+}
+
 // ── SSE event types ─────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -120,6 +134,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("/sessions/{id}/messages", web::get().to(gateway_session_messages))
             .route("/sessions/new", web::post().to(gateway_new_session))
             .route("/token/generate", web::post().to(gateway_generate_token))
+            .route("/modules", web::get().to(gateway_modules_list))
             .route("/modules/{name}/tui/stream", web::get().to(gateway_tui_stream))
             .route("/modules/{name}/tui/action", web::post().to(gateway_tui_action)),
     );
@@ -801,6 +816,35 @@ async fn gateway_generate_token(
     })
 }
 
+// ── Module listing endpoint ──────────────────────────────────────────────
+
+/// GET /api/gateway/modules — list installed modules
+async fn gateway_modules_list(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+) -> impl Responder {
+    if let Err(resp) = validate_gateway_token(&state, &req) {
+        return resp;
+    }
+
+    let registry = crate::modules::ModuleRegistry::new();
+    let modules: Vec<GatewayModuleInfo> = registry
+        .available_modules()
+        .into_iter()
+        .map(|m| GatewayModuleInfo {
+            name: m.name().to_string(),
+            description: m.description().to_string(),
+            version: m.version().to_string(),
+            has_tui: m.dashboard_style().as_deref() == Some("tui"),
+        })
+        .collect();
+
+    HttpResponse::Ok().json(GatewayModulesResponse {
+        success: true,
+        modules,
+    })
+}
+
 // ── TUI streaming endpoints ─────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -815,19 +859,31 @@ fn default_tui_width() -> u32 { 120 }
 fn default_tui_height() -> u32 { 40 }
 
 /// Fetch a TUI ANSI frame from a module's service endpoint
-async fn fetch_tui_frame(module_name: &str, width: u32, height: u32) -> Result<(String, Option<Value>), String> {
+async fn fetch_tui_frame(
+    module_name: &str,
+    width: u32,
+    height: u32,
+    selected: Option<i64>,
+    scroll: Option<i64>,
+) -> Result<(String, Option<Value>), String> {
     let registry = crate::modules::ModuleRegistry::new();
     let module = match registry.get(module_name) {
         Some(m) => m,
         None => return Err(format!("Unknown module: '{}'", module_name)),
     };
 
-    let url = format!(
+    let mut url = format!(
         "{}/rpc/dashboard/tui?width={}&height={}",
         module.service_url(),
         width,
         height
     );
+    if let Some(s) = selected {
+        url.push_str(&format!("&selected={}", s));
+    }
+    if let Some(s) = scroll {
+        url.push_str(&format!("&scroll={}", s));
+    }
 
     let client = reqwest::Client::new();
     let ansi = client
@@ -886,7 +942,7 @@ async fn gateway_tui_stream(
     let mod_name = module_name.clone();
     tokio::spawn(async move {
         // Send initial frame
-        match fetch_tui_frame(&mod_name, width, height).await {
+        match fetch_tui_frame(&mod_name, width, height, None, None).await {
             Ok((ansi, actions)) => {
                 let mut frame = serde_json::json!({ "ansi": ansi });
                 if let Some(a) = actions {
@@ -914,7 +970,7 @@ async fn gateway_tui_stream(
                         continue;
                     }
 
-                    match fetch_tui_frame(&mod_name, width, height).await {
+                    match fetch_tui_frame(&mod_name, width, height, None, None).await {
                         Ok((ansi, _)) => {
                             let frame = serde_json::json!({ "ansi": ansi });
                             let sse = format!("event: tui_frame\ndata: {}\n\n", frame);
