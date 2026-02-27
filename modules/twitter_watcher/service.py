@@ -231,6 +231,7 @@ app = create_app("twitter_watcher")
 @app.route("/rpc/twitter_watcher", methods=["POST"])
 def rpc_twitter_watcher():
     """Unified tool endpoint with action routing."""
+    global _poll_interval
     data = request.get_json(silent=True) or {}
     action = data.get("action", "")
 
@@ -300,7 +301,6 @@ def rpc_twitter_watcher():
         })
 
     elif action == "set_interval":
-        global _poll_interval
         interval = data.get("interval")
         if interval is None:
             return error("'interval' is required for 'set_interval' action")

@@ -1,6 +1,6 @@
 [module]
 name = "twitter_watcher"
-version = "0.1.0"
+version = "0.1.1"
 author = "starkbot"
 description = "Watch Twitter accounts for new tweets and fire hook events for agent reactions (quote-tweets, replies, commentary)."
 
@@ -14,10 +14,10 @@ backup_endpoint = "/rpc/backup/export"
 restore_endpoint = "/rpc/backup/restore"
 
 [service.env_vars]
-TWITTER_CONSUMER_KEY = "Twitter API consumer key (OAuth 1.0a)"
-TWITTER_CONSUMER_SECRET = "Twitter API consumer secret (OAuth 1.0a)"
-TWITTER_ACCESS_TOKEN = "Twitter API access token (OAuth 1.0a)"
-TWITTER_ACCESS_TOKEN_SECRET = "Twitter API access token secret (OAuth 1.0a)"
+TWITTER_CONSUMER_KEY = { required = true, description = "Twitter API consumer key (OAuth 1.0a)" }
+TWITTER_CONSUMER_SECRET = { required = true, description = "Twitter API consumer secret (OAuth 1.0a)" }
+TWITTER_ACCESS_TOKEN = { required = true, description = "Twitter API access token (OAuth 1.0a)" }
+TWITTER_ACCESS_TOKEN_SECRET = { required = true, description = "Twitter API access token secret (OAuth 1.0a)" }
 
 [[tools]]
 name = "twitter_watcher"
