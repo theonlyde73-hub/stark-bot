@@ -5,9 +5,10 @@
 
 use super::manifest::ModuleManifest;
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 use std::path::Path;
-use zip::ZipArchive;
+use zip::write::FileOptions;
+use zip::{ZipArchive, ZipWriter};
 
 /// A module parsed from a ZIP file, ready to be extracted to disk.
 #[derive(Debug, Clone)]
@@ -128,6 +129,74 @@ pub fn parse_module_zip(data: &[u8]) -> Result<ParsedModule, String> {
         module_name,
         files,
     })
+}
+
+/// Create a ZIP archive from a module directory on disk.
+///
+/// Walks the directory recursively, adding all files with paths relative to the
+/// module directory. Skips hidden files/dirs, `__pycache__`, and `.pyc` files.
+pub fn create_module_zip(module_dir: &Path) -> Result<Vec<u8>, String> {
+    if !module_dir.is_dir() {
+        return Err(format!("Module directory '{}' does not exist", module_dir.display()));
+    }
+
+    let buf = Vec::new();
+    let cursor = Cursor::new(buf);
+    let mut writer = ZipWriter::new(cursor);
+    let options = FileOptions::default();
+
+    fn should_skip(name: &str) -> bool {
+        name.starts_with('.') || name == "__pycache__"
+    }
+
+    fn walk_dir(
+        dir: &Path,
+        base: &Path,
+        writer: &mut ZipWriter<Cursor<Vec<u8>>>,
+        options: &FileOptions,
+    ) -> Result<(), String> {
+        let entries = std::fs::read_dir(dir)
+            .map_err(|e| format!("Failed to read directory '{}': {}", dir.display(), e))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+            let file_name = entry.file_name();
+            let name_str = file_name.to_string_lossy();
+
+            if should_skip(&name_str) {
+                continue;
+            }
+
+            if path.is_dir() {
+                walk_dir(&path, base, writer, options)?;
+            } else {
+                // Skip .pyc files
+                if name_str.ends_with(".pyc") {
+                    continue;
+                }
+
+                let relative = path.strip_prefix(base)
+                    .map_err(|e| format!("Failed to compute relative path: {}", e))?;
+                let zip_path = relative.to_string_lossy().to_string();
+
+                let data = std::fs::read(&path)
+                    .map_err(|e| format!("Failed to read '{}': {}", path.display(), e))?;
+
+                writer.start_file(&zip_path, *options)
+                    .map_err(|e| format!("Failed to add '{}' to ZIP: {}", zip_path, e))?;
+                writer.write_all(&data)
+                    .map_err(|e| format!("Failed to write '{}' to ZIP: {}", zip_path, e))?;
+            }
+        }
+        Ok(())
+    }
+
+    walk_dir(module_dir, module_dir, &mut writer, &options)?;
+
+    let cursor = writer.finish()
+        .map_err(|e| format!("Failed to finalize ZIP: {}", e))?;
+    Ok(cursor.into_inner())
 }
 
 /// Extract a parsed module to disk under the given modules directory.

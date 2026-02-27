@@ -1,4 +1,4 @@
-use crate::config::{notes_dir, public_dir};
+use crate::config::{notes_dir, public_dir, runtime_modules_dir};
 use crate::tools::registry::Tool;
 use crate::tools::types::{
     PropertySchema, ToolContext, ToolDefinition, ToolGroup, ToolInputSchema, ToolResult,
@@ -132,9 +132,16 @@ impl Tool for WriteFileTool {
         // Get public directory
         let public = PathBuf::from(public_dir());
 
-        // Resolve the path - check if it starts with "notes/" or "public/" to use appropriate dir
+        // Get modules directory
+        let modules = runtime_modules_dir();
+
+        // Resolve the path - check if it starts with "notes/", "public/", or "modules/" to use appropriate dir
         let requested_path = Path::new(&params.path);
-        let (full_path, base_dir) = if params.path.starts_with("notes/") || params.path == "notes" {
+        let (full_path, base_dir) = if params.path.starts_with("modules/") {
+            // Strip "modules/" prefix and use runtime modules directory
+            let relative = params.path.strip_prefix("modules/").unwrap_or(&params.path);
+            (modules.join(relative), modules.clone())
+        } else if params.path.starts_with("notes/") || params.path == "notes" {
             // Strip "notes/" prefix and use notes directory
             let relative = params.path.strip_prefix("notes/").unwrap_or(&params.path);
             (notes.join(relative), notes.clone())
@@ -160,8 +167,8 @@ impl Tool for WriteFileTool {
         };
 
         // Canonicalize base directory for comparison
-        // For notes or public, create it if it doesn't exist
-        if (params.path.starts_with("notes") || params.path.starts_with("public")) && !base_dir.exists() {
+        // For notes, public, or modules, create it if it doesn't exist
+        if (params.path.starts_with("notes") || params.path.starts_with("public") || params.path.starts_with("modules")) && !base_dir.exists() {
             if let Err(e) = tokio::fs::create_dir_all(&base_dir).await {
                 return ToolResult::error(format!("Cannot create directory: {}", e));
             }
@@ -251,10 +258,17 @@ impl Tool for WriteFileTool {
                 let lines_written = params.content.lines().count();
                 let mode = if append { "appended to" } else { "written to" };
 
-                ToolResult::success(format!(
+                let mut msg = format!(
                     "Successfully {} '{}' ({} bytes, {} lines)",
                     mode, params.path, bytes_written, lines_written
-                ))
+                );
+
+                // Note about skill sync for module .md files
+                if params.path.starts_with("modules/") && params.path.ends_with(".md") {
+                    msg.push_str("\n\nNote: If this is a skill file, a module reload may be needed to sync skills.");
+                }
+
+                ToolResult::success(msg)
                 .with_metadata(json!({
                     "path": params.path,
                     "bytes_written": bytes_written,

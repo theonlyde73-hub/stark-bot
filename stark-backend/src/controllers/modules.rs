@@ -1254,6 +1254,44 @@ async fn module_logs(path: web::Path<String>) -> HttpResponse {
     }))
 }
 
+/// GET /api/modules/{name}/download — download module as ZIP
+async fn download_module(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<String>,
+) -> HttpResponse {
+    if let Err(resp) = validate_session(&data, &req) {
+        return resp;
+    }
+
+    let name = path.into_inner();
+    let modules_dir = crate::config::runtime_modules_dir();
+    let module_dir = modules_dir.join(&name);
+
+    if !module_dir.is_dir() {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "error": format!("Module '{}' not found", name)
+        }));
+    }
+
+    match crate::modules::zip_parser::create_module_zip(&module_dir) {
+        Ok(zip_bytes) => {
+            HttpResponse::Ok()
+                .content_type("application/zip")
+                .insert_header((
+                    "Content-Disposition",
+                    format!("attachment; filename=\"{}.zip\"", name),
+                ))
+                .body(zip_bytes)
+        }
+        Err(e) => {
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Failed to create ZIP: {}", e)
+            }))
+        }
+    }
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api/modules")
@@ -1264,6 +1302,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("/fetch_remote", web::post().to(fetch_remote))
             .route("/publish/{name}", web::post().to(publish_to_hub))
             .route("/{name}/dashboard", web::get().to(module_dashboard))
+            .route("/{name}/download", web::get().to(download_module))
             .route("/{name}/logs", web::get().to(module_logs))
             .route("/{name}/status", web::get().to(module_status))
             .route("/{name}/proxy/{path:.*}", web::get().to(module_proxy))

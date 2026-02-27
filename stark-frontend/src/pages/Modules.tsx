@@ -18,7 +18,7 @@ import Card, { CardContent } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Modal from '@/components/ui/Modal';
 import UnicodeSpinner from '@/components/ui/UnicodeSpinner';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, API_BASE } from '@/lib/api';
 
 interface ModuleInfo {
   name: string;
@@ -76,6 +76,33 @@ export default function Modules() {
       setLogLines(['(Failed to fetch logs)']);
     } finally {
       setLogsLoading(false);
+    }
+  };
+
+  const downloadModule = async (name: string) => {
+    try {
+      const token = localStorage.getItem('stark_token');
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const response = await fetch(`${API_BASE}/modules/${encodeURIComponent(name)}/download`, { headers });
+      if (!response.ok) {
+        const errText = await response.text();
+        setMessage({ type: 'error', text: errText || 'Failed to download module' });
+        return;
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${name}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to download module' });
     }
   };
 
@@ -390,6 +417,14 @@ export default function Modules() {
                       >
                         <FileText className="w-4 h-4 mr-1" />
                         Logs
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => downloadModule(module.name)}
+                      >
+                        <Download className="w-4 h-4 mr-1" />
+                        Download
                       </Button>
                       {module.enabled ? (
                         <>

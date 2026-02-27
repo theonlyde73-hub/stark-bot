@@ -27,7 +27,7 @@ impl ManageModulesTool {
             "action".to_string(),
             PropertySchema {
                 schema_type: "string".to_string(),
-                description: "Action: 'list' available modules, 'install' a builtin module, 'uninstall', 'enable', 'disable', 'status', 'search_hub' to search StarkHub, 'install_remote' to download from StarkHub, 'update' to check for updates, 'import_zip' to install from a ZIP file, or 'export' to get module manifest for publishing".to_string(),
+                description: "Action: 'list' available modules, 'install' a builtin module, 'uninstall', 'enable', 'disable', 'status', 'search_hub' to search StarkHub, 'install_remote' to download from StarkHub, 'update' to check for updates, 'import_zip' to install from a ZIP file, or 'export' to export module as a ZIP file to workspace".to_string(),
                 default: None,
                 items: None,
                 enum_values: Some(vec![
@@ -607,23 +607,39 @@ impl Tool for ManageModulesTool {
                 };
 
                 let modules_dir = crate::config::runtime_modules_dir();
-                let manifest_path = modules_dir.join(name).join("module.toml");
+                let module_dir = modules_dir.join(name);
 
-                if !manifest_path.exists() {
+                if !module_dir.is_dir() {
                     return ToolResult::error(format!(
                         "Module '{}' not found at {}. Only modules in the runtime modules directory can be exported.",
-                        name, manifest_path.display()
+                        name, module_dir.display()
                     ));
                 }
 
-                match std::fs::read_to_string(&manifest_path) {
-                    Ok(content) => {
+                // Create ZIP from module directory
+                let zip_bytes = match crate::modules::zip_parser::create_module_zip(&module_dir) {
+                    Ok(bytes) => bytes,
+                    Err(e) => return ToolResult::error(format!("Failed to create ZIP: {}", e)),
+                };
+
+                // Write ZIP to workspace
+                let workspace = context
+                    .workspace_dir
+                    .as_ref()
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+
+                let zip_filename = format!("{}.zip", name);
+                let zip_path = workspace.join(&zip_filename);
+
+                match std::fs::write(&zip_path, &zip_bytes) {
+                    Ok(_) => {
                         ToolResult::success(format!(
-                            "**Module manifest for '{}':**\n\n```toml\n{}\n```",
-                            name, content
+                            "Module '{}' exported as ZIP to '{}' ({} bytes)",
+                            name, zip_path.display(), zip_bytes.len()
                         ))
                     }
-                    Err(e) => ToolResult::error(format!("Failed to read module.toml: {}", e)),
+                    Err(e) => ToolResult::error(format!("Failed to write ZIP file: {}", e)),
                 }
             }
 

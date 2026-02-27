@@ -16,6 +16,7 @@ import {
   Folder,
   ChevronRight,
   ChevronDown,
+  FilePlus,
 } from 'lucide-react';
 import {
   listIntrinsicFiles,
@@ -218,6 +219,27 @@ export default function SystemFiles() {
     setIsEditing(false);
   };
 
+  const handleNewFile = async (dirPath: string) => {
+    const filename = prompt('New file name:');
+    if (!filename || !filename.trim()) return;
+
+    const newPath = `${dirPath}/${filename.trim()}`;
+    try {
+      const response = await writeIntrinsicFile(newPath, '');
+      if (response.success) {
+        // Refresh the parent directory
+        const children = await loadDirChildren(dirPath);
+        setRootNodes(prev => updateNodeChildren(prev, dirPath, children));
+        // Open the new file
+        loadFile(newPath);
+      } else {
+        setFileError(response.error || 'Failed to create file');
+      }
+    } catch {
+      setFileError('Failed to create file');
+    }
+  };
+
   useEffect(() => {
     loadRootNodes();
   }, [loadRootNodes]);
@@ -284,6 +306,16 @@ export default function SystemFiles() {
               </div>
             ) : (
               node.children.map(child => renderTreeNode(child, depth + 1))
+            )}
+            {node.path.startsWith('modules/') && node.path.split('/').length >= 2 && (
+              <button
+                onClick={(e) => { e.stopPropagation(); handleNewFile(node.path); }}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-500 hover:text-stark-400 hover:bg-slate-700/50 transition-colors"
+                style={{ paddingLeft: `${28 + indent}px` }}
+              >
+                <FilePlus className="w-3.5 h-3.5" />
+                New File
+              </button>
             )}
           </div>
         )}

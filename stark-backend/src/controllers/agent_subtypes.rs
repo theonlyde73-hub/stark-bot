@@ -340,63 +340,133 @@ async fn reset_defaults(
     }))
 }
 
-/// Export all agent subtypes as RON.
+/// Export all agent subtypes as a ZIP containing all agent folders.
 async fn export_subtypes(
     data: web::Data<AppState>,
     req: HttpRequest,
 ) -> impl Responder {
+    use std::io::{Cursor, Write};
+
     if let Err(resp) = validate_session_from_request(&data, &req) {
         return resp;
     }
 
+    let agents_dir = crate::config::runtime_agents_dir();
     let subtypes = types::all_subtype_configs_unfiltered();
-    let pretty = ron::ser::PrettyConfig::new()
-        .depth_limit(3)
-        .separate_tuple_members(true)
-        .enumerate_arrays(false);
-    match ron::ser::to_string_pretty(&subtypes, pretty) {
-        Ok(ron_str) => HttpResponse::Ok()
-            .content_type("application/ron")
-            .insert_header(("Content-Disposition", "attachment; filename=\"agent_subtypes.ron\""))
-            .body(ron_str),
-        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
-            "error": format!("Failed to serialize: {}", e)
-        })),
+
+    let buf = Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(buf);
+    let options = zip::write::FileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    for config in &subtypes {
+        let folder = agents_dir.join(&config.key);
+        if !folder.is_dir() {
+            continue;
+        }
+        if let Err(e) = add_agent_folder_to_zip(&mut zip, &folder, &config.key, options) {
+            log::warn!("[AGENTS] Failed to add '{}' to export ZIP: {}", config.key, e);
+        }
     }
+
+    let buf = match zip.finish() {
+        Ok(b) => b.into_inner(),
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Failed to create ZIP: {}", e)
+            }));
+        }
+    };
+
+    HttpResponse::Ok()
+        .content_type("application/zip")
+        .insert_header(("Content-Disposition", "attachment; filename=\"agent_subtypes.zip\""))
+        .body(buf)
 }
 
-/// Export a single agent subtype as RON (wrapped in a vec for import compatibility).
+/// Export a single agent subtype as a ZIP of its agent folder.
 async fn export_single_subtype(
     data: web::Data<AppState>,
     req: HttpRequest,
     path: web::Path<String>,
 ) -> impl Responder {
+    use std::io::{Cursor, Write};
+
     if let Err(resp) = validate_session_from_request(&data, &req) {
         return resp;
     }
 
     let key = path.into_inner();
-    match types::get_subtype_config(&key) {
-        Some(subtype) => {
-            let pretty = ron::ser::PrettyConfig::new()
-                .depth_limit(3)
-                .separate_tuple_members(true)
-                .enumerate_arrays(false);
-            let wrapped = vec![subtype];
-            match ron::ser::to_string_pretty(&wrapped, pretty) {
-                Ok(ron_str) => HttpResponse::Ok()
-                    .content_type("application/ron")
-                    .insert_header(("Content-Disposition", format!("attachment; filename=\"{}.ron\"", key)))
-                    .body(ron_str),
-                Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
-                    "error": format!("Failed to serialize: {}", e)
-                })),
-            }
-        }
-        None => HttpResponse::NotFound().json(serde_json::json!({
+    if types::get_subtype_config(&key).is_none() {
+        return HttpResponse::NotFound().json(serde_json::json!({
             "error": format!("Agent subtype '{}' not found", key)
-        })),
+        }));
     }
+
+    let agents_dir = crate::config::runtime_agents_dir();
+    let folder = agents_dir.join(&key);
+    if !folder.is_dir() {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "error": format!("Agent folder '{}' not found on disk", key)
+        }));
+    }
+
+    let buf = Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(buf);
+    let options = zip::write::FileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    if let Err(e) = add_agent_folder_to_zip(&mut zip, &folder, &key, options) {
+        return HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": format!("Failed to create ZIP: {}", e)
+        }));
+    }
+
+    let buf = match zip.finish() {
+        Ok(b) => b.into_inner(),
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Failed to create ZIP: {}", e)
+            }));
+        }
+    };
+
+    HttpResponse::Ok()
+        .content_type("application/zip")
+        .insert_header(("Content-Disposition", format!("attachment; filename=\"{}.zip\"", key)))
+        .body(buf)
+}
+
+/// Recursively add all files in an agent folder to a ZIP archive.
+fn add_agent_folder_to_zip<W: std::io::Write + std::io::Seek>(
+    zip: &mut zip::ZipWriter<W>,
+    folder: &std::path::Path,
+    prefix: &str,
+    options: zip::write::FileOptions,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(folder)
+        .map_err(|e| format!("Failed to read directory {}: {}", folder.display(), e))?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if path.is_dir() {
+            // Recurse into subdirectories (e.g. hooks/)
+            let sub_prefix = format!("{}/{}", prefix, name);
+            add_agent_folder_to_zip(zip, &path, &sub_prefix, options)?;
+        } else if path.is_file() {
+            let rel_path = format!("{}/{}", prefix, name);
+            let content = std::fs::read(&path)
+                .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+            zip.start_file(&rel_path, options)
+                .map_err(|e| format!("Failed to start ZIP entry '{}': {}", rel_path, e))?;
+            std::io::Write::write_all(zip, &content)
+                .map_err(|e| format!("Failed to write ZIP entry '{}': {}", rel_path, e))?;
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Deserialize)]
