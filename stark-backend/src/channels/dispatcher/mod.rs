@@ -1072,20 +1072,21 @@ impl MessageDispatcher {
             });
         }
 
-        // Add chat context (recent channel history) if provided.
-        // This is injected by web/Discord but NOT stored in the DB — it only
-        // appears in the AI prompt so the model has conversational awareness.
-        if let Some(ref ctx) = message.chat_context {
-            messages.push(Message {
-                role: MessageRole::System,
-                content: ctx.clone(),
-            });
-        }
-
-        // Add current user message (use clean text without thinking directive)
+        // Add current user message, with chat context prepended if available.
+        // Chat context (recent channel history) is combined into the user message
+        // so the AI model treats it as conversational flow rather than ignoring it
+        // as background system info.
+        let user_content = if let Some(ref ctx) = message.chat_context {
+            format!(
+                "{}\n\n[USER QUERY - this is what you are responding to:]\n{}",
+                ctx, message_text
+            )
+        } else {
+            message_text.to_string()
+        };
         messages.push(Message {
             role: MessageRole::User,
-            content: message_text.to_string(),
+            content: user_content,
         });
 
         // Debug: Log user message

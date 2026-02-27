@@ -453,7 +453,9 @@ pub async fn fire_heartbeat_hooks(
 
 /// Fire hooks for an arbitrary event name.
 ///
-/// Template variables: `{event}`, `{data}`, `{timestamp}`, `{goals}`
+/// Template variables: `{event}`, `{data}`, `{timestamp}`, `{goals}`,
+/// plus any top-level string/number/boolean fields from `data` (e.g.
+/// `{username}`, `{tweet_text}` when the data payload includes those keys).
 ///
 /// This is the generic entry-point used by the internal hooks API
 /// (`POST /api/internal/hooks/fire`) and by module background workers.
@@ -480,6 +482,19 @@ pub async fn fire_custom_hooks(
         vars.insert("data", data_str.clone());
         vars.insert("timestamp", timestamp.clone());
         vars.insert("goals", read_agent_goals(&config.key));
+
+        // Also inject top-level scalar fields from the data payload so hook
+        // templates can use e.g. {username}, {tweet_text} directly instead of
+        // parsing the raw {data} JSON blob.
+        if let Some(obj) = data.as_object() {
+            for (key, value) in obj {
+                if let Some(s) = value.as_str() {
+                    vars.insert(key.as_str(), s.to_string());
+                } else if value.is_number() || value.is_boolean() {
+                    vars.insert(key.as_str(), value.to_string());
+                }
+            }
+        }
 
         let prompt = render_template(&hook.prompt_template, &vars);
         spawn_hook_session(
