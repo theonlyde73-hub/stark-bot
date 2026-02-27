@@ -32,9 +32,9 @@ export default function AgentSettings() {
   const { usdcBalance } = useWallet();
   const [presets, setPresets] = useState<AiEndpointPreset[]>([]);
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('none');
-  const [endpointOption, setEndpointOption] = useState<string>('kimi');
+  const [endpointOption, setEndpointOption] = useState<string>('minimax');
   const [customEndpoint, setCustomEndpoint] = useState('');
-  const [modelArchetype, setModelArchetype] = useState<ModelArchetype>('kimi');
+  const [modelArchetype, setModelArchetype] = useState<ModelArchetype>('minimax');
   const [maxResponseTokens, setMaxResponseTokens] = useState(40000);
   const [maxContextTokens, setMaxContextTokens] = useState(100000);
   const [secretKey, setSecretKey] = useState('');

@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::OnceLock;
+
+const DEFAULT_INFERENCE_ROUTER_URL: &str = "https://inference.defirelay.com";
 
 static AI_ENDPOINTS: OnceLock<HashMap<String, AiEndpointPreset>> = OnceLock::new();
 
@@ -17,33 +18,40 @@ pub struct AiEndpointPreset {
     pub x402_cost: Option<u64>,
 }
 
-pub fn load_ai_endpoints(config_dir: &Path) {
-    let config_path = config_dir.join("ai_endpoints.ron");
+/// Response shape from inference-super-router GET /endpoints
+#[derive(Debug, Deserialize)]
+struct RouterEndpoint {
+    id: String,
+    display_name: String,
+    endpoint: String,
+    model_archetype: String,
+    model: Option<String>,
+    x402_cost: Option<u64>,
+}
 
-    let endpoints = if config_path.exists() {
-        match std::fs::read_to_string(&config_path) {
-            Ok(content) => match ron::from_str::<HashMap<String, AiEndpointPreset>>(&content) {
-                Ok(endpoints) => {
-                    log::info!(
-                        "Loaded {} AI endpoint presets from config: {:?}",
-                        endpoints.len(),
-                        endpoints.keys().collect::<Vec<_>>()
-                    );
-                    endpoints
-                }
-                Err(e) => {
-                    log::error!("Failed to parse ai_endpoints.ron: {}", e);
-                    default_endpoints()
-                }
-            },
-            Err(e) => {
-                log::error!("Failed to read ai_endpoints.ron: {}", e);
-                default_endpoints()
-            }
+/// Fetch endpoint catalog from inference-super-router, fall back to hardcoded default.
+pub async fn load_ai_endpoints() {
+    let router_url = std::env::var("INFERENCE_ROUTER_URL")
+        .unwrap_or_else(|_| DEFAULT_INFERENCE_ROUTER_URL.to_string());
+    let url = format!("{}/endpoints", router_url.trim_end_matches('/'));
+
+    let endpoints = match fetch_from_router(&url).await {
+        Ok(eps) => {
+            log::info!(
+                "Loaded {} AI endpoint presets from inference router ({}): {:?}",
+                eps.len(),
+                url,
+                eps.keys().collect::<Vec<_>>()
+            );
+            eps
         }
-    } else {
-        log::info!("No ai_endpoints.ron found, using defaults");
-        default_endpoints()
+        Err(e) => {
+            log::warn!(
+                "Failed to fetch endpoints from inference router ({}): {}. Using defaults.",
+                url, e
+            );
+            default_endpoints()
+        }
     };
 
     if AI_ENDPOINTS.set(endpoints).is_err() {
@@ -51,16 +59,54 @@ pub fn load_ai_endpoints(config_dir: &Path) {
     }
 }
 
+async fn fetch_from_router(url: &str) -> Result<HashMap<String, AiEndpointPreset>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    let items: Vec<RouterEndpoint> = resp
+        .json()
+        .await
+        .map_err(|e| format!("JSON parse error: {}", e))?;
+
+    let mut map = HashMap::new();
+    for item in items {
+        let id = item.id.clone();
+        map.insert(
+            id,
+            AiEndpointPreset {
+                display_name: item.display_name,
+                endpoint: item.endpoint,
+                model_archetype: item.model_archetype,
+                model: item.model,
+                x402_cost: item.x402_cost,
+            },
+        );
+    }
+    Ok(map)
+}
+
 fn default_endpoints() -> HashMap<String, AiEndpointPreset> {
     let mut endpoints = HashMap::new();
     endpoints.insert(
-        "kimi-turbo".to_string(),
+        "minimax".to_string(),
         AiEndpointPreset {
-            display_name: "Kimi K2 Turbo".to_string(),
-            endpoint: "https://inference.defirelay.com/api/v1/chat/completions".to_string(),
-            model_archetype: "kimi".to_string(),
-            model: Some("kimi-turbo".to_string()),
-            x402_cost: Some(5000),
+            display_name: "MiniMax M2.5".to_string(),
+            endpoint: "https://inference.defirelay.com/minimax/api/v1/chat/completions".to_string(),
+            model_archetype: "minimax".to_string(),
+            model: Some("MiniMax-M2.5".to_string()),
+            x402_cost: Some(1000),
         },
     );
     endpoints

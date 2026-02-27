@@ -676,8 +676,8 @@ async fn main() -> std::io::Result<()> {
     tools::builtin::cryptocurrency::network_lookup::load_networks(config_dir);
     log::info!("Loading RPC provider configs from config directory");
     tools::rpc_config::load_rpc_providers(config_dir);
-    log::info!("Loading AI endpoint presets from config directory");
-    ai_endpoint_config::load_ai_endpoints(config_dir);
+    log::info!("Loading AI endpoint presets from inference router");
+    ai_endpoint_config::load_ai_endpoints().await;
     log::info!("Loading x402 payment limit defaults from config directory");
     x402::payment_limits::load_defaults(config_dir);
 

@@ -27,15 +27,15 @@ pub const MIN_CONTEXT_TOKENS: i32 = 80_000;
 pub const DEFAULT_CONTEXT_TOKENS: i32 = 100_000;
 
 impl Default for AgentSettings {
-    /// Returns default kimi-turbo agent settings (used when no agent is configured)
+    /// Returns default MiniMax agent settings (used when no agent is configured)
     fn default() -> Self {
         let now = Utc::now();
         Self {
             id: 0,
-            endpoint_name: Some("kimi-turbo".to_string()),
-            endpoint: "https://inference.defirelay.com/api/v1/chat/completions".to_string(),
-            model_archetype: "kimi".to_string(),
-            model: Some("kimi-turbo".to_string()),
+            endpoint_name: Some("minimax".to_string()),
+            endpoint: "https://inference.defirelay.com/minimax/api/v1/chat/completions".to_string(),
+            model_archetype: "minimax".to_string(),
+            model: Some("MiniMax-M2.5".to_string()),
             max_response_tokens: 40000,
             max_context_tokens: DEFAULT_CONTEXT_TOKENS,
             enabled: true,
@@ -103,7 +103,7 @@ pub struct UpdateAgentSettingsRequest {
 }
 
 fn default_archetype() -> String {
-    "kimi".to_string()
+    "minimax".to_string()
 }
 
 fn default_max_response_tokens() -> i32 {

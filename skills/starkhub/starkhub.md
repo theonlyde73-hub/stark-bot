@@ -1,7 +1,7 @@
 ---
 name: starkhub
 description: "Browse, search, install, and submit skills and modules on StarkHub (hub.starkbot.ai) — the decentralized skills & modules directory for StarkBot agents."
-version: 3.0.0
+version: 3.1.0
 author: starkbot
 homepage: https://hub.starkbot.ai
 metadata: {"clawdbot":{"emoji":"🌐"}}
@@ -203,7 +203,7 @@ This inserts the skill into the database so it appears on the skills page and is
 
 ## Submit a Skill to StarkHub
 
-Publishing requires a StarkLicense NFT. Authentication is automatic — `erc8128_fetch` signs every request with your wallet identity.
+Authentication is automatic — `erc8128_fetch` signs every request with your wallet identity. You need a username to publish.
 
 ### Step 1: Ensure Username
 
@@ -300,9 +300,9 @@ Submitted skills start with status `pending` and require admin approval before t
 
 ### Requirements
 
-- **StarkLicense NFT**: The authenticated wallet must hold a StarkLicense NFT (ERC-721 on Base: `0xa23a42D266653846e05d8f356a52298844537472`)
 - **Rate limit**: Maximum 5 submissions per 24 hours
 - **Required fields**: `name`, `description`, `version` in the frontmatter
+- **Pricing**: If setting `x402_cost` in frontmatter, values are in atomic USDC (6 decimals). E.g. `"1000000"` = 1 USDC.
 
 ### Update an Existing Skill
 
@@ -413,7 +413,7 @@ Use `author_username` + `slug` to construct the scoped URL: `/api/skills/@{autho
 
 ## Paid Skills (x402)
 
-Skills with `x402_cost` > `"0"` cost STARKBOT tokens to install. The `/download` endpoint returns **402 Payment Required** with x402 payment instructions for paid skills — `erc8128_fetch` handles this automatically.
+Skills with `x402_cost` > `"0"` cost USDC to install. Prices are in atomic USDC on Base (6 decimals — e.g. `"1000000"` = 1 USDC). The `/download` endpoint returns **402 Payment Required** with x402 payment instructions for paid skills — `erc8128_fetch` handles this automatically.
 
 ---
 
@@ -468,7 +468,7 @@ Returns the full `module.toml` content needed for submission.
 
 Returns `{"success": true, "slug": "module-name", "username": "your-username", "status": "pending"}`.
 
-Same requirements as skill submissions: StarkLicense NFT required, rate-limited to 5 per 24h.
+Same requirements as skill submissions: rate-limited to 5 per 24h.
 
 ---
 
